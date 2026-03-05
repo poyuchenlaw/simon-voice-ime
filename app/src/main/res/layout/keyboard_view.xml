@@ -1,0 +1,188 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:orientation="vertical"
+    android:background="@color/keyboard_bg">
+
+    <!-- 彈出面板容器（剪貼簿/常用指令），預設隱藏 -->
+    <FrameLayout
+        android:id="@+id/panelContainer"
+        android:layout_width="match_parent"
+        android:layout_height="220dp"
+        android:visibility="gone"
+        android:background="#0d0d1a" />
+
+    <!-- 狀態列（錄音時才顯示） -->
+    <TextView
+        android:id="@+id/statusText"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text=""
+        android:textColor="@color/status_text"
+        android:textSize="11sp"
+        android:gravity="center"
+        android:paddingTop="2dp"
+        android:paddingBottom="1dp"
+        android:visibility="gone" />
+
+    <!-- 預覽文字 -->
+    <TextView
+        android:id="@+id/previewText"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text=""
+        android:textColor="@color/key_text"
+        android:textSize="14sp"
+        android:gravity="center"
+        android:visibility="gone" />
+
+    <!-- 主工具列：極窄單列 -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="48dp"
+        android:orientation="horizontal"
+        android:gravity="center_vertical"
+        android:paddingStart="2dp"
+        android:paddingEnd="2dp">
+
+        <!-- 模式 -->
+        <TextView
+            android:id="@+id/btnMode"
+            android:layout_width="36dp"
+            android:layout_height="40dp"
+            android:gravity="center"
+            android:text="追"
+            android:textColor="@color/mode_append"
+            android:textSize="14sp"
+            android:background="@color/key_bg"
+            android:clickable="true"
+            android:focusable="true" />
+
+        <!-- 麥克風（主按鈕，比例 2） -->
+        <Button
+            android:id="@+id/btnMic"
+            android:layout_width="0dp"
+            android:layout_height="40dp"
+            android:layout_weight="2"
+            android:layout_marginStart="2dp"
+            android:layout_marginEnd="2dp"
+            android:text="🎤"
+            android:textSize="20sp"
+            android:textColor="@color/key_text"
+            android:background="@color/mic_idle" />
+
+        <!-- 空格（比例 1.5） -->
+        <TextView
+            android:id="@+id/btnSpace"
+            android:layout_width="0dp"
+            android:layout_height="40dp"
+            android:layout_weight="1.5"
+            android:gravity="center"
+            android:layout_marginEnd="2dp"
+            android:text="␣"
+            android:textColor="@color/key_text"
+            android:textSize="16sp"
+            android:background="@color/key_bg"
+            android:clickable="true"
+            android:focusable="true" />
+
+        <!-- 退格（比例 1） -->
+        <TextView
+            android:id="@+id/btnBackspace"
+            android:layout_width="0dp"
+            android:layout_height="40dp"
+            android:layout_weight="1"
+            android:gravity="center"
+            android:layout_marginEnd="2dp"
+            android:text="⌫"
+            android:textSize="16sp"
+            android:textColor="@color/key_text"
+            android:background="@color/key_bg"
+            android:clickable="true"
+            android:focusable="true" />
+
+        <!-- Enter（比例 1） -->
+        <TextView
+            android:id="@+id/btnEnter"
+            android:layout_width="0dp"
+            android:layout_height="40dp"
+            android:layout_weight="1"
+            android:gravity="center"
+            android:text="↵"
+            android:textSize="16sp"
+            android:textColor="#8fbc8f"
+            android:background="#1b3326"
+            android:clickable="true"
+            android:focusable="true" />
+
+    </LinearLayout>
+
+    <!-- 底部工具列：功能鍵 -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="30dp"
+        android:orientation="horizontal"
+        android:gravity="center_vertical"
+        android:paddingStart="2dp"
+        android:paddingEnd="2dp"
+        android:paddingBottom="2dp">
+
+        <TextView
+            android:id="@+id/btnSettings"
+            android:layout_width="0dp"
+            android:layout_height="26dp"
+            android:layout_weight="1"
+            android:gravity="center"
+            android:text="⚙"
+            android:textSize="13sp"
+            android:textColor="#666666"
+            android:background="#0f0f1e"
+            android:layout_marginEnd="1dp"
+            android:clickable="true"
+            android:focusable="true" />
+
+        <TextView
+            android:id="@+id/btnClipboard"
+            android:layout_width="0dp"
+            android:layout_height="26dp"
+            android:layout_weight="1"
+            android:gravity="center"
+            android:text="📋"
+            android:textSize="13sp"
+            android:textColor="#666666"
+            android:background="#0f0f1e"
+            android:layout_marginEnd="1dp"
+            android:clickable="true"
+            android:focusable="true" />
+
+        <TextView
+            android:id="@+id/btnCommands"
+            android:layout_width="0dp"
+            android:layout_height="26dp"
+            android:layout_weight="1"
+            android:gravity="center"
+            android:text="⚡"
+            android:textSize="13sp"
+            android:textColor="#666666"
+            android:background="#0f0f1e"
+            android:layout_marginEnd="1dp"
+            android:clickable="true"
+            android:focusable="true" />
+
+        <TextView
+            android:id="@+id/btnSwitchIME"
+            android:layout_width="0dp"
+            android:layout_height="26dp"
+            android:layout_weight="1"
+            android:gravity="center"
+            android:text="🔄"
+            android:textSize="13sp"
+            android:textColor="#666666"
+            android:background="#0f0f1e"
+            android:clickable="true"
+            android:focusable="true" />
+
+    </LinearLayout>
+
+</LinearLayout>

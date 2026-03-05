@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="keyboard_bg">#1a1a2e</color>
+    <color name="key_bg">#16213e</color>
+    <color name="key_text">#e0e0e0</color>
+    <color name="mic_active">#e94560</color>
+    <color name="mic_idle">#0f3460</color>
+    <color name="status_text">#888888</color>
+    <color name="mode_append">#4ecca3</color>
+    <color name="mode_replace">#e94560</color>
+    <color name="mode_spell">#f0a500</color>
+</resources>

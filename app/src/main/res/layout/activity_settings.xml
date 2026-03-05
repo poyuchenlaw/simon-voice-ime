@@ -1,0 +1,331 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="#1a1a2e">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:padding="24dp">
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:gravity="center_vertical"
+            android:layout_marginBottom="12dp">
+
+            <TextView
+                android:id="@+id/tvVersion"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="Simon Voice IME v2.3"
+                android:textSize="22sp"
+                android:textColor="#e0e0e0" />
+
+            <Button
+                android:id="@+id/btnCheckUpdate"
+                android:layout_width="wrap_content"
+                android:layout_height="36dp"
+                android:text="檢查更新"
+                android:textSize="12sp"
+                android:paddingStart="12dp"
+                android:paddingEnd="12dp" />
+        </LinearLayout>
+
+        <TextView
+            android:id="@+id/tvUpdateStatus"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:textSize="13sp"
+            android:textColor="#4ecca3"
+            android:visibility="gone"
+            android:layout_marginBottom="8dp" />
+
+        <!-- 伺服器 -->
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="WTI 伺服器位址"
+            android:textColor="#888888"
+            android:textSize="13sp" />
+
+        <EditText
+            android:id="@+id/editServerUrl"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="http://100.84.86.128:8001"
+            android:textColor="#e0e0e0"
+            android:textSize="15sp"
+            android:layout_marginBottom="12dp"
+            android:inputType="textUri" />
+
+        <!-- 密碼 -->
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="驗證密碼（選填）"
+            android:textColor="#888888"
+            android:textSize="13sp" />
+
+        <EditText
+            android:id="@+id/editAuthPassword"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:textColor="#e0e0e0"
+            android:textSize="15sp"
+            android:layout_marginBottom="12dp"
+            android:inputType="textPassword"
+            android:hint="留空=不需驗證"
+            android:textColorHint="#444444" />
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:layout_marginBottom="16dp">
+
+            <Button
+                android:id="@+id/btnSave"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:layout_marginEnd="4dp"
+                android:text="儲存"
+                android:textSize="15sp" />
+
+            <Button
+                android:id="@+id/btnTest"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:layout_marginStart="4dp"
+                android:text="測試連線"
+                android:textSize="15sp" />
+        </LinearLayout>
+
+        <TextView
+            android:id="@+id/testResult"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:textColor="#4ecca3"
+            android:textSize="13sp"
+            android:layout_marginBottom="20dp" />
+
+        <!-- ===== 使用說明 ===== -->
+        <View
+            android:layout_width="match_parent"
+            android:layout_height="1dp"
+            android:background="#333333"
+            android:layout_marginBottom="16dp" />
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="三種語音模式說明"
+            android:textSize="18sp"
+            android:textColor="#e0e0e0"
+            android:layout_marginBottom="12dp" />
+
+        <!-- 追加模式 -->
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="【追加模式】短按麥克風"
+            android:textColor="#4ecca3"
+            android:textSize="14sp"
+            android:textStyle="bold"
+            android:layout_marginBottom="2dp" />
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="語音辨識後直接在游標處插入文字。\n不需要選取，不會刪除任何東西。\n適合：正常口述輸入。"
+            android:textColor="#999999"
+            android:textSize="12sp"
+            android:lineSpacingExtra="3dp"
+            android:layout_marginBottom="12dp" />
+
+        <!-- 替換模式 -->
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="【替換模式】長按麥克風"
+            android:textColor="#f0a500"
+            android:textSize="14sp"
+            android:textStyle="bold"
+            android:layout_marginBottom="2dp" />
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="用來修正已經打好的錯字。\n\n使用步驟：\n1. 把游標移到錯字「旁邊」（前面或後面都可以）\n2. 長按麥克風開始錄音\n3. 直接講正確的字\n4. 系統會自動找到附近發音相近的字並替換\n\n例如：文字是「移個」，游標在旁邊\n→ 長按、講「一個」→ 自動替換成「一個」\n\n不需要框選！系統會在游標前後 30 字內\n自動搜尋發音最接近的字來替換。"
+            android:textColor="#999999"
+            android:textSize="12sp"
+            android:lineSpacingExtra="3dp"
+            android:layout_marginBottom="12dp" />
+
+        <!-- 拼字模式 -->
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="【拼字模式】雙擊麥克風"
+            android:textColor="#e94560"
+            android:textSize="14sp"
+            android:textStyle="bold"
+            android:layout_marginBottom="2dp" />
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="用來輸入語音打不出的罕見字。\n\n使用方式：用「XX的X」描述每個字\n- 「聾啞的啞、鈴鐺的鈴」→ 啞鈴\n- 「耳東的陳、弓長的張」→ 陳張\n- 「三點水的淳」→ 淳\n\n系統會把所有目標字組合成詞彙輸出。\n如果語音辨識聽錯（如「龍牙的牙」），\n系統也會嘗試從發音推理出正確的字。\n\n注意：若某個字一直拼不出來（如「簿」），\n可以改用手打一次，然後到下方的\n「常錯字修正」加入修正規則。"
+            android:textColor="#999999"
+            android:textSize="12sp"
+            android:lineSpacingExtra="3dp"
+            android:layout_marginBottom="12dp" />
+
+        <!-- 翻譯模式 -->
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="【翻譯模式】點擊模式鈕切到「譯」"
+            android:textColor="#6bc5f0"
+            android:textSize="14sp"
+            android:textStyle="bold"
+            android:layout_marginBottom="2dp" />
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="講中文，系統辨識後自動翻譯成英文再輸出。\n適合：需要英文輸出的場景。\n\n注意：直接講英文不需要翻譯模式！\n追加模式下直接講英文就會輸出英文。\n中英夾雜也能處理（如「幫我查Claude的API」）。"
+            android:textColor="#999999"
+            android:textSize="12sp"
+            android:lineSpacingExtra="3dp"
+            android:layout_marginBottom="12dp" />
+
+        <!-- 按鈕說明 -->
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="按鈕功能"
+            android:textColor="#888888"
+            android:textSize="13sp"
+            android:layout_marginBottom="4dp" />
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="追/換/拼/譯 = 手動切換模式（點擊循環）\n⌫ 短按 = 刪一字 | 長按 = 加速連刪\n␣ = 空格 | ↵ = Enter/送出\n📋 = 剪貼簿歷史（最近 50 則）\n⚡ = 常用指令（分組，可自訂）\n🔄 = 切換回注音等其他輸入法\n⚙ = 開啟本設定頁"
+            android:textColor="#777777"
+            android:textSize="12sp"
+            android:lineSpacingExtra="4dp"
+            android:layout_marginBottom="20dp" />
+
+        <!-- ===== 常錯字修正 ===== -->
+        <View
+            android:layout_width="match_parent"
+            android:layout_height="1dp"
+            android:background="#333333"
+            android:layout_marginBottom="16dp" />
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="常錯字修正"
+            android:textSize="18sp"
+            android:textColor="#e0e0e0"
+            android:layout_marginBottom="4dp" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="語音常聽錯的字，加在這裡後系統會自動修正。\n\n輸入格式（每行一組）：\n  錯字→正確字\n\n範例：\n  剪貼布→剪貼簿\n  聯絡布→聯絡簿\n  移個→一個\n  法固案→法顧案\n\n按「上傳」會同步到伺服器，立即生效。"
+            android:textColor="#888888"
+            android:textSize="12sp"
+            android:lineSpacingExtra="3dp"
+            android:layout_marginBottom="8dp" />
+
+        <EditText
+            android:id="@+id/editCorrections"
+            android:layout_width="match_parent"
+            android:layout_height="100dp"
+            android:textColor="#cccccc"
+            android:textSize="13sp"
+            android:gravity="top"
+            android:inputType="textMultiLine"
+            android:background="#0d0d1a"
+            android:padding="8dp"
+            android:layout_marginBottom="8dp"
+            android:fontFamily="monospace"
+            android:hint="剪貼布→剪貼簿\n聯絡布→聯絡簿"
+            android:textColorHint="#333333" />
+
+        <Button
+            android:id="@+id/btnUploadCorrections"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="上傳修正規則到伺服器"
+            android:textSize="14sp"
+            android:layout_marginBottom="20dp" />
+
+        <!-- ===== 常用指令管理 ===== -->
+        <View
+            android:layout_width="match_parent"
+            android:layout_height="1dp"
+            android:background="#333333"
+            android:layout_marginBottom="16dp" />
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="常用指令管理"
+            android:textSize="18sp"
+            android:textColor="#e0e0e0"
+            android:layout_marginBottom="4dp" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="指令格式為 JSON，可匯出編輯後匯入。\n按⚡開啟指令面板，點擊即插入文字。"
+            android:textColor="#888888"
+            android:textSize="12sp"
+            android:layout_marginBottom="8dp" />
+
+        <EditText
+            android:id="@+id/editCommandsJson"
+            android:layout_width="match_parent"
+            android:layout_height="120dp"
+            android:textColor="#cccccc"
+            android:textSize="12sp"
+            android:gravity="top"
+            android:inputType="textMultiLine"
+            android:background="#0d0d1a"
+            android:padding="8dp"
+            android:layout_marginBottom="8dp"
+            android:fontFamily="monospace" />
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:layout_marginBottom="24dp">
+
+            <Button
+                android:id="@+id/btnExportCmds"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:layout_marginEnd="4dp"
+                android:text="匯出"
+                android:textSize="13sp" />
+
+            <Button
+                android:id="@+id/btnImportCmds"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:layout_marginStart="4dp"
+                android:text="匯入"
+                android:textSize="13sp" />
+        </LinearLayout>
+
+    </LinearLayout>
+</ScrollView>

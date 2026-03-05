@@ -1,0 +1,793 @@
+package com.simon.voiceime;
+
+import android.content.Intent;
+import android.content.SharedPreferences;
+import android.inputmethodservice.InputMethodService;
+import android.media.AudioFormat;
+import android.media.AudioRecord;
+import android.media.MediaRecorder;
+import android.os.Handler;
+import android.os.Looper;
+import android.util.Log;
+import android.view.LayoutInflater;
+import android.view.MotionEvent;
+import android.view.View;
+import android.view.inputmethod.EditorInfo;
+import android.view.inputmethod.InputConnection;
+import android.view.inputmethod.InputMethodManager;
+import android.widget.Button;
+import android.widget.FrameLayout;
+import android.widget.LinearLayout;
+import android.widget.TextView;
+
+import androidx.recyclerview.widget.LinearLayoutManager;
+import androidx.recyclerview.widget.RecyclerView;
+
+import org.json.JSONObject;
+
+import java.io.ByteArrayOutputStream;
+import java.io.IOException;
+import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
+import java.util.List;
+
+import okhttp3.Call;
+import okhttp3.Callback;
+import okhttp3.MediaType;
+import okhttp3.MultipartBody;
+import okhttp3.OkHttpClient;
+import okhttp3.Request;
+import okhttp3.RequestBody;
+import okhttp3.Response;
+
+/**
+ * Simon Voice IME v2.3
+ *
+ * 功能：
+ * - 語音輸入（追加/替換/拼字三模式）
+ * - 空格、退格、Enter
+ * - 剪貼簿歷史（50 則）
+ * - 常用指令（分組可自訂）
+ * - 跳轉其他輸入法
+ * - 設定
+ */
+public class SimonIMEService extends InputMethodService {
+
+    private static final String TAG = "SimonIME";
+    private static final int SAMPLE_RATE = 16000;
+    private static final int CHANNEL = AudioFormat.CHANNEL_IN_MONO;
+    private static final int ENCODING = AudioFormat.ENCODING_PCM_16BIT;
+
+    enum Mode { APPEND, REPLACE, SPELL, TRANSLATE }
+
+    private Mode currentMode = Mode.APPEND;
+    private boolean isRecording = false;
+    private AudioRecord audioRecord;
+    private Thread recordingThread;
+    private ByteArrayOutputStream pcmBuffer;
+    private OkHttpClient httpClient;
+    private Handler mainHandler;
+
+    // Helpers
+    private ClipboardHelper clipboardHelper;
+    private CommandsHelper commandsHelper;
+
+    // UI elements
+    private View rootView;
+    private TextView statusText;
+    private TextView previewText;
+    private View btnMic;
+    private TextView btnMode;
+    private FrameLayout panelContainer;
+
+    // Panel state
+    private enum Panel { NONE, CLIPBOARD, COMMANDS }
+    private Panel activePanel = Panel.NONE;
+
+    // Long press / double tap
+    private long lastTapTime = 0;
+    private static final long DOUBLE_TAP_THRESHOLD = 400;
+    private boolean longPressTriggered = false;
+    private Runnable longPressRunnable;
+    private static final long LONG_PRESS_THRESHOLD = 500;
+
+    // Backspace repeat acceleration
+    private boolean backspacePressed = false;
+    private int backspaceRepeatCount = 0;
+    private Runnable backspaceRepeatRunnable;
+
+    @Override
+    public void onCreate() {
+        super.onCreate();
+        httpClient = new OkHttpClient.Builder()
+                .connectTimeout(10, java.util.concurrent.TimeUnit.SECONDS)
+                .readTimeout(30, java.util.concurrent.TimeUnit.SECONDS)
+                .build();
+        mainHandler = new Handler(Looper.getMainLooper());
+        clipboardHelper = new ClipboardHelper(this);
+        commandsHelper = new CommandsHelper(this);
+    }
+
+    @Override
+    public View onCreateInputView() {
+        rootView = LayoutInflater.from(this).inflate(R.layout.keyboard_view, null);
+
+        statusText = rootView.findViewById(R.id.statusText);
+        previewText = rootView.findViewById(R.id.previewText);
+        btnMic = rootView.findViewById(R.id.btnMic);
+        btnMode = rootView.findViewById(R.id.btnMode);
+        panelContainer = rootView.findViewById(R.id.panelContainer);
+        View btnSpace = rootView.findViewById(R.id.btnSpace);
+        View btnBackspace = rootView.findViewById(R.id.btnBackspace);
+        View btnEnter = rootView.findViewById(R.id.btnEnter);
+        View btnSettings = rootView.findViewById(R.id.btnSettings);
+        View btnClipboard = rootView.findViewById(R.id.btnClipboard);
+        View btnCommands = rootView.findViewById(R.id.btnCommands);
+        View btnSwitchIME = rootView.findViewById(R.id.btnSwitchIME);
+
+        // --- 麥克風 ---
+        btnMic.setOnTouchListener((v, event) -> {
+            switch (event.getAction()) {
+                case MotionEvent.ACTION_DOWN:
+                    handleTouchDown();
+                    return true;
+                case MotionEvent.ACTION_UP:
+                case MotionEvent.ACTION_CANCEL:
+                    handleTouchUp();
+                    return true;
+            }
+            return false;
+        });
+
+        // --- 模式切換 ---
+        btnMode.setOnClickListener(v -> cycleMode());
+
+        // --- 空格 ---
+        btnSpace.setOnClickListener(v -> {
+            InputConnection ic = getCurrentInputConnection();
+            if (ic != null) ic.commitText(" ", 1);
+        });
+
+        // --- 退格（長按加速連刪） ---
+        btnBackspace.setOnTouchListener((v, event) -> {
+            switch (event.getAction()) {
+                case MotionEvent.ACTION_DOWN:
+                    backspacePressed = true;
+                    backspaceRepeatCount = 0;
+                    // 先刪一個字
+                    InputConnection ic0 = getCurrentInputConnection();
+                    if (ic0 != null) ic0.deleteSurroundingText(1, 0);
+                    // 啟動連刪
+                    backspaceRepeatRunnable = new Runnable() {
+                        @Override
+                        public void run() {
+                            if (!backspacePressed) return;
+                            InputConnection ic = getCurrentInputConnection();
+                            if (ic != null) {
+                                backspaceRepeatCount++;
+                                // 加速：前5次刪1字，5-15次刪2字，15次以上刪5字
+                                int deleteCount = backspaceRepeatCount < 5 ? 1
+                                        : backspaceRepeatCount < 15 ? 2 : 5;
+                                ic.deleteSurroundingText(deleteCount, 0);
+                            }
+                            // 加速間隔：初始 120ms → 最低 30ms
+                            long delay = Math.max(30, 120 - backspaceRepeatCount * 6);
+                            mainHandler.postDelayed(this, delay);
+                        }
+                    };
+                    mainHandler.postDelayed(backspaceRepeatRunnable, 400); // 首次延遲
+                    v.setPressed(true);
+                    return true;
+                case MotionEvent.ACTION_UP:
+                case MotionEvent.ACTION_CANCEL:
+                    backspacePressed = false;
+                    if (backspaceRepeatRunnable != null) {
+                        mainHandler.removeCallbacks(backspaceRepeatRunnable);
+                    }
+                    v.setPressed(false);
+                    return true;
+            }
+            return false;
+        });
+
+        // --- Enter ---
+        btnEnter.setOnClickListener(v -> {
+            InputConnection ic = getCurrentInputConnection();
+            if (ic != null) {
+                EditorInfo ei = getCurrentInputEditorInfo();
+                if (ei != null && (ei.imeOptions & EditorInfo.IME_FLAG_NO_ENTER_ACTION) == 0
+                        && (ei.imeOptions & EditorInfo.IME_MASK_ACTION) != EditorInfo.IME_ACTION_NONE) {
+                    ic.performEditorAction(ei.imeOptions & EditorInfo.IME_MASK_ACTION);
+                } else {
+                    ic.commitText("\n", 1);
+                }
+            }
+        });
+
+        // --- 設定 ---
+        btnSettings.setOnClickListener(v -> {
+            Intent intent = new Intent(this, SettingsActivity.class);
+            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            startActivity(intent);
+        });
+
+        // --- 剪貼簿 ---
+        btnClipboard.setOnClickListener(v -> togglePanel(Panel.CLIPBOARD));
+
+        // --- 常用指令 ---
+        btnCommands.setOnClickListener(v -> togglePanel(Panel.COMMANDS));
+
+        // --- 跳轉輸入法 ---
+        btnSwitchIME.setOnClickListener(v -> {
+            InputMethodManager imm = (InputMethodManager) getSystemService(INPUT_METHOD_SERVICE);
+            if (imm != null) {
+                imm.showInputMethodPicker();
+            }
+        });
+
+        updateModeUI();
+        return rootView;
+    }
+
+    // ==================== Panel Management ====================
+
+    private void togglePanel(Panel panel) {
+        if (activePanel == panel) {
+            closePanel();
+        } else {
+            showPanel(panel);
+        }
+    }
+
+    private void showPanel(Panel panel) {
+        panelContainer.removeAllViews();
+        panelContainer.setVisibility(View.VISIBLE);
+        activePanel = panel;
+
+        switch (panel) {
+            case CLIPBOARD:
+                showClipboardPanel();
+                break;
+            case COMMANDS:
+                showCommandsPanel();
+                break;
+        }
+    }
+
+    private void closePanel() {
+        panelContainer.removeAllViews();
+        panelContainer.setVisibility(View.GONE);
+        activePanel = Panel.NONE;
+    }
+
+    // ==================== Clipboard Panel ====================
+
+    private void showClipboardPanel() {
+        View view = LayoutInflater.from(this).inflate(R.layout.clipboard_panel, panelContainer, true);
+
+        Button btnClose = view.findViewById(R.id.btnClipClose);
+        btnClose.setOnClickListener(v -> closePanel());
+
+        RecyclerView recycler = view.findViewById(R.id.clipRecycler);
+        recycler.setLayoutManager(new LinearLayoutManager(this));
+
+        List<String> items = clipboardHelper.getHistory();
+        recycler.setAdapter(new ClipAdapter(items, position -> {
+            InputConnection ic = getCurrentInputConnection();
+            if (ic != null && position < items.size()) {
+                ic.commitText(items.get(position), 1);
+                updateStatus("📋 已貼上");
+                closePanel();
+            }
+        }));
+    }
+
+    // Simple RecyclerView Adapter for clipboard
+    private static class ClipAdapter extends RecyclerView.Adapter<ClipAdapter.VH> {
+        private final List<String> items;
+        private final OnItemClick listener;
+
+        interface OnItemClick { void onClick(int position); }
+
+        ClipAdapter(List<String> items, OnItemClick listener) {
+            this.items = items;
+            this.listener = listener;
+        }
+
+        @Override public VH onCreateViewHolder(android.view.ViewGroup parent, int viewType) {
+            View v = LayoutInflater.from(parent.getContext()).inflate(R.layout.clip_item, parent, false);
+            return new VH(v);
+        }
+
+        @Override public void onBindViewHolder(VH holder, int position) {
+            holder.text.setText(items.get(position));
+            holder.itemView.setOnClickListener(v -> listener.onClick(position));
+        }
+
+        @Override public int getItemCount() { return items.size(); }
+
+        static class VH extends RecyclerView.ViewHolder {
+            TextView text;
+            VH(View v) {
+                super(v);
+                text = v.findViewById(R.id.clipText);
+            }
+        }
+    }
+
+    // ==================== Commands Panel ====================
+
+    private String currentCmdGroup = null;
+
+    private void showCommandsPanel() {
+        View view = LayoutInflater.from(this).inflate(R.layout.commands_panel, panelContainer, true);
+
+        Button btnClose = view.findViewById(R.id.btnCmdClose);
+        btnClose.setOnClickListener(v -> closePanel());
+
+        LinearLayout tabContainer = view.findViewById(R.id.cmdGroupTabs);
+        RecyclerView recycler = view.findViewById(R.id.cmdRecycler);
+        recycler.setLayoutManager(new LinearLayoutManager(this));
+
+        List<String> groupNames = commandsHelper.getGroupNames();
+        if (!groupNames.isEmpty()) {
+            if (currentCmdGroup == null || !groupNames.contains(currentCmdGroup)) {
+                currentCmdGroup = groupNames.get(0);
+            }
+        }
+
+        // Build tabs
+        tabContainer.removeAllViews();
+        for (String name : groupNames) {
+            Button tab = new Button(this);
+            tab.setText(name);
+            tab.setTextSize(12);
+            tab.setAllCaps(false);
+            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.WRAP_CONTENT,
+                    LinearLayout.LayoutParams.WRAP_CONTENT);
+            lp.setMarginEnd(4);
+            tab.setLayoutParams(lp);
+            tab.setPadding(16, 4, 16, 4);
+
+            if (name.equals(currentCmdGroup)) {
+                tab.setTextColor(0xFF4ECCA3);
+                tab.setBackgroundColor(0xFF1a1a2e);
+            } else {
+                tab.setTextColor(0xFF888888);
+                tab.setBackgroundColor(0xFF16213e);
+            }
+
+            tab.setOnClickListener(v -> {
+                currentCmdGroup = name;
+                showPanel(Panel.COMMANDS); // Refresh
+            });
+            tabContainer.addView(tab);
+        }
+
+        // Show commands for current group
+        if (currentCmdGroup != null) {
+            List<CommandsHelper.Command> cmds = commandsHelper.getCommands(currentCmdGroup);
+            recycler.setAdapter(new CmdAdapter(cmds, position -> {
+                InputConnection ic = getCurrentInputConnection();
+                if (ic != null && position < cmds.size()) {
+                    String text = cmds.get(position).text;
+                    if (!text.isEmpty()) {
+                        ic.commitText(text, 1);
+                        updateStatus("⚡ " + cmds.get(position).label);
+                        closePanel();
+                    }
+                }
+            }));
+        }
+    }
+
+    // Simple RecyclerView Adapter for commands
+    private static class CmdAdapter extends RecyclerView.Adapter<CmdAdapter.VH> {
+        private final List<CommandsHelper.Command> items;
+        private final ClipAdapter.OnItemClick listener;
+
+        CmdAdapter(List<CommandsHelper.Command> items, ClipAdapter.OnItemClick listener) {
+            this.items = items;
+            this.listener = listener;
+        }
+
+        @Override public VH onCreateViewHolder(android.view.ViewGroup parent, int viewType) {
+            View v = LayoutInflater.from(parent.getContext()).inflate(R.layout.cmd_item, parent, false);
+            return new VH(v);
+        }
+
+        @Override public void onBindViewHolder(VH holder, int position) {
+            CommandsHelper.Command cmd = items.get(position);
+            holder.label.setText(cmd.label);
+            holder.text.setText(cmd.text);
+            holder.itemView.setOnClickListener(v -> listener.onClick(position));
+        }
+
+        @Override public int getItemCount() { return items.size(); }
+
+        static class VH extends RecyclerView.ViewHolder {
+            TextView label, text;
+            VH(View v) {
+                super(v);
+                label = v.findViewById(R.id.cmdLabel);
+                text = v.findViewById(R.id.cmdText);
+            }
+        }
+    }
+
+    // ==================== Touch event handling ====================
+
+    private void handleTouchDown() {
+        long now = System.currentTimeMillis();
+        longPressTriggered = false;
+
+        // Double tap → spell mode
+        if (now - lastTapTime < DOUBLE_TAP_THRESHOLD) {
+            mainHandler.removeCallbacks(longPressRunnable);
+            currentMode = Mode.SPELL;
+            updateModeUI();
+            startRecording();
+            lastTapTime = 0;
+            return;
+        }
+
+        lastTapTime = now;
+
+        // Schedule long press
+        longPressRunnable = () -> {
+            longPressTriggered = true;
+            currentMode = Mode.REPLACE;
+            updateModeUI();
+            startRecording();
+        };
+        mainHandler.postDelayed(longPressRunnable, LONG_PRESS_THRESHOLD);
+    }
+
+    private void handleTouchUp() {
+        mainHandler.removeCallbacks(longPressRunnable);
+
+        if (isRecording) {
+            stopRecordingAndSend();
+        } else if (!longPressTriggered) {
+            // Short tap toggle
+            startRecording();
+        }
+    }
+
+    // ==================== Recording ====================
+
+    private void startRecording() {
+        if (isRecording) {
+            stopRecordingAndSend();
+            return;
+        }
+
+        // Close any open panel
+        closePanel();
+
+        int rawBufferSize = AudioRecord.getMinBufferSize(SAMPLE_RATE, CHANNEL, ENCODING);
+        final int bufferSize = rawBufferSize > 0 ? rawBufferSize : SAMPLE_RATE * 2;
+
+        try {
+            audioRecord = new AudioRecord(MediaRecorder.AudioSource.MIC,
+                    SAMPLE_RATE, CHANNEL, ENCODING, bufferSize);
+        } catch (SecurityException e) {
+            updateStatus("需要麥克風權限");
+            return;
+        }
+
+        if (audioRecord.getState() != AudioRecord.STATE_INITIALIZED) {
+            updateStatus("麥克風初始化失敗");
+            return;
+        }
+
+        pcmBuffer = new ByteArrayOutputStream();
+        isRecording = true;
+        audioRecord.startRecording();
+
+        updateStatus("🔴 錄音中...");
+        btnMic.setBackgroundColor(getResources().getColor(R.color.mic_active, null));
+        if (btnMic instanceof Button) ((Button) btnMic).setText("⏹");
+
+        recordingThread = new Thread(() -> {
+            byte[] buffer = new byte[bufferSize];
+            while (isRecording) {
+                int read = audioRecord.read(buffer, 0, buffer.length);
+                if (read > 0) {
+                    pcmBuffer.write(buffer, 0, read);
+                }
+            }
+        }, "AudioRecorder");
+        recordingThread.start();
+    }
+
+    private void stopRecordingAndSend() {
+        if (!isRecording) return;
+        isRecording = false;
+
+        try {
+            audioRecord.stop();
+            audioRecord.release();
+        } catch (Exception e) {
+            Log.e(TAG, "Error stopping recorder", e);
+        }
+
+        try {
+            recordingThread.join(1000);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
+
+        byte[] pcmData = pcmBuffer.toByteArray();
+        pcmBuffer = null;
+
+        mainHandler.post(() -> {
+            btnMic.setBackgroundColor(getResources().getColor(R.color.mic_idle, null));
+            if (btnMic instanceof Button) ((Button) btnMic).setText("🎤");
+            updateStatus("辨識中...");
+        });
+
+        if (pcmData.length < 3200) {
+            mainHandler.post(() -> updateStatus("錄音太短，請再試一次"));
+            return;
+        }
+
+        byte[] wavData = pcmToWav(pcmData, SAMPLE_RATE, 1, 16);
+        sendToWTI(wavData, currentMode);
+    }
+
+    // ==================== Network ====================
+
+    private void sendToWTI(byte[] wavData, Mode mode) {
+        String serverUrl = getServerUrl();
+
+        String endpoint;
+        MultipartBody.Builder bodyBuilder = new MultipartBody.Builder()
+                .setType(MultipartBody.FORM)
+                .addFormDataPart("file", "recording.wav",
+                        RequestBody.create(wavData, MediaType.parse("audio/wav")));
+
+        switch (mode) {
+            case REPLACE:
+                endpoint = "/v1/replace";
+                InputConnection ic = getCurrentInputConnection();
+                if (ic != null) {
+                    CharSequence before = ic.getTextBeforeCursor(50, 0);
+                    CharSequence after = ic.getTextAfterCursor(50, 0);
+                    bodyBuilder.addFormDataPart("before_cursor",
+                            before != null ? before.toString() : "");
+                    bodyBuilder.addFormDataPart("after_cursor",
+                            after != null ? after.toString() : "");
+                }
+                break;
+            case SPELL:
+                endpoint = "/v1/audio/transcriptions";
+                bodyBuilder.addFormDataPart("spell_mode", "true");
+                break;
+            case TRANSLATE:
+                endpoint = "/v1/audio/transcriptions";
+                bodyBuilder.addFormDataPart("target_language", "en");
+                break;
+            default:
+                endpoint = "/v1/audio/transcriptions";
+                break;
+        }
+
+        // Add auth if configured
+        String auth = getAuthPassword();
+
+        RequestBody body = bodyBuilder.build();
+        Request.Builder reqBuilder = new Request.Builder()
+                .url(serverUrl + endpoint)
+                .post(body);
+
+        if (auth != null && !auth.isEmpty()) {
+            reqBuilder.addHeader("Authorization", "Bearer " + auth);
+        }
+
+        httpClient.newCall(reqBuilder.build()).enqueue(new Callback() {
+            @Override
+            public void onFailure(Call call, IOException e) {
+                Log.e(TAG, "WTI request failed", e);
+                mainHandler.post(() -> updateStatus("連線失敗: " + e.getMessage()));
+            }
+
+            @Override
+            public void onResponse(Call call, Response response) throws IOException {
+                try {
+                    String responseBody = response.body() != null ? response.body().string() : "";
+                    if (!response.isSuccessful()) {
+                        mainHandler.post(() -> updateStatus("伺服器錯誤: " + response.code()));
+                        return;
+                    }
+                    JSONObject json = new JSONObject(responseBody);
+                    handleWTIResponse(json, mode);
+                } catch (Exception e) {
+                    Log.e(TAG, "Error parsing response", e);
+                    mainHandler.post(() -> updateStatus("解析錯誤"));
+                }
+            }
+        });
+    }
+
+    private void handleWTIResponse(JSONObject json, Mode mode) {
+        mainHandler.post(() -> {
+            try {
+                InputConnection ic = getCurrentInputConnection();
+                if (ic == null) {
+                    updateStatus("無法取得輸入連線");
+                    return;
+                }
+
+                switch (mode) {
+                    case APPEND: {
+                        String text = json.optString("text", "").trim();
+                        if (!text.isEmpty()) {
+                            ic.commitText(text, 1);
+                            updateStatus("✅ " + truncate(text, 20));
+                        } else {
+                            updateStatus("未辨識到文字");
+                        }
+                        break;
+                    }
+                    case REPLACE: {
+                        String text = json.optString("text", "").trim();
+                        int deleteBefore = json.optInt("delete_before", 0);
+                        int deleteAfter = json.optInt("delete_after", 0);
+                        String insert = json.optString("insert", text);
+
+                        if (deleteBefore > 0 || deleteAfter > 0) {
+                            ic.deleteSurroundingText(deleteBefore, deleteAfter);
+                        }
+                        if (!insert.isEmpty()) {
+                            ic.commitText(insert, 1);
+                            updateStatus("🔄 替換: " + truncate(insert, 20));
+                        } else {
+                            updateStatus("未找到可替換的文字");
+                        }
+                        currentMode = Mode.APPEND;
+                        updateModeUI();
+                        break;
+                    }
+                    case SPELL: {
+                        String text = json.optString("text", "").trim();
+                        if (!text.isEmpty()) {
+                            ic.commitText(text, 1);
+                            updateStatus("✏️ 拼字: " + text);
+                        } else {
+                            updateStatus("拼字失敗");
+                        }
+                        currentMode = Mode.APPEND;
+                        updateModeUI();
+                        break;
+                    }
+                    case TRANSLATE: {
+                        String text = json.optString("text", "").trim();
+                        if (!text.isEmpty()) {
+                            ic.commitText(text, 1);
+                            updateStatus("🌐 翻譯: " + truncate(text, 25));
+                        } else {
+                            updateStatus("翻譯失敗");
+                        }
+                        break;
+                    }
+                }
+            } catch (Exception e) {
+                Log.e(TAG, "Error handling response", e);
+                updateStatus("處理錯誤");
+            }
+        });
+    }
+
+    // ==================== Mode ====================
+
+    private void cycleMode() {
+        switch (currentMode) {
+            case APPEND: currentMode = Mode.REPLACE; break;
+            case REPLACE: currentMode = Mode.SPELL; break;
+            case SPELL: currentMode = Mode.TRANSLATE; break;
+            case TRANSLATE: currentMode = Mode.APPEND; break;
+        }
+        updateModeUI();
+    }
+
+    private void updateModeUI() {
+        if (btnMode == null) return;
+        switch (currentMode) {
+            case APPEND:
+                btnMode.setText("追");
+                btnMode.setTextColor(getResources().getColor(R.color.mode_append, null));
+                break;
+            case REPLACE:
+                btnMode.setText("換");
+                btnMode.setTextColor(getResources().getColor(R.color.mode_replace, null));
+                break;
+            case SPELL:
+                btnMode.setText("拼");
+                btnMode.setTextColor(getResources().getColor(R.color.mode_spell, null));
+                break;
+            case TRANSLATE:
+                btnMode.setText("譯");
+                btnMode.setTextColor(0xFF6bc5f0);
+                break;
+        }
+    }
+
+    // ==================== Helpers ====================
+
+    private void updateStatus(String text) {
+        if (statusText == null) return;
+        if (text == null || text.isEmpty()) {
+            statusText.setVisibility(View.GONE);
+        } else {
+            statusText.setText(text);
+            statusText.setVisibility(View.VISIBLE);
+            // Auto-hide after 3 seconds if not recording
+            if (!isRecording) {
+                mainHandler.postDelayed(() -> {
+                    if (!isRecording && statusText != null) {
+                        statusText.setVisibility(View.GONE);
+                    }
+                }, 3000);
+            }
+        }
+    }
+
+    private String getServerUrl() {
+        SharedPreferences prefs = getSharedPreferences("simon_ime_prefs", MODE_PRIVATE);
+        return prefs.getString("server_url", "http://100.84.86.128:8001");
+    }
+
+    private String getAuthPassword() {
+        SharedPreferences prefs = getSharedPreferences("simon_ime_prefs", MODE_PRIVATE);
+        return prefs.getString("auth_password", "guangxin_voice_2026");
+    }
+
+    private static String truncate(String s, int maxLen) {
+        return s.length() > maxLen ? s.substring(0, maxLen) + "..." : s;
+    }
+
+    private static byte[] pcmToWav(byte[] pcmData, int sampleRate, int channels, int bitsPerSample) {
+        int dataLength = pcmData.length;
+        int totalLength = 36 + dataLength;
+
+        ByteBuffer buffer = ByteBuffer.allocate(44 + dataLength);
+        buffer.order(ByteOrder.LITTLE_ENDIAN);
+
+        buffer.put((byte) 'R'); buffer.put((byte) 'I');
+        buffer.put((byte) 'F'); buffer.put((byte) 'F');
+        buffer.putInt(totalLength);
+        buffer.put((byte) 'W'); buffer.put((byte) 'A');
+        buffer.put((byte) 'V'); buffer.put((byte) 'E');
+
+        buffer.put((byte) 'f'); buffer.put((byte) 'm');
+        buffer.put((byte) 't'); buffer.put((byte) ' ');
+        buffer.putInt(16);
+        buffer.putShort((short) 1);
+        buffer.putShort((short) channels);
+        buffer.putInt(sampleRate);
+        buffer.putInt(sampleRate * channels * bitsPerSample / 8);
+        buffer.putShort((short) (channels * bitsPerSample / 8));
+        buffer.putShort((short) bitsPerSample);
+
+        buffer.put((byte) 'd'); buffer.put((byte) 'a');
+        buffer.put((byte) 't'); buffer.put((byte) 'a');
+        buffer.putInt(dataLength);
+        buffer.put(pcmData);
+
+        return buffer.array();
+    }
+
+    @Override
+    public void onDestroy() {
+        if (isRecording) {
+            isRecording = false;
+            try {
+                audioRecord.stop();
+                audioRecord.release();
+            } catch (Exception ignored) {}
+        }
+        super.onDestroy();
+    }
+}
