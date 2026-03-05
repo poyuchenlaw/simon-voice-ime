@@ -22,7 +22,7 @@
                 android:layout_width="0dp"
                 android:layout_height="wrap_content"
                 android:layout_weight="1"
-                android:text="Simon Voice IME v2.4.1"
+                android:text="Simon Voice IME v2.5"
                 android:textSize="22sp"
                 android:textColor="#e0e0e0" />
 
