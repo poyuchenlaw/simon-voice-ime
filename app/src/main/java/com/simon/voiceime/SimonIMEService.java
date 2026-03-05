@@ -20,6 +20,12 @@ import android.widget.FrameLayout;
 import android.widget.LinearLayout;
 import android.widget.TextView;
 
+import android.graphics.Canvas;
+import android.graphics.Color;
+import android.graphics.Paint;
+
+import androidx.annotation.NonNull;
+import androidx.recyclerview.widget.ItemTouchHelper;
 import androidx.recyclerview.widget.LinearLayoutManager;
 import androidx.recyclerview.widget.RecyclerView;
 
@@ -41,7 +47,7 @@ import okhttp3.RequestBody;
 import okhttp3.Response;
 
 /**
- * Simon Voice IME v2.3
+ * Simon Voice IME v2.4
  *
  * 功能：
  * - 語音輸入（追加/替換/拼字三模式）
@@ -146,6 +152,20 @@ public class SimonIMEService extends InputMethodService {
         btnSpace.setOnClickListener(v -> {
             InputConnection ic = getCurrentInputConnection();
             if (ic != null) ic.commitText(" ", 1);
+        });
+
+        // --- 逗號 ---
+        View btnComma = rootView.findViewById(R.id.btnComma);
+        btnComma.setOnClickListener(v -> {
+            InputConnection ic = getCurrentInputConnection();
+            if (ic != null) ic.commitText("，", 1);
+        });
+
+        // --- 句號 ---
+        View btnPeriod = rootView.findViewById(R.id.btnPeriod);
+        btnPeriod.setOnClickListener(v -> {
+            InputConnection ic = getCurrentInputConnection();
+            if (ic != null) ic.commitText("。", 1);
         });
 
         // --- 退格（長按加速連刪） ---
@@ -272,14 +292,162 @@ public class SimonIMEService extends InputMethodService {
         recycler.setLayoutManager(new LinearLayoutManager(this));
 
         List<String> items = clipboardHelper.getHistory();
-        recycler.setAdapter(new ClipAdapter(items, position -> {
+        ClipAdapter adapter = new ClipAdapter(items, position -> {
             InputConnection ic = getCurrentInputConnection();
             if (ic != null && position < items.size()) {
                 ic.commitText(items.get(position), 1);
                 updateStatus("📋 已貼上");
                 closePanel();
             }
-        }));
+        });
+        recycler.setAdapter(adapter);
+
+        // 右滑 → 加入常用指令
+        new ItemTouchHelper(new ItemTouchHelper.SimpleCallback(0, ItemTouchHelper.RIGHT) {
+            @Override
+            public boolean onMove(@NonNull RecyclerView rv, @NonNull RecyclerView.ViewHolder from,
+                                  @NonNull RecyclerView.ViewHolder to) {
+                return false;
+            }
+
+            @Override
+            public void onSwiped(@NonNull RecyclerView.ViewHolder vh, int direction) {
+                int pos = vh.getAdapterPosition();
+                if (pos < 0 || pos >= items.size()) return;
+                String clipText = items.get(pos);
+                // 恢復 item（不真的移除）
+                adapter.notifyItemChanged(pos);
+                // 顯示內嵌加入面板
+                showAddToCommandsInline(clipText);
+            }
+
+            @Override
+            public void onChildDraw(@NonNull Canvas c, @NonNull RecyclerView rv,
+                                    @NonNull RecyclerView.ViewHolder vh, float dX, float dY,
+                                    int actionState, boolean isActive) {
+                if (dX > 0) {
+                    // 綠色背景
+                    Paint paint = new Paint();
+                    paint.setColor(0xFF2d6a4f);
+                    c.drawRect(vh.itemView.getLeft(), vh.itemView.getTop(),
+                            vh.itemView.getLeft() + dX, vh.itemView.getBottom(), paint);
+                    // ⚡+ 文字
+                    Paint textPaint = new Paint();
+                    textPaint.setColor(Color.WHITE);
+                    textPaint.setTextSize(36f);
+                    textPaint.setAntiAlias(true);
+                    c.drawText("⚡+", vh.itemView.getLeft() + 24,
+                            (vh.itemView.getTop() + vh.itemView.getBottom()) / 2f + 12, textPaint);
+                }
+                super.onChildDraw(c, rv, vh, dX, dY, actionState, isActive);
+            }
+        }).attachToRecyclerView(recycler);
+    }
+
+    /** 在 panelContainer 內顯示「加入常用指令」面板（不用 AlertDialog） */
+    private void showAddToCommandsInline(String clipText) {
+        panelContainer.removeAllViews();
+
+        LinearLayout panel = new LinearLayout(this);
+        panel.setOrientation(LinearLayout.VERTICAL);
+        panel.setBackgroundColor(0xFF111122);
+        panel.setPadding(24, 16, 24, 16);
+
+        // 標題
+        TextView title = new TextView(this);
+        title.setText("加入常用指令");
+        title.setTextColor(0xFF4ECCA3);
+        title.setTextSize(16);
+        panel.addView(title);
+
+        // 預覽
+        String autoLabel = clipText.length() > 10 ? clipText.substring(0, 10) + "…" : clipText;
+        TextView preview = new TextView(this);
+        preview.setText("標籤：" + autoLabel);
+        preview.setTextColor(0xFFcccccc);
+        preview.setTextSize(13);
+        preview.setPadding(0, 8, 0, 12);
+        panel.addView(preview);
+
+        // 群組選擇按鈕列
+        TextView groupLabel = new TextView(this);
+        groupLabel.setText("選擇群組：");
+        groupLabel.setTextColor(0xFF888888);
+        groupLabel.setTextSize(12);
+        panel.addView(groupLabel);
+
+        LinearLayout groupRow = new LinearLayout(this);
+        groupRow.setOrientation(LinearLayout.HORIZONTAL);
+        groupRow.setPadding(0, 8, 0, 12);
+
+        List<String> groupNames = commandsHelper.getGroupNames();
+        final String[] selectedGroup = { groupNames.isEmpty() ? null : groupNames.get(0) };
+        final Button[] groupButtons = new Button[groupNames.size()];
+
+        for (int i = 0; i < groupNames.size(); i++) {
+            String gName = groupNames.get(i);
+            Button btn = new Button(this);
+            btn.setText(gName);
+            btn.setTextSize(12);
+            btn.setAllCaps(false);
+            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.WRAP_CONTENT, 72);
+            lp.setMarginEnd(8);
+            btn.setLayoutParams(lp);
+            btn.setPadding(16, 0, 16, 0);
+            groupButtons[i] = btn;
+
+            if (gName.equals(selectedGroup[0])) {
+                btn.setTextColor(0xFF4ECCA3);
+                btn.setBackgroundColor(0xFF1a1a2e);
+            } else {
+                btn.setTextColor(0xFF888888);
+                btn.setBackgroundColor(0xFF16213e);
+            }
+
+            btn.setOnClickListener(v -> {
+                selectedGroup[0] = gName;
+                for (int j = 0; j < groupButtons.length; j++) {
+                    if (groupNames.get(j).equals(gName)) {
+                        groupButtons[j].setTextColor(0xFF4ECCA3);
+                        groupButtons[j].setBackgroundColor(0xFF1a1a2e);
+                    } else {
+                        groupButtons[j].setTextColor(0xFF888888);
+                        groupButtons[j].setBackgroundColor(0xFF16213e);
+                    }
+                }
+            });
+            groupRow.addView(btn);
+        }
+        panel.addView(groupRow);
+
+        // 確認 / 取消
+        LinearLayout actionRow = new LinearLayout(this);
+        actionRow.setOrientation(LinearLayout.HORIZONTAL);
+
+        Button btnConfirm = new Button(this);
+        btnConfirm.setText("確認加入");
+        btnConfirm.setTextColor(0xFF4ECCA3);
+        btnConfirm.setTextSize(14);
+        btnConfirm.setOnClickListener(v -> {
+            if (selectedGroup[0] != null) {
+                commandsHelper.addCommand(selectedGroup[0], autoLabel, clipText);
+                updateStatus("⚡ 已加入「" + selectedGroup[0] + "」");
+                showPanel(Panel.CLIPBOARD); // 回到剪貼簿
+            }
+        });
+
+        Button btnCancel = new Button(this);
+        btnCancel.setText("取消");
+        btnCancel.setTextColor(0xFF888888);
+        btnCancel.setTextSize(14);
+        btnCancel.setOnClickListener(v -> showPanel(Panel.CLIPBOARD));
+
+        actionRow.addView(btnConfirm);
+        actionRow.addView(btnCancel);
+        panel.addView(actionRow);
+
+        panelContainer.addView(panel);
     }
 
     // Simple RecyclerView Adapter for clipboard

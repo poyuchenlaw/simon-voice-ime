@@ -2,6 +2,7 @@ package com.simon.voiceime;
 
 import android.app.Activity;
 import android.app.AlertDialog;
+import android.content.Intent;
 import android.content.SharedPreferences;
 import android.os.Bundle;
 import android.widget.Button;
@@ -51,9 +52,14 @@ public class SettingsActivity extends Activity {
         Button btnExportCmds = findViewById(R.id.btnExportCmds);
         Button btnImportCmds = findViewById(R.id.btnImportCmds);
         Button btnUploadCorrections = findViewById(R.id.btnUploadCorrections);
+        Button btnOpenEditor = findViewById(R.id.btnOpenEditor);
 
         commandsHelper = new CommandsHelper(this);
         updateHelper = new UpdateHelper(this);
+
+        // Open commands editor
+        btnOpenEditor.setOnClickListener(v ->
+                startActivity(new Intent(this, CommandsEditorActivity.class)));
 
         // Check for updates
         btnCheckUpdate.setOnClickListener(v -> checkForUpdate());
@@ -114,6 +120,13 @@ public class SettingsActivity extends Activity {
                 Toast.makeText(this, "JSON 格式錯誤", Toast.LENGTH_SHORT).show();
             }
         });
+    }
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+        // Reload commands after returning from editor
+        commandsHelper = new CommandsHelper(this);
     }
 
     private void checkForUpdate() {

@@ -22,7 +22,7 @@
                 android:layout_width="0dp"
                 android:layout_height="wrap_content"
                 android:layout_weight="1"
-                android:text="Simon Voice IME v2.3"
+                android:text="Simon Voice IME v2.4"
                 android:textSize="22sp"
                 android:textColor="#e0e0e0" />
 
@@ -281,10 +281,19 @@
             android:textColor="#e0e0e0"
             android:layout_marginBottom="4dp" />
 
+        <Button
+            android:id="@+id/btnOpenEditor"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="開啟指令編輯器"
+            android:textSize="15sp"
+            android:textColor="#4ecca3"
+            android:layout_marginBottom="12dp" />
+
         <TextView
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:text="指令格式為 JSON，可匯出編輯後匯入。\n按⚡開啟指令面板，點擊即插入文字。"
+            android:text="進階：指令格式為 JSON，可匯出編輯後匯入。"
             android:textColor="#888888"
             android:textSize="12sp"
             android:layout_marginBottom="8dp" />

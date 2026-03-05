@@ -118,6 +118,42 @@ public class CommandsHelper {
         }
     }
 
+    public void updateCommand(String groupName, int index, String newLabel, String newText) {
+        for (CommandGroup g : groups) {
+            if (g.name.equals(groupName) && index >= 0 && index < g.commands.size()) {
+                Command cmd = g.commands.get(index);
+                cmd.label = newLabel;
+                cmd.text = newText;
+                save();
+                return;
+            }
+        }
+    }
+
+    public void renameGroup(String oldName, String newName) {
+        for (CommandGroup g : groups) {
+            if (g.name.equals(oldName)) {
+                g.name = newName;
+                save();
+                return;
+            }
+        }
+    }
+
+    public void moveCommand(String groupName, int fromIndex, int toIndex) {
+        for (CommandGroup g : groups) {
+            if (g.name.equals(groupName)) {
+                if (fromIndex >= 0 && fromIndex < g.commands.size()
+                        && toIndex >= 0 && toIndex < g.commands.size()) {
+                    Command cmd = g.commands.remove(fromIndex);
+                    g.commands.add(toIndex, cmd);
+                    save();
+                }
+                return;
+            }
+        }
+    }
+
     public void removeGroup(String groupName) {
         groups.removeIf(g -> g.name.equals(groupName));
         save();
