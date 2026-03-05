@@ -14,12 +14,23 @@ android {
         versionName "2.4"
     }
 
+    signingConfigs {
+        release {
+            storeFile file("${rootProject.projectDir}/release.keystore")
+            storePassword "simonime2026"
+            keyAlias "simon-voice-ime"
+            keyPassword "simonime2026"
+        }
+    }
+
     buildTypes {
         release {
             minifyEnabled false
+            signingConfig signingConfigs.release
         }
         debug {
             minifyEnabled false
+            signingConfig signingConfigs.release
         }
     }
 

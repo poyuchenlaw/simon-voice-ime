@@ -13,6 +13,9 @@ local.properties
 # APK outputs (use GitHub Releases instead)
 *.apk
 
+# Signing key (DO NOT commit to public repo)
+release.keystore
+
 # OS
 .DS_Store
 Thumbs.db
