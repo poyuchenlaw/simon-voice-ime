@@ -22,7 +22,7 @@
                 android:layout_width="0dp"
                 android:layout_height="wrap_content"
                 android:layout_weight="1"
-                android:text="Simon Voice IME v2.4"
+                android:text="Simon Voice IME v2.4.1"
                 android:textSize="22sp"
                 android:textColor="#e0e0e0" />
 
@@ -237,7 +237,7 @@
         <TextView
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:text="語音常聽錯的字，加在這裡後系統會自動修正。\n\n輸入格式（每行一組）：\n  錯字→正確字\n\n範例：\n  剪貼布→剪貼簿\n  聯絡布→聯絡簿\n  移個→一個\n  法固案→法顧案\n\n按「上傳」會同步到伺服器，立即生效。"
+            android:text="語音常聽錯的字，加在這裡後系統會自動修正。\n\n輸入格式（每行一組，空格隔開）：\n  錯字 正確字\n\n範例：\n  剪貼布 剪貼簿\n  聯絡布 聯絡簿\n  移個 一個\n  城市碼 程式碼\n\n也支援箭頭格式：剪貼布→剪貼簿\n按「上傳」會同步到伺服器，立即生效。"
             android:textColor="#888888"
             android:textSize="12sp"
             android:lineSpacingExtra="3dp"
@@ -255,7 +255,7 @@
             android:padding="8dp"
             android:layout_marginBottom="8dp"
             android:fontFamily="monospace"
-            android:hint="剪貼布→剪貼簿\n聯絡布→聯絡簿"
+            android:hint="剪貼布 剪貼簿\n城市碼 程式碼"
             android:textColorHint="#333333" />
 
         <Button

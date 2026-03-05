@@ -218,9 +218,8 @@ public class SettingsActivity extends Activity {
         String url = editServerUrl.getText().toString().trim();
         if (url.endsWith("/")) url = url.substring(0, url.length() - 1);
 
-        // Parse "錯字→正確" format, one per line or comma-separated
-        // Send as the simple text format the server supports
-        String normalized = input.replace("\n", ",").replace("，", ",");
+        // Send raw text — server handles newline/comma/space formats
+        String normalized = input;
 
         try {
             JSONObject body = new JSONObject();
