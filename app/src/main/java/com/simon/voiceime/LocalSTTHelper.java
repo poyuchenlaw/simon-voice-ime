@@ -1,9 +1,11 @@
 package com.simon.voiceime;
 
+import android.app.Notification;
+import android.app.NotificationChannel;
+import android.app.NotificationManager;
 import android.content.Context;
 import android.util.Log;
 
-import com.k2fsa.sherpa.onnx.FeatureConfig;
 import com.k2fsa.sherpa.onnx.OfflineModelConfig;
 import com.k2fsa.sherpa.onnx.OfflineRecognizer;
 import com.k2fsa.sherpa.onnx.OfflineRecognizerConfig;
@@ -29,10 +31,14 @@ public class LocalSTTHelper {
     private static final String TOKENS_URL =
             "https://huggingface.co/csukuangfj/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17/resolve/main/tokens.txt";
 
+    private static final String NOTIF_CHANNEL = "stt_model";
+    private static final int NOTIF_ID = 9001;
+
     private OfflineRecognizer recognizer;
     private volatile boolean isReady = false;
     private volatile boolean isDownloading = false;
     private final Context context;
+    private NotificationManager notifManager;
     private StatusCallback statusCallback;
 
     public interface StatusCallback {
@@ -41,6 +47,38 @@ public class LocalSTTHelper {
 
     public LocalSTTHelper(Context context) {
         this.context = context;
+        setupNotificationChannel();
+    }
+
+    private void setupNotificationChannel() {
+        notifManager = (NotificationManager) context.getSystemService(Context.NOTIFICATION_SERVICE);
+        NotificationChannel channel = new NotificationChannel(
+                NOTIF_CHANNEL, "語音模型下載", NotificationManager.IMPORTANCE_LOW);
+        channel.setDescription("顯示語音模型下載進度");
+        notifManager.createNotificationChannel(channel);
+    }
+
+    private void showDownloadNotification(String text, int progress) {
+        Notification.Builder builder = new Notification.Builder(context, NOTIF_CHANNEL)
+                .setSmallIcon(android.R.drawable.stat_sys_download)
+                .setContentTitle("Simon Voice IME")
+                .setContentText(text)
+                .setOngoing(progress < 100);
+
+        if (progress >= 0 && progress < 100) {
+            builder.setProgress(100, progress, false);
+        } else if (progress >= 100) {
+            builder.setSmallIcon(android.R.drawable.stat_sys_download_done);
+            builder.setProgress(0, 0, false);
+        }
+
+        notifManager.notify(NOTIF_ID, builder.build());
+    }
+
+    private void dismissNotification() {
+        if (notifManager != null) {
+            notifManager.cancel(NOTIF_ID);
+        }
     }
 
     public void setStatusCallback(StatusCallback callback) {
@@ -57,8 +95,10 @@ public class LocalSTTHelper {
 
         if (!modelFile.exists() || !tokensFile.exists()) {
             isDownloading = true;
+            showDownloadNotification("首次使用，下載語音模型中...", 0);
             reportStatus("首次使用，下載語音模型中...");
             if (!downloadModels(modelDir, modelFile, tokensFile)) {
+                showDownloadNotification("模型下載失敗", 100);
                 reportStatus("模型下載失敗，換字模式使用伺服器辨識");
                 isDownloading = false;
                 return;
@@ -67,12 +107,18 @@ public class LocalSTTHelper {
         }
 
         try {
+            reportStatus("載入語音引擎...");
             initRecognizer(modelFile.getAbsolutePath(), tokensFile.getAbsolutePath());
             isReady = true;
             Log.i(TAG, "Sherpa-ONNX SenseVoice 初始化完成");
+            showDownloadNotification("本機語音引擎就緒", 100);
             reportStatus("本機語音引擎就緒");
+            // 3 秒後自動消除通知
+            try { Thread.sleep(3000); } catch (InterruptedException ignored) {}
+            dismissNotification();
         } catch (Exception e) {
             Log.e(TAG, "Sherpa-ONNX 初始化失敗", e);
+            showDownloadNotification("語音引擎初始化失敗", 100);
             reportStatus("本機語音引擎初始化失敗");
         }
     }
@@ -195,9 +241,11 @@ public class LocalSTTHelper {
                     downloaded += n;
                     if (totalSize > 0) {
                         int percent = (int) (downloaded * 100 / totalSize);
-                        if (percent != lastPercent && percent % 10 == 0) {
+                        if (percent != lastPercent && percent % 5 == 0) {
                             lastPercent = percent;
-                            reportStatus("下載中... " + percent + "%");
+                            String msg = "下載語音模型... " + percent + "%";
+                            showDownloadNotification(msg, percent);
+                            reportStatus(msg);
                         }
                     }
                 }

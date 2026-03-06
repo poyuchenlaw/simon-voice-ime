@@ -66,6 +66,7 @@ public class SimonIMEService extends InputMethodService {
 
     enum Mode { APPEND, REPLACE, SPELL, TRANSLATE }
 
+    private static final String PREF_MODE_KEY = "last_mode";
     private Mode currentMode = Mode.APPEND;
     private boolean isRecording = false;
     private AudioRecord audioRecord;
@@ -114,6 +115,9 @@ public class SimonIMEService extends InputMethodService {
         mainHandler = new Handler(Looper.getMainLooper());
         clipboardHelper = new ClipboardHelper(this);
         commandsHelper = new CommandsHelper(this);
+
+        // 載入上次使用的模式
+        loadSavedMode();
 
         // 背景初始化本機 STT（首次需下載模型 ~220MB）
         localSTT = new LocalSTTHelper(this);
@@ -605,6 +609,7 @@ public class SimonIMEService extends InputMethodService {
         if (now - lastTapTime < DOUBLE_TAP_THRESHOLD) {
             mainHandler.removeCallbacks(longPressRunnable);
             currentMode = Mode.SPELL;
+            saveMode();
             updateModeUI();
             startRecording();
             lastTapTime = 0;
@@ -617,6 +622,7 @@ public class SimonIMEService extends InputMethodService {
         longPressRunnable = () -> {
             longPressTriggered = true;
             currentMode = Mode.REPLACE;
+            saveMode();
             updateModeUI();
             startRecording();
         };
@@ -714,6 +720,19 @@ public class SimonIMEService extends InputMethodService {
 
         // REPLACE 模式 + 本機 STT 就緒 → 手機端辨識，只傳文字到伺服器
         if (currentMode == Mode.REPLACE && localSTTReady) {
+            // 在主執行緒先取游標前後文字（背景執行緒拿不到 InputConnection）
+            InputConnection icForReplace = getCurrentInputConnection();
+            String beforeCursor = "";
+            String afterCursor = "";
+            if (icForReplace != null) {
+                CharSequence before = icForReplace.getTextBeforeCursor(50, 0);
+                CharSequence after = icForReplace.getTextAfterCursor(50, 0);
+                beforeCursor = before != null ? before.toString() : "";
+                afterCursor = after != null ? after.toString() : "";
+            }
+            final String bc = beforeCursor;
+            final String ac = afterCursor;
+
             new Thread(() -> {
                 long t0 = System.currentTimeMillis();
                 String spokenText = localSTT.recognize(pcmData, SAMPLE_RATE);
@@ -722,7 +741,7 @@ public class SimonIMEService extends InputMethodService {
 
                 if (spokenText != null && !spokenText.isEmpty()) {
                     mainHandler.post(() -> updateStatus("本機辨識(" + sttMs + "ms): " + spokenText));
-                    sendTextReplace(spokenText);
+                    sendTextReplace(spokenText, bc, ac);
                 } else {
                     // 本機 STT 失敗 → fallback 上傳音訊
                     mainHandler.post(() -> updateStatus("本機辨識無結果，上傳中..."));
@@ -814,18 +833,8 @@ public class SimonIMEService extends InputMethodService {
     /**
      * 本機 STT 完成後，只傳文字到伺服器 /v1/replace-text 做 LLM 換字推理。
      */
-    private void sendTextReplace(String spokenText) {
+    private void sendTextReplace(String spokenText, String beforeCursor, String afterCursor) {
         String serverUrl = getServerUrl();
-        InputConnection ic = getCurrentInputConnection();
-
-        String beforeCursor = "";
-        String afterCursor = "";
-        if (ic != null) {
-            CharSequence before = ic.getTextBeforeCursor(50, 0);
-            CharSequence after = ic.getTextAfterCursor(50, 0);
-            beforeCursor = before != null ? before.toString() : "";
-            afterCursor = after != null ? after.toString() : "";
-        }
 
         MultipartBody body = new MultipartBody.Builder()
                 .setType(MultipartBody.FORM)
@@ -903,8 +912,6 @@ public class SimonIMEService extends InputMethodService {
                         } else {
                             updateStatus("未找到可替換的文字");
                         }
-                        currentMode = Mode.APPEND;
-                        updateModeUI();
                         break;
                     }
                     case SPELL: {
@@ -915,8 +922,6 @@ public class SimonIMEService extends InputMethodService {
                         } else {
                             updateStatus("拼字失敗");
                         }
-                        currentMode = Mode.APPEND;
-                        updateModeUI();
                         break;
                     }
                     case TRANSLATE: {
@@ -946,7 +951,25 @@ public class SimonIMEService extends InputMethodService {
             case SPELL: currentMode = Mode.TRANSLATE; break;
             case TRANSLATE: currentMode = Mode.APPEND; break;
         }
+        saveMode();
         updateModeUI();
+    }
+
+    private void saveMode() {
+        getSharedPreferences("simon_ime", MODE_PRIVATE)
+                .edit()
+                .putString(PREF_MODE_KEY, currentMode.name())
+                .apply();
+    }
+
+    private void loadSavedMode() {
+        String saved = getSharedPreferences("simon_ime", MODE_PRIVATE)
+                .getString(PREF_MODE_KEY, Mode.APPEND.name());
+        try {
+            currentMode = Mode.valueOf(saved);
+        } catch (Exception e) {
+            currentMode = Mode.APPEND;
+        }
     }
 
     private void updateModeUI() {
