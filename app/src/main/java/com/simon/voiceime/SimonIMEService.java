@@ -77,6 +77,8 @@ public class SimonIMEService extends InputMethodService {
     // Helpers
     private ClipboardHelper clipboardHelper;
     private CommandsHelper commandsHelper;
+    private LocalSTTHelper localSTT;
+    private volatile boolean localSTTReady = false;
 
     // UI elements
     private View rootView;
@@ -112,6 +114,15 @@ public class SimonIMEService extends InputMethodService {
         mainHandler = new Handler(Looper.getMainLooper());
         clipboardHelper = new ClipboardHelper(this);
         commandsHelper = new CommandsHelper(this);
+
+        // 背景初始化本機 STT（首次需下載模型 ~220MB）
+        localSTT = new LocalSTTHelper(this);
+        localSTT.setStatusCallback(msg ->
+                mainHandler.post(() -> updateStatus(msg)));
+        new Thread(() -> {
+            localSTT.init();
+            localSTTReady = localSTT.isReady();
+        }, "LocalSTT-Init").start();
     }
 
     @Override
@@ -701,6 +712,27 @@ public class SimonIMEService extends InputMethodService {
             return;
         }
 
+        // REPLACE 模式 + 本機 STT 就緒 → 手機端辨識，只傳文字到伺服器
+        if (currentMode == Mode.REPLACE && localSTTReady) {
+            new Thread(() -> {
+                long t0 = System.currentTimeMillis();
+                String spokenText = localSTT.recognize(pcmData, SAMPLE_RATE);
+                long sttMs = System.currentTimeMillis() - t0;
+                Log.i(TAG, "[LocalSTT] 辨識耗時 " + sttMs + "ms: '" + spokenText + "'");
+
+                if (spokenText != null && !spokenText.isEmpty()) {
+                    mainHandler.post(() -> updateStatus("本機辨識(" + sttMs + "ms): " + spokenText));
+                    sendTextReplace(spokenText);
+                } else {
+                    // 本機 STT 失敗 → fallback 上傳音訊
+                    mainHandler.post(() -> updateStatus("本機辨識無結果，上傳中..."));
+                    byte[] wavData = pcmToWav(pcmData, SAMPLE_RATE, 1, 16);
+                    sendToWTI(wavData, Mode.REPLACE);
+                }
+            }, "LocalSTT-Recognize").start();
+            return;
+        }
+
         byte[] wavData = pcmToWav(pcmData, SAMPLE_RATE, 1, 16);
         sendToWTI(wavData, currentMode);
     }
@@ -773,6 +805,63 @@ public class SimonIMEService extends InputMethodService {
                     handleWTIResponse(json, mode);
                 } catch (Exception e) {
                     Log.e(TAG, "Error parsing response", e);
+                    mainHandler.post(() -> updateStatus("解析錯誤"));
+                }
+            }
+        });
+    }
+
+    /**
+     * 本機 STT 完成後，只傳文字到伺服器 /v1/replace-text 做 LLM 換字推理。
+     */
+    private void sendTextReplace(String spokenText) {
+        String serverUrl = getServerUrl();
+        InputConnection ic = getCurrentInputConnection();
+
+        String beforeCursor = "";
+        String afterCursor = "";
+        if (ic != null) {
+            CharSequence before = ic.getTextBeforeCursor(50, 0);
+            CharSequence after = ic.getTextAfterCursor(50, 0);
+            beforeCursor = before != null ? before.toString() : "";
+            afterCursor = after != null ? after.toString() : "";
+        }
+
+        MultipartBody body = new MultipartBody.Builder()
+                .setType(MultipartBody.FORM)
+                .addFormDataPart("spoken_text", spokenText)
+                .addFormDataPart("before_cursor", beforeCursor)
+                .addFormDataPart("after_cursor", afterCursor)
+                .build();
+
+        Request.Builder reqBuilder = new Request.Builder()
+                .url(serverUrl + "/v1/replace-text")
+                .post(body);
+
+        String auth = getAuthPassword();
+        if (auth != null && !auth.isEmpty()) {
+            reqBuilder.addHeader("Authorization", "Bearer " + auth);
+        }
+
+        httpClient.newCall(reqBuilder.build()).enqueue(new Callback() {
+            @Override
+            public void onFailure(@NonNull Call call, @NonNull IOException e) {
+                Log.e(TAG, "Replace-text request failed", e);
+                mainHandler.post(() -> updateStatus("連線失敗: " + e.getMessage()));
+            }
+
+            @Override
+            public void onResponse(@NonNull Call call, @NonNull Response response) throws IOException {
+                try {
+                    String responseBody = response.body() != null ? response.body().string() : "";
+                    if (!response.isSuccessful()) {
+                        mainHandler.post(() -> updateStatus("伺服器錯誤: " + response.code()));
+                        return;
+                    }
+                    JSONObject json = new JSONObject(responseBody);
+                    handleWTIResponse(json, Mode.REPLACE);
+                } catch (Exception e) {
+                    Log.e(TAG, "Error parsing replace-text response", e);
                     mainHandler.post(() -> updateStatus("解析錯誤"));
                 }
             }
