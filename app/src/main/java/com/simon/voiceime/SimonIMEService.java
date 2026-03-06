@@ -718,40 +718,46 @@ public class SimonIMEService extends InputMethodService {
             return;
         }
 
-        // REPLACE 模式 + 本機 STT 就緒 → 手機端辨識，只傳文字到伺服器
-        if (currentMode == Mode.REPLACE && localSTTReady) {
+        // v2.7: 全模式本機 STT → 傳文字到伺服器（不再傳音訊）
+        if (localSTTReady) {
             // 在主執行緒先取游標前後文字（背景執行緒拿不到 InputConnection）
-            InputConnection icForReplace = getCurrentInputConnection();
+            InputConnection icNow = getCurrentInputConnection();
             String beforeCursor = "";
             String afterCursor = "";
-            if (icForReplace != null) {
-                CharSequence before = icForReplace.getTextBeforeCursor(50, 0);
-                CharSequence after = icForReplace.getTextAfterCursor(50, 0);
+            if (icNow != null) {
+                CharSequence before = icNow.getTextBeforeCursor(50, 0);
+                CharSequence after = icNow.getTextAfterCursor(50, 0);
                 beforeCursor = before != null ? before.toString() : "";
                 afterCursor = after != null ? after.toString() : "";
             }
             final String bc = beforeCursor;
             final String ac = afterCursor;
+            final Mode modeNow = currentMode;
 
             new Thread(() -> {
                 long t0 = System.currentTimeMillis();
                 String spokenText = localSTT.recognize(pcmData, SAMPLE_RATE);
                 long sttMs = System.currentTimeMillis() - t0;
-                Log.i(TAG, "[LocalSTT] 辨識耗時 " + sttMs + "ms: '" + spokenText + "'");
+                Log.i(TAG, "[LocalSTT] " + modeNow + " 辨識耗時 " + sttMs + "ms: '" + spokenText + "'");
 
                 if (spokenText != null && !spokenText.isEmpty()) {
-                    mainHandler.post(() -> updateStatus("本機辨識(" + sttMs + "ms): " + spokenText));
-                    sendTextReplace(spokenText, bc, ac);
+                    mainHandler.post(() -> updateStatus("辨識(" + sttMs + "ms): " + truncate(spokenText, 15)));
+                    if (modeNow == Mode.REPLACE) {
+                        sendTextReplace(spokenText, bc, ac);
+                    } else {
+                        sendTextProcess(spokenText, modeNow);
+                    }
                 } else {
                     // 本機 STT 失敗 → fallback 上傳音訊
                     mainHandler.post(() -> updateStatus("本機辨識無結果，上傳中..."));
                     byte[] wavData = pcmToWav(pcmData, SAMPLE_RATE, 1, 16);
-                    sendToWTI(wavData, Mode.REPLACE);
+                    sendToWTI(wavData, modeNow);
                 }
             }, "LocalSTT-Recognize").start();
             return;
         }
 
+        // fallback: 本機 STT 未就緒 → 上傳音訊（舊流程）
         byte[] wavData = pcmToWav(pcmData, SAMPLE_RATE, 1, 16);
         sendToWTI(wavData, currentMode);
     }
@@ -833,6 +839,77 @@ public class SimonIMEService extends InputMethodService {
     /**
      * 本機 STT 完成後，只傳文字到伺服器 /v1/replace-text 做 LLM 換字推理。
      */
+    /**
+     * v2.7: 本機 STT 完成後，傳文字到 /v1/process-text 做校正/拼字/翻譯。
+     */
+    private void sendTextProcess(String spokenText, Mode mode) {
+        String serverUrl = getServerUrl();
+
+        String modeStr;
+        switch (mode) {
+            case SPELL: modeStr = "spell"; break;
+            case TRANSLATE: modeStr = "translate"; break;
+            default: modeStr = "append"; break;
+        }
+
+        MultipartBody.Builder bodyBuilder = new MultipartBody.Builder()
+                .setType(MultipartBody.FORM)
+                .addFormDataPart("text", spokenText)
+                .addFormDataPart("mode", modeStr);
+
+        if (mode == Mode.TRANSLATE) {
+            bodyBuilder.addFormDataPart("target_language", "en");
+        }
+
+        Request.Builder reqBuilder = new Request.Builder()
+                .url(serverUrl + "/v1/process-text")
+                .post(bodyBuilder.build());
+
+        String auth = getAuthPassword();
+        if (auth != null && !auth.isEmpty()) {
+            reqBuilder.addHeader("Authorization", "Bearer " + auth);
+        }
+
+        httpClient.newCall(reqBuilder.build()).enqueue(new Callback() {
+            @Override
+            public void onFailure(@NonNull Call call, @NonNull IOException e) {
+                Log.e(TAG, "Process-text request failed", e);
+                mainHandler.post(() -> updateStatus("連線失敗: " + e.getMessage()));
+            }
+
+            @Override
+            public void onResponse(@NonNull Call call, @NonNull Response response) throws IOException {
+                try {
+                    String responseBody = response.body() != null ? response.body().string() : "";
+                    if (!response.isSuccessful()) {
+                        mainHandler.post(() -> updateStatus("伺服器錯誤: " + response.code()));
+                        return;
+                    }
+                    JSONObject json = new JSONObject(responseBody);
+                    String text = json.optString("text", "").trim();
+                    mainHandler.post(() -> {
+                        InputConnection ic = getCurrentInputConnection();
+                        if (ic != null && !text.isEmpty()) {
+                            ic.commitText(text, 1);
+                            String prefix;
+                            switch (mode) {
+                                case SPELL: prefix = "拼字: "; break;
+                                case TRANSLATE: prefix = "翻譯: "; break;
+                                default: prefix = ""; break;
+                            }
+                            updateStatus(prefix + truncate(text, 20));
+                        } else {
+                            updateStatus("未辨識到文字");
+                        }
+                    });
+                } catch (Exception e) {
+                    Log.e(TAG, "Error parsing process-text response", e);
+                    mainHandler.post(() -> updateStatus("解析錯誤"));
+                }
+            }
+        });
+    }
+
     private void sendTextReplace(String spokenText, String beforeCursor, String afterCursor) {
         String serverUrl = getServerUrl();
 
