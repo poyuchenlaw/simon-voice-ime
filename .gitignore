@@ -16,6 +16,10 @@ local.properties
 # Signing key (DO NOT commit to public repo)
 release.keystore
 
+# Bundled models (too large for git, download before building)
+app/src/main/assets/*.onnx
+app/src/main/assets/sensevoice/
+
 # OS
 .DS_Store
 Thumbs.db

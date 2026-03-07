@@ -35,6 +35,7 @@ import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
+import java.util.ArrayList;
 import java.util.List;
 
 import okhttp3.Call;
@@ -81,6 +82,7 @@ public class SimonIMEService extends InputMethodService {
     private LocalSTTHelper localSTT;
     private volatile boolean localSTTReady = false;
     private volatile boolean isStreamingMode = false;
+    private final List<String> streamingSegments = new ArrayList<>();
 
     // UI elements
     private View rootView;
@@ -122,8 +124,6 @@ public class SimonIMEService extends InputMethodService {
 
         // 背景初始化本機 STT（首次需下載模型 ~220MB）
         localSTT = new LocalSTTHelper(this);
-        localSTT.setStatusCallback(msg ->
-                mainHandler.post(() -> updateStatus(msg)));
         new Thread(() -> {
             localSTT.init();
             localSTTReady = localSTT.isReady();
@@ -683,27 +683,21 @@ public class SimonIMEService extends InputMethodService {
         btnMic.setBackgroundColor(getResources().getColor(R.color.mic_active, null));
         if (btnMic instanceof Button) ((Button) btnMic).setText("⏹");
 
-        // Streaming callback for APPEND mode
+        // Streaming callback for APPEND mode: buffer segments, send all at end
+        if (isStreamingMode) {
+            streamingSegments.clear();
+        }
         final LocalSTTHelper.StreamingCallback streamCb = isStreamingMode
-                ? new LocalSTTHelper.StreamingCallback() {
-            @Override
-            public void onPartialResult(String text) {
-                mainHandler.post(() -> {
-                    if (previewText != null) {
-                        previewText.setText(text);
-                        previewText.setVisibility(View.VISIBLE);
-                    }
-                });
-            }
-
-            @Override
-            public void onSegmentResult(String text) {
-                mainHandler.post(() -> {
-                    if (previewText != null) previewText.setVisibility(View.GONE);
-                    updateStatus("📝 " + truncate(text, 15));
-                });
-                sendTextProcess(text, Mode.APPEND);
-            }
+                ? text -> {
+            streamingSegments.add(text);
+            String accumulated = String.join("", streamingSegments);
+            mainHandler.post(() -> {
+                if (previewText != null) {
+                    previewText.setText(accumulated);
+                    previewText.setVisibility(View.VISIBLE);
+                }
+                updateStatus("📝 " + streamingSegments.size() + " 句");
+            });
         } : null;
 
         recordingThread = new Thread(() -> {
@@ -753,23 +747,34 @@ public class SimonIMEService extends InputMethodService {
             if (btnMic instanceof Button) ((Button) btnMic).setText("🎤");
         });
 
-        // Streaming mode (APPEND): flush remaining VAD buffer + wait
+        // Streaming mode (APPEND): flush VAD → wait → send all segments for consolidation
         if (wasStreaming) {
             new Thread(() -> {
-                LocalSTTHelper.StreamingCallback flushCb = new LocalSTTHelper.StreamingCallback() {
-                    @Override
-                    public void onPartialResult(String text) { /* no partial during flush */ }
-                    @Override
-                    public void onSegmentResult(String text) {
-                        mainHandler.post(() -> updateStatus("📝 " + truncate(text, 15)));
-                        sendTextProcess(text, Mode.APPEND);
-                    }
+                // Flush remaining audio from VAD
+                LocalSTTHelper.StreamingCallback flushCb = text -> {
+                    streamingSegments.add(text);
+                    String accumulated = String.join("", streamingSegments);
+                    mainHandler.post(() -> {
+                        if (previewText != null) {
+                            previewText.setText(accumulated);
+                            previewText.setVisibility(View.VISIBLE);
+                        }
+                    });
                 };
                 localSTT.flushVad(flushCb);
                 localSTT.waitForPendingSegments();
+
+                // Concatenate all segments and send once for LLM consolidation
+                String fullText = String.join("", streamingSegments);
+                streamingSegments.clear();
+
+                if (!fullText.isEmpty()) {
+                    mainHandler.post(() -> updateStatus("🔄 校正中..."));
+                    sendTextProcess(fullText, Mode.APPEND);
+                }
+
                 mainHandler.post(() -> {
                     if (previewText != null) previewText.setVisibility(View.GONE);
-                    updateStatus("✅ 串流辨識完成");
                 });
             }, "StreamingFlush").start();
             return;
