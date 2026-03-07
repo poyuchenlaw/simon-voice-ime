@@ -57,6 +57,10 @@ public class SettingsActivity extends Activity {
         commandsHelper = new CommandsHelper(this);
         updateHelper = new UpdateHelper(this);
 
+        // 動態顯示實際版本號
+        TextView tvVersion = findViewById(R.id.tvVersion);
+        tvVersion.setText("Simon Voice IME v" + getAppVersion());
+
         // Open commands editor
         btnOpenEditor.setOnClickListener(v ->
                 startActivity(new Intent(this, CommandsEditorActivity.class)));
