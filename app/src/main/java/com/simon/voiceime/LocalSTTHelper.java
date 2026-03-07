@@ -155,10 +155,18 @@ public class LocalSTTHelper {
         }
 
         // Phase 2: Silero VAD (important for streaming)
-        initVad();
+        try {
+            initVad();
+        } catch (Throwable t) {
+            Log.e(TAG, "VAD 初始化異常", t);
+        }
 
-        // Phase 3: Streaming Zipformer (optional, for real-time preview)
-        initStreaming();
+        // Phase 3: Streaming Zipformer — 暫時停用（部分裝置閃退）
+        // VAD + SenseVoice 已足夠支撐串流逐句辨識，串流預覽日後再啟用
+        // initStreaming();
+
+        // 清理舊版 v2.7 模型目錄（節省空間）
+        cleanupOldModels();
 
         isDownloading = false;
 
@@ -602,6 +610,21 @@ public class LocalSTTHelper {
     private void reportStatus(String message) {
         Log.i(TAG, message);
         if (statusCallback != null) statusCallback.onStatus(message);
+    }
+
+    // ==================== Old Model Cleanup ====================
+
+    /** 清理 v2.7 舊模型目錄（sherpa-onnx-models → 已改用 sherpa-onnx-sensevoice） */
+    private void cleanupOldModels() {
+        File oldDir = new File(context.getFilesDir(), "sherpa-onnx-models");
+        if (oldDir.exists() && oldDir.isDirectory()) {
+            File[] files = oldDir.listFiles();
+            if (files != null) {
+                for (File f : files) f.delete();
+            }
+            oldDir.delete();
+            Log.i(TAG, "已清理舊版模型目錄 sherpa-onnx-models/");
+        }
     }
 
     // ==================== Cleanup ====================
