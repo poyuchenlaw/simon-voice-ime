@@ -35,7 +35,6 @@ import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
-import java.util.ArrayList;
 import java.util.List;
 
 import okhttp3.Call;
@@ -81,8 +80,6 @@ public class SimonIMEService extends InputMethodService {
     private CommandsHelper commandsHelper;
     private LocalSTTHelper localSTT;
     private volatile boolean localSTTReady = false;
-    private volatile boolean isStreamingMode = false;
-    private final List<String> streamingSegments = new ArrayList<>();
 
     // UI elements
     private View rootView;
@@ -668,55 +665,20 @@ public class SimonIMEService extends InputMethodService {
             return;
         }
 
-        // APPEND mode + VAD ready → 串流逐句辨識
-        isStreamingMode = (currentMode == Mode.APPEND && localSTTReady
-                && localSTT != null && localSTT.isStreamingReady());
-
-        if (!isStreamingMode) {
-            pcmBuffer = new ByteArrayOutputStream();
-        }
-
+        pcmBuffer = new ByteArrayOutputStream();
         isRecording = true;
         audioRecord.startRecording();
 
-        updateStatus(isStreamingMode ? "🔴 串流錄音中..." : "🔴 錄音中...");
+        updateStatus("🔴 錄音中...");
         btnMic.setBackgroundColor(getResources().getColor(R.color.mic_active, null));
         if (btnMic instanceof Button) ((Button) btnMic).setText("⏹");
-
-        // Streaming callback for APPEND mode: buffer segments, send all at end
-        if (isStreamingMode) {
-            streamingSegments.clear();
-        }
-        final LocalSTTHelper.StreamingCallback streamCb = isStreamingMode
-                ? text -> {
-            streamingSegments.add(text);
-            String accumulated = String.join("", streamingSegments);
-            mainHandler.post(() -> {
-                if (previewText != null) {
-                    previewText.setText(accumulated);
-                    previewText.setVisibility(View.VISIBLE);
-                }
-                updateStatus("📝 " + streamingSegments.size() + " 句");
-            });
-        } : null;
 
         recordingThread = new Thread(() -> {
             byte[] buffer = new byte[bufferSize];
             while (isRecording) {
                 int read = audioRecord.read(buffer, 0, buffer.length);
                 if (read > 0) {
-                    if (isStreamingMode && streamCb != null) {
-                        // PCM bytes → float, feed to VAD + streaming engine
-                        int numSamples = read / 2;
-                        float[] floatSamples = new float[numSamples];
-                        for (int i = 0; i < numSamples; i++) {
-                            short s = (short) ((buffer[i * 2] & 0xFF) | (buffer[i * 2 + 1] << 8));
-                            floatSamples[i] = s / 32768.0f;
-                        }
-                        localSTT.feedAudioChunk(floatSamples, streamCb);
-                    } else {
-                        pcmBuffer.write(buffer, 0, read);
-                    }
+                    pcmBuffer.write(buffer, 0, read);
                 }
             }
         }, "AudioRecorder");
@@ -726,8 +688,6 @@ public class SimonIMEService extends InputMethodService {
     private void stopRecordingAndSend() {
         if (!isRecording) return;
         isRecording = false;
-        final boolean wasStreaming = isStreamingMode;
-        isStreamingMode = false;
 
         try {
             audioRecord.stop();
@@ -742,48 +702,14 @@ public class SimonIMEService extends InputMethodService {
             Thread.currentThread().interrupt();
         }
 
-        mainHandler.post(() -> {
-            btnMic.setBackgroundColor(getResources().getColor(R.color.mic_idle, null));
-            if (btnMic instanceof Button) ((Button) btnMic).setText("🎤");
-        });
-
-        // Streaming mode (APPEND): flush VAD → wait → send all segments for consolidation
-        if (wasStreaming) {
-            new Thread(() -> {
-                // Flush remaining audio from VAD
-                LocalSTTHelper.StreamingCallback flushCb = text -> {
-                    streamingSegments.add(text);
-                    String accumulated = String.join("", streamingSegments);
-                    mainHandler.post(() -> {
-                        if (previewText != null) {
-                            previewText.setText(accumulated);
-                            previewText.setVisibility(View.VISIBLE);
-                        }
-                    });
-                };
-                localSTT.flushVad(flushCb);
-                localSTT.waitForPendingSegments();
-
-                // Concatenate all segments and send once for LLM consolidation
-                String fullText = String.join("", streamingSegments);
-                streamingSegments.clear();
-
-                if (!fullText.isEmpty()) {
-                    mainHandler.post(() -> updateStatus("🔄 校正中..."));
-                    sendTextProcess(fullText, Mode.APPEND);
-                }
-
-                mainHandler.post(() -> {
-                    if (previewText != null) previewText.setVisibility(View.GONE);
-                });
-            }, "StreamingFlush").start();
-            return;
-        }
-
         byte[] pcmData = pcmBuffer.toByteArray();
         pcmBuffer = null;
 
-        mainHandler.post(() -> updateStatus("辨識中..."));
+        mainHandler.post(() -> {
+            btnMic.setBackgroundColor(getResources().getColor(R.color.mic_idle, null));
+            if (btnMic instanceof Button) ((Button) btnMic).setText("🎤");
+            updateStatus("辨識中...");
+        });
 
         if (pcmData.length < 3200) {
             mainHandler.post(() -> updateStatus("錄音太短，請再試一次"));
