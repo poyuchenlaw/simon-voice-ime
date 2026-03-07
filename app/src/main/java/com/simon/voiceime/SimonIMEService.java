@@ -80,6 +80,7 @@ public class SimonIMEService extends InputMethodService {
     private CommandsHelper commandsHelper;
     private LocalSTTHelper localSTT;
     private volatile boolean localSTTReady = false;
+    private volatile boolean isStreamingMode = false;
 
     // UI elements
     private View rootView;
@@ -667,20 +668,61 @@ public class SimonIMEService extends InputMethodService {
             return;
         }
 
-        pcmBuffer = new ByteArrayOutputStream();
+        // APPEND mode + VAD ready → 串流逐句辨識
+        isStreamingMode = (currentMode == Mode.APPEND && localSTTReady
+                && localSTT != null && localSTT.isStreamingReady());
+
+        if (!isStreamingMode) {
+            pcmBuffer = new ByteArrayOutputStream();
+        }
+
         isRecording = true;
         audioRecord.startRecording();
 
-        updateStatus("🔴 錄音中...");
+        updateStatus(isStreamingMode ? "🔴 串流錄音中..." : "🔴 錄音中...");
         btnMic.setBackgroundColor(getResources().getColor(R.color.mic_active, null));
         if (btnMic instanceof Button) ((Button) btnMic).setText("⏹");
+
+        // Streaming callback for APPEND mode
+        final LocalSTTHelper.StreamingCallback streamCb = isStreamingMode
+                ? new LocalSTTHelper.StreamingCallback() {
+            @Override
+            public void onPartialResult(String text) {
+                mainHandler.post(() -> {
+                    if (previewText != null) {
+                        previewText.setText(text);
+                        previewText.setVisibility(View.VISIBLE);
+                    }
+                });
+            }
+
+            @Override
+            public void onSegmentResult(String text) {
+                mainHandler.post(() -> {
+                    if (previewText != null) previewText.setVisibility(View.GONE);
+                    updateStatus("📝 " + truncate(text, 15));
+                });
+                sendTextProcess(text, Mode.APPEND);
+            }
+        } : null;
 
         recordingThread = new Thread(() -> {
             byte[] buffer = new byte[bufferSize];
             while (isRecording) {
                 int read = audioRecord.read(buffer, 0, buffer.length);
                 if (read > 0) {
-                    pcmBuffer.write(buffer, 0, read);
+                    if (isStreamingMode && streamCb != null) {
+                        // PCM bytes → float, feed to VAD + streaming engine
+                        int numSamples = read / 2;
+                        float[] floatSamples = new float[numSamples];
+                        for (int i = 0; i < numSamples; i++) {
+                            short s = (short) ((buffer[i * 2] & 0xFF) | (buffer[i * 2 + 1] << 8));
+                            floatSamples[i] = s / 32768.0f;
+                        }
+                        localSTT.feedAudioChunk(floatSamples, streamCb);
+                    } else {
+                        pcmBuffer.write(buffer, 0, read);
+                    }
                 }
             }
         }, "AudioRecorder");
@@ -690,6 +732,8 @@ public class SimonIMEService extends InputMethodService {
     private void stopRecordingAndSend() {
         if (!isRecording) return;
         isRecording = false;
+        final boolean wasStreaming = isStreamingMode;
+        isStreamingMode = false;
 
         try {
             audioRecord.stop();
@@ -704,14 +748,37 @@ public class SimonIMEService extends InputMethodService {
             Thread.currentThread().interrupt();
         }
 
-        byte[] pcmData = pcmBuffer.toByteArray();
-        pcmBuffer = null;
-
         mainHandler.post(() -> {
             btnMic.setBackgroundColor(getResources().getColor(R.color.mic_idle, null));
             if (btnMic instanceof Button) ((Button) btnMic).setText("🎤");
-            updateStatus("辨識中...");
         });
+
+        // Streaming mode (APPEND): flush remaining VAD buffer + wait
+        if (wasStreaming) {
+            new Thread(() -> {
+                LocalSTTHelper.StreamingCallback flushCb = new LocalSTTHelper.StreamingCallback() {
+                    @Override
+                    public void onPartialResult(String text) { /* no partial during flush */ }
+                    @Override
+                    public void onSegmentResult(String text) {
+                        mainHandler.post(() -> updateStatus("📝 " + truncate(text, 15)));
+                        sendTextProcess(text, Mode.APPEND);
+                    }
+                };
+                localSTT.flushVad(flushCb);
+                localSTT.waitForPendingSegments();
+                mainHandler.post(() -> {
+                    if (previewText != null) previewText.setVisibility(View.GONE);
+                    updateStatus("✅ 串流辨識完成");
+                });
+            }, "StreamingFlush").start();
+            return;
+        }
+
+        byte[] pcmData = pcmBuffer.toByteArray();
+        pcmBuffer = null;
+
+        mainHandler.post(() -> updateStatus("辨識中..."));
 
         if (pcmData.length < 3200) {
             mainHandler.post(() -> updateStatus("錄音太短，請再試一次"));
