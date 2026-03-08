@@ -317,26 +317,51 @@ public class CommandsHelper {
     }
 
     private void saveToFileBackup(String json) {
+        // Internal backup (original location)
         try {
             File backup = new File(context.getFilesDir(), BACKUP_FILENAME);
             try (FileOutputStream fos = new FileOutputStream(backup)) {
                 fos.write(json.getBytes(StandardCharsets.UTF_8));
             }
         } catch (IOException e) {
-            Log.w(TAG, "Failed to save file backup", e);
+            Log.w(TAG, "Failed to save internal backup", e);
+        }
+        // External backup (survives APK reinstall if not uninstalled)
+        try {
+            File extDir = new File(context.getExternalFilesDir(null), "backup");
+            if (!extDir.exists()) extDir.mkdirs();
+            File extBackup = new File(extDir, BACKUP_FILENAME);
+            try (FileOutputStream fos = new FileOutputStream(extBackup)) {
+                fos.write(json.getBytes(StandardCharsets.UTF_8));
+            }
+        } catch (IOException e) {
+            Log.w(TAG, "Failed to save external backup", e);
         }
     }
 
     private List<CommandGroup> loadFromFileBackup() {
+        // Try internal first
         File backup = new File(context.getFilesDir(), BACKUP_FILENAME);
-        if (!backup.exists()) return new ArrayList<>();
+        if (backup.exists()) {
+            List<CommandGroup> result = loadBackupFile(backup);
+            if (!result.isEmpty()) return result;
+        }
+        // Try external backup
+        File extBackup = new File(new File(context.getExternalFilesDir(null), "backup"), BACKUP_FILENAME);
+        if (extBackup.exists()) {
+            return loadBackupFile(extBackup);
+        }
+        return new ArrayList<>();
+    }
+
+    private List<CommandGroup> loadBackupFile(File backup) {
         try (FileInputStream fis = new FileInputStream(backup)) {
             byte[] data = new byte[(int) backup.length()];
             fis.read(data);
             String json = new String(data, StandardCharsets.UTF_8);
             return parseGroups(new JSONObject(json));
         } catch (Exception e) {
-            Log.w(TAG, "Failed to load file backup", e);
+            Log.w(TAG, "Failed to load backup: " + backup.getPath(), e);
             return new ArrayList<>();
         }
     }

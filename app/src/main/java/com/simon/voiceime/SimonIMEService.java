@@ -35,7 +35,9 @@ import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
+import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.TimeUnit;
 
 import okhttp3.Call;
 import okhttp3.Callback;
@@ -47,13 +49,16 @@ import okhttp3.RequestBody;
 import okhttp3.Response;
 
 /**
- * Simon Voice IME v2.4
+ * Simon Voice IME v3.3
  *
  * 功能：
- * - 語音輸入（追加/替換/拼字三模式）
+ * - 語音輸入（追加/替換/拼字/翻譯四模式）
+ * - 追加模式串流上傳：VAD 分段 → SenseVoice 辨識 → stream-chunk → stream-finalize
+ * - 英文詞彙本地映射（SenseVoice 中文諧音 → 英文）
  * - 空格、退格、Enter
  * - 剪貼簿歷史（50 則）
  * - 常用指令（分組可自訂）
+ * - 資料持久化（外部備份 + Auto Backup）
  * - 跳轉其他輸入法
  * - 設定
  */
@@ -80,6 +85,13 @@ public class SimonIMEService extends InputMethodService {
     private CommandsHelper commandsHelper;
     private LocalSTTHelper localSTT;
     private volatile boolean localSTTReady = false;
+    private EnglishMapper englishMapper;
+    private StreamingUploadHelper streamingUpload;
+    private DataBackupHelper dataBackupHelper;
+
+    // Streaming state (APPEND mode with VAD)
+    private volatile boolean streamingMode = false;
+    private final List<String> streamChunkTexts = new ArrayList<>();
 
     // UI elements
     private View rootView;
@@ -109,21 +121,28 @@ public class SimonIMEService extends InputMethodService {
     public void onCreate() {
         super.onCreate();
         httpClient = new OkHttpClient.Builder()
-                .connectTimeout(10, java.util.concurrent.TimeUnit.SECONDS)
-                .readTimeout(30, java.util.concurrent.TimeUnit.SECONDS)
+                .connectTimeout(10, TimeUnit.SECONDS)
+                .readTimeout(30, TimeUnit.SECONDS)
                 .build();
         mainHandler = new Handler(Looper.getMainLooper());
         clipboardHelper = new ClipboardHelper(this);
         commandsHelper = new CommandsHelper(this);
+        englishMapper = new EnglishMapper(this);
+        streamingUpload = new StreamingUploadHelper();
+        dataBackupHelper = new DataBackupHelper(this);
 
         // 載入上次使用的模式
         loadSavedMode();
 
-        // 背景初始化本機 STT（首次需下載模型 ~220MB）
+        // 背景初始化本機 STT
         localSTT = new LocalSTTHelper(this);
         new Thread(() -> {
             localSTT.init();
             localSTTReady = localSTT.isReady();
+            if (localSTTReady) {
+                Log.i(TAG, "本機 STT 就緒" +
+                        (localSTT.isStreamingReady() ? "（含 VAD 串流）" : "（單次辨識）"));
+            }
         }, "LocalSTT-Init").start();
     }
 
@@ -669,25 +688,87 @@ public class SimonIMEService extends InputMethodService {
         isRecording = true;
         audioRecord.startRecording();
 
+        // 判斷是否啟用串流模式：APPEND 模式 + VAD 就緒 + 伺服器支援串流
+        boolean useStreaming = (currentMode == Mode.APPEND)
+                && localSTTReady
+                && localSTT.isStreamingReady()
+                && streamingUpload.isStreamingSupported();
+
+        if (useStreaming) {
+            streamingMode = true;
+            streamChunkTexts.clear();
+            streamingUpload.startSession(getServerUrl(), getAuthPassword());
+            Log.i(TAG, "串流模式啟動 session=" + streamingUpload.getSessionId());
+        } else {
+            streamingMode = false;
+        }
+
         updateStatus("🔴 錄音中...");
         btnMic.setBackgroundColor(getResources().getColor(R.color.mic_active, null));
         if (btnMic instanceof Button) ((Button) btnMic).setText("⏹");
 
+        final boolean streaming = streamingMode;
         recordingThread = new Thread(() -> {
-            byte[] buffer = new byte[bufferSize];
-            while (isRecording) {
-                int read = audioRecord.read(buffer, 0, buffer.length);
-                if (read > 0) {
-                    pcmBuffer.write(buffer, 0, read);
+            if (streaming) {
+                // 串流模式：餵音訊給 VAD，VAD 偵測到停頓 → SenseVoice 辨識 → 上傳 chunk
+                recordWithVAD();
+            } else {
+                // 原有模式：純錄音到 buffer
+                byte[] buffer = new byte[bufferSize];
+                while (isRecording) {
+                    int read = audioRecord.read(buffer, 0, buffer.length);
+                    if (read > 0) {
+                        pcmBuffer.write(buffer, 0, read);
+                    }
                 }
             }
         }, "AudioRecorder");
         recordingThread.start();
     }
 
+    /**
+     * 串流模式錄音：VAD 分段 → SenseVoice 辨識 → stream-chunk 上傳
+     * VAD 的 windowSize=512 samples，所以每次讀 512 samples (1024 bytes)
+     */
+    private void recordWithVAD() {
+        final int vadWindowSize = 512; // must match VAD windowSize
+        final int bytesPerWindow = vadWindowSize * 2; // 16-bit PCM
+        byte[] buffer = new byte[bytesPerWindow];
+
+        while (isRecording) {
+            int read = audioRecord.read(buffer, 0, bytesPerWindow);
+            if (read <= 0) continue;
+
+            // 同時寫入 pcmBuffer（作為 fallback 用）
+            pcmBuffer.write(buffer, 0, read);
+
+            // byte[] → float[] 供 VAD 使用
+            int numSamples = read / 2;
+            float[] floatSamples = new float[numSamples];
+            for (int i = 0; i < numSamples; i++) {
+                short sample = (short) ((buffer[i * 2] & 0xFF) | (buffer[i * 2 + 1] << 8));
+                floatSamples[i] = sample / 32768.0f;
+            }
+
+            // 餵入 VAD + SenseVoice（回調在 segmentExecutor 執行緒）
+            localSTT.feedAudioChunk(floatSamples, segmentText -> {
+                // SenseVoice 辨識完一段 → 英文映射 → 上傳 chunk
+                String mapped = englishMapper.apply(segmentText);
+                synchronized (streamChunkTexts) {
+                    streamChunkTexts.add(mapped);
+                }
+                streamingUpload.sendChunk(mapped);
+                Log.d(TAG, "Stream chunk: '" + mapped + "'");
+            });
+        }
+    }
+
     private void stopRecordingAndSend() {
         if (!isRecording) return;
         isRecording = false;
+
+        final boolean wasStreaming = streamingMode;
+        streamingMode = false;
 
         try {
             audioRecord.stop();
@@ -712,11 +793,18 @@ public class SimonIMEService extends InputMethodService {
         });
 
         if (pcmData.length < 3200) {
+            if (wasStreaming) streamingUpload.cancelSession();
             mainHandler.post(() -> updateStatus("錄音太短，請再試一次"));
             return;
         }
 
-        // v2.7: 全模式本機 STT → 傳文字到伺服器（不再傳音訊）
+        // === 串流模式收尾 ===
+        if (wasStreaming && streamingUpload.isStreamingSupported()) {
+            finalizeStreamingSession(pcmData);
+            return;
+        }
+
+        // === 非串流模式：本機 STT → 文字上傳 ===
         if (localSTTReady) {
             // 在主執行緒先取游標前後文字（背景執行緒拿不到 InputConnection）
             InputConnection icNow = getCurrentInputConnection();
@@ -739,11 +827,15 @@ public class SimonIMEService extends InputMethodService {
                 Log.i(TAG, "[LocalSTT] " + modeNow + " 辨識耗時 " + sttMs + "ms: '" + spokenText + "'");
 
                 if (spokenText != null && !spokenText.isEmpty()) {
-                    mainHandler.post(() -> updateStatus("辨識(" + sttMs + "ms): " + truncate(spokenText, 15)));
+                    // 英文映射
+                    spokenText = englishMapper.apply(spokenText);
+
+                    final String finalText = spokenText;
+                    mainHandler.post(() -> updateStatus("辨識(" + sttMs + "ms): " + truncate(finalText, 15)));
                     if (modeNow == Mode.REPLACE) {
-                        sendTextReplace(spokenText, bc, ac);
+                        sendTextReplace(finalText, bc, ac);
                     } else {
-                        sendTextProcess(spokenText, modeNow);
+                        sendTextProcess(finalText, modeNow);
                     }
                 } else {
                     // 本機 STT 失敗 → fallback 上傳音訊
@@ -758,6 +850,105 @@ public class SimonIMEService extends InputMethodService {
         // fallback: 本機 STT 未就緒 → 上傳音訊（舊流程）
         byte[] wavData = pcmToWav(pcmData, SAMPLE_RATE, 1, 16);
         sendToWTI(wavData, currentMode);
+    }
+
+    /**
+     * 串流模式收尾：
+     * 1. flush VAD 殘留音訊 → SenseVoice 辨識最後一段 → 上傳最後 chunk
+     * 2. 等待 pending segments 完成
+     * 3. POST stream-finalize → 取得 LLM 語義校正結果
+     * 4. 若 finalize 失敗 → fallback 到整段辨識
+     */
+    private void finalizeStreamingSession(byte[] pcmData) {
+        new Thread(() -> {
+            // 1. Flush VAD — 處理最後殘留的語音段
+            localSTT.flushVad(segmentText -> {
+                String mapped = englishMapper.apply(segmentText);
+                synchronized (streamChunkTexts) {
+                    streamChunkTexts.add(mapped);
+                }
+                streamingUpload.sendChunk(mapped);
+                Log.d(TAG, "Stream flush chunk: '" + mapped + "'");
+            });
+
+            // 2. 等待所有 SenseVoice 段落處理完成
+            localSTT.waitForPendingSegments();
+
+            int totalChunks = streamingUpload.getChunkCount();
+            Log.i(TAG, "Streaming session ending. Total chunks: " + totalChunks);
+
+            if (totalChunks == 0) {
+                // 沒有任何 chunk（可能全部太短被過濾）→ fallback 整段辨識
+                Log.w(TAG, "No chunks sent, falling back to single-shot recognition");
+                fallbackSingleShot(pcmData);
+                return;
+            }
+
+            // 3. Finalize — 等伺服器整體 LLM 語義校正
+            mainHandler.post(() -> updateStatus("整理中..."));
+            streamingUpload.finalize(new StreamingUploadHelper.FinalizeCallback() {
+                @Override
+                public void onSuccess(String finalText) {
+                    Log.i(TAG, "Stream finalize success: '" + finalText + "'");
+                    mainHandler.post(() -> {
+                        InputConnection ic = getCurrentInputConnection();
+                        if (ic != null && !finalText.isEmpty()) {
+                            ic.commitText(finalText, 1);
+                            updateStatus("✅ " + truncate(finalText, 20));
+                        } else {
+                            updateStatus("未辨識到文字");
+                        }
+                    });
+                }
+
+                @Override
+                public void onError(String error) {
+                    Log.w(TAG, "Stream finalize failed: " + error);
+                    if ("STREAMING_NOT_SUPPORTED".equals(error)) {
+                        // 伺服器不支援串流 → fallback + 之後不再嘗試串流
+                        Log.w(TAG, "Server does not support streaming, disabling");
+                        fallbackSingleShot(pcmData);
+                    } else {
+                        // 其他錯誤 → fallback 用本地收集的文字
+                        String localConcat;
+                        synchronized (streamChunkTexts) {
+                            localConcat = String.join("", streamChunkTexts);
+                        }
+                        if (!localConcat.isEmpty()) {
+                            // 用本地拼接的文字送 process-text
+                            mainHandler.post(() -> updateStatus("串流整理失敗，使用本地結果"));
+                            sendTextProcess(localConcat, Mode.APPEND);
+                        } else {
+                            fallbackSingleShot(pcmData);
+                        }
+                    }
+                }
+            });
+        }, "StreamFinalize").start();
+    }
+
+    /**
+     * Fallback：整段 PCM → SenseVoice 單次辨識 → process-text
+     */
+    private void fallbackSingleShot(byte[] pcmData) {
+        if (localSTTReady) {
+            long t0 = System.currentTimeMillis();
+            String spokenText = localSTT.recognize(pcmData, SAMPLE_RATE);
+            long sttMs = System.currentTimeMillis() - t0;
+            if (spokenText != null && !spokenText.isEmpty()) {
+                spokenText = englishMapper.apply(spokenText);
+                final String finalText = spokenText;
+                mainHandler.post(() -> updateStatus("辨識(" + sttMs + "ms): " + truncate(finalText, 15)));
+                sendTextProcess(finalText, Mode.APPEND);
+            } else {
+                mainHandler.post(() -> updateStatus("本機辨識無結果，上傳中..."));
+                byte[] wavData = pcmToWav(pcmData, SAMPLE_RATE, 1, 16);
+                sendToWTI(wavData, Mode.APPEND);
+            }
+        } else {
+            byte[] wavData = pcmToWav(pcmData, SAMPLE_RATE, 1, 16);
+            sendToWTI(wavData, Mode.APPEND);
+        }
     }
 
     // ==================== Network ====================
@@ -1138,10 +1329,17 @@ public class SimonIMEService extends InputMethodService {
     public void onDestroy() {
         if (isRecording) {
             isRecording = false;
+            streamingMode = false;
             try {
                 audioRecord.stop();
                 audioRecord.release();
             } catch (Exception ignored) {}
+        }
+        if (streamingUpload != null && streamingUpload.isSessionActive()) {
+            streamingUpload.cancelSession();
+        }
+        if (localSTT != null) {
+            localSTT.release();
         }
         super.onDestroy();
     }

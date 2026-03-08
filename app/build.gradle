@@ -10,7 +10,7 @@ android {
         applicationId "com.simon.voiceime"
         minSdk 26
         targetSdk 34
-        versionCode 16
+        versionCode 17
         versionName "3.3"
 
         ndk {

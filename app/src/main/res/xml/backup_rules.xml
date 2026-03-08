@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<full-backup-content>
+    <!-- SharedPreferences (auto-included by default, but be explicit) -->
+    <include domain="sharedpref" path="simon_ime_commands.xml" />
+    <include domain="sharedpref" path="simon_ime_clipboard.xml" />
+    <include domain="sharedpref" path="simon_ime_prefs.xml" />
+    <include domain="sharedpref" path="simon_ime.xml" />
+    <include domain="sharedpref" path="simon_ime_english_mapper.xml" />
+
+    <!-- Internal file backups -->
+    <include domain="file" path="commands_backup.json" />
+    <include domain="file" path="clipboard_backup.json" />
+
+    <!-- External file backups -->
+    <include domain="external" path="backup/" />
+
+    <!-- Exclude large model files -->
+    <exclude domain="file" path="sherpa-onnx-models/" />
+    <exclude domain="file" path="sherpa-onnx-sensevoice/" />
+    <exclude domain="file" path="sherpa-onnx-streaming/" />
+</full-backup-content>

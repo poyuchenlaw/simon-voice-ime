@@ -95,7 +95,7 @@ public class LocalSTTHelper {
             SileroVadModelConfig sileroConfig = new SileroVadModelConfig();
             sileroConfig.setModel("silero_vad.onnx");
             sileroConfig.setThreshold(0.5f);
-            sileroConfig.setMinSilenceDuration(1.2f);  // 1.2 秒靜音斷句（給思考時間）
+            sileroConfig.setMinSilenceDuration(0.5f);  // 0.5 秒靜音斷句（串流模式需要快速分段）
             sileroConfig.setMinSpeechDuration(0.3f);
             sileroConfig.setWindowSize(512);
             sileroConfig.setMaxSpeechDuration(30.0f);
