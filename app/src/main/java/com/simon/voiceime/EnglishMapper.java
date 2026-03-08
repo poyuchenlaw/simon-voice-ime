@@ -42,6 +42,15 @@ public class EnglishMapper {
         BUILTIN.put("捷門你", "Gemini");
         BUILTIN.put("潔門你", "Gemini");
         BUILTIN.put("傑門你", "Gemini");
+        BUILTIN.put("Jama", "Gemini");
+        BUILTIN.put("jama", "Gemini");
+        BUILTIN.put("Jarama", "Gemini");
+        BUILTIN.put("jarama", "Gemini");
+        BUILTIN.put("傑門", "Gemini");
+        BUILTIN.put("杰門", "Gemini");
+        BUILTIN.put("節門", "Gemini");
+        BUILTIN.put("介門", "Gemini");
+        BUILTIN.put("傑米尼", "Gemini");
         BUILTIN.put("扣的", "Claude");
         BUILTIN.put("可勞的", "Claude");
         BUILTIN.put("克勞德", "Claude");
