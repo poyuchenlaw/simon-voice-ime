@@ -890,6 +890,7 @@ public class SimonIMEService extends InputMethodService {
                 @Override
                 public void onSuccess(String finalText) {
                     Log.i(TAG, "Stream finalize success: '" + finalText + "'");
+                    streamingUpload.endSession();
                     mainHandler.post(() -> {
                         InputConnection ic = getCurrentInputConnection();
                         if (ic != null && !finalText.isEmpty()) {
@@ -904,6 +905,7 @@ public class SimonIMEService extends InputMethodService {
                 @Override
                 public void onError(String error) {
                     Log.w(TAG, "Stream finalize failed: " + error);
+                    streamingUpload.endSession();
                     if ("STREAMING_NOT_SUPPORTED".equals(error)) {
                         // 伺服器不支援串流 → fallback + 之後不再嘗試串流
                         Log.w(TAG, "Server does not support streaming, disabling");
