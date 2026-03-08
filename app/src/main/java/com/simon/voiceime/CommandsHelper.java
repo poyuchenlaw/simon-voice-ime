@@ -2,11 +2,17 @@ package com.simon.voiceime;
 
 import android.content.Context;
 import android.content.SharedPreferences;
+import android.util.Log;
 
 import org.json.JSONArray;
 import org.json.JSONException;
 import org.json.JSONObject;
 
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileOutputStream;
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -58,11 +64,22 @@ public class CommandsHelper {
 
     private static final int CURRENT_SCHEMA_VERSION = 2;  // bump to trigger migration
 
+    private static final String TAG = "CommandsHelper";
+    private static final String BACKUP_FILENAME = "commands_backup.json";
+
     public CommandsHelper(Context context) {
         this.context = context;
         this.groups = loadGroups();
         if (groups.isEmpty()) {
-            initDefaults();
+            // Try restoring from file backup before falling back to defaults
+            List<CommandGroup> restored = loadFromFileBackup();
+            if (!restored.isEmpty()) {
+                Log.i(TAG, "Restored " + restored.size() + " groups from file backup");
+                this.groups = restored;
+                save(); // re-save to SharedPreferences
+            } else {
+                initDefaults();
+            }
         } else {
             // Check if we need to migrate (add new default groups)
             int savedVersion = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
@@ -291,10 +308,37 @@ public class CommandsHelper {
     }
 
     private void save() {
+        String json = toJson().toString();
         context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
                 .edit()
-                .putString(KEY_DATA, toJson().toString())
+                .putString(KEY_DATA, json)
                 .apply();
+        saveToFileBackup(json);
+    }
+
+    private void saveToFileBackup(String json) {
+        try {
+            File backup = new File(context.getFilesDir(), BACKUP_FILENAME);
+            try (FileOutputStream fos = new FileOutputStream(backup)) {
+                fos.write(json.getBytes(StandardCharsets.UTF_8));
+            }
+        } catch (IOException e) {
+            Log.w(TAG, "Failed to save file backup", e);
+        }
+    }
+
+    private List<CommandGroup> loadFromFileBackup() {
+        File backup = new File(context.getFilesDir(), BACKUP_FILENAME);
+        if (!backup.exists()) return new ArrayList<>();
+        try (FileInputStream fis = new FileInputStream(backup)) {
+            byte[] data = new byte[(int) backup.length()];
+            fis.read(data);
+            String json = new String(data, StandardCharsets.UTF_8);
+            return parseGroups(new JSONObject(json));
+        } catch (Exception e) {
+            Log.w(TAG, "Failed to load file backup", e);
+            return new ArrayList<>();
+        }
     }
 
     private JSONObject toJson() {
