@@ -37,8 +37,9 @@
         android:gravity="center"
         android:visibility="gone" />
 
-    <!-- 主鍵盤區：左側兩列 + 右側大麥克風 -->
+    <!-- ========== 語音鍵盤（預設顯示） ========== -->
     <LinearLayout
+        android:id="@+id/voiceKeyboard"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:orientation="horizontal"
@@ -67,9 +68,9 @@
                     android:layout_height="34dp"
                     android:layout_weight="1"
                     android:gravity="center"
-                    android:text="🔄"
-                    android:textSize="14sp"
-                    android:textColor="#666666"
+                    android:text="EN"
+                    android:textSize="12sp"
+                    android:textColor="#6bc5f0"
                     android:background="@color/key_bg"
                     android:layout_marginEnd="2dp"
                     android:clickable="true"
@@ -225,5 +226,19 @@
             android:background="@color/mic_idle" />
 
     </LinearLayout>
+
+    <!-- ========== 英文鍵盤（預設隱藏） ========== -->
+    <include
+        layout="@layout/keyboard_english"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:visibility="gone" />
+
+    <!-- ========== 數字符號鍵盤（預設隱藏） ========== -->
+    <include
+        layout="@layout/keyboard_numbers"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:visibility="gone" />
 
 </LinearLayout>

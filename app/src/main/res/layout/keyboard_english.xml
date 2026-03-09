@@ -1,0 +1,180 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/englishKeyboard"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:orientation="vertical"
+    android:paddingStart="3dp"
+    android:paddingEnd="3dp"
+    android:paddingBottom="3dp">
+
+    <!-- Row 1: q w e r t y u i o p -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="42dp"
+        android:orientation="horizontal"
+        android:layout_marginBottom="2dp">
+
+        <TextView android:layout_width="0dp" android:layout_height="match_parent" android:layout_weight="1"
+            android:gravity="center" android:text="q" android:textSize="18sp"
+            android:textColor="@color/key_text" android:background="@color/key_bg"
+            android:layout_marginEnd="2dp" android:tag="key:q" android:clickable="true" android:focusable="true"/>
+        <TextView android:layout_width="0dp" android:layout_height="match_parent" android:layout_weight="1"
+            android:gravity="center" android:text="w" android:textSize="18sp"
+            android:textColor="@color/key_text" android:background="@color/key_bg"
+            android:layout_marginEnd="2dp" android:tag="key:w" android:clickable="true" android:focusable="true"/>
+        <TextView android:layout_width="0dp" android:layout_height="match_parent" android:layout_weight="1"
+            android:gravity="center" android:text="e" android:textSize="18sp"
+            android:textColor="@color/key_text" android:background="@color/key_bg"
+            android:layout_marginEnd="2dp" android:tag="key:e" android:clickable="true" android:focusable="true"/>
+        <TextView android:layout_width="0dp" android:layout_height="match_parent" android:layout_weight="1"
+            android:gravity="center" android:text="r" android:textSize="18sp"
+            android:textColor="@color/key_text" android:background="@color/key_bg"
+            android:layout_marginEnd="2dp" android:tag="key:r" android:clickable="true" android:focusable="true"/>
+        <TextView android:layout_width="0dp" android:layout_height="match_parent" android:layout_weight="1"
+            android:gravity="center" android:text="t" android:textSize="18sp"
+            android:textColor="@color/key_text" android:background="@color/key_bg"
+            android:layout_marginEnd="2dp" android:tag="key:t" android:clickable="true" android:focusable="true"/>
+        <TextView android:layout_width="0dp" android:layout_height="match_parent" android:layout_weight="1"
+            android:gravity="center" android:text="y" android:textSize="18sp"
+            android:textColor="@color/key_text" android:background="@color/key_bg"
+            android:layout_marginEnd="2dp" android:tag="key:y" android:clickable="true" android:focusable="true"/>
+        <TextView android:layout_width="0dp" android:layout_height="match_parent" android:layout_weight="1"
+            android:gravity="center" android:text="u" android:textSize="18sp"
+            android:textColor="@color/key_text" android:background="@color/key_bg"
+            android:layout_marginEnd="2dp" android:tag="key:u" android:clickable="true" android:focusable="true"/>
+        <TextView android:layout_width="0dp" android:layout_height="match_parent" android:layout_weight="1"
+            android:gravity="center" android:text="i" android:textSize="18sp"
+            android:textColor="@color/key_text" android:background="@color/key_bg"
+            android:layout_marginEnd="2dp" android:tag="key:i" android:clickable="true" android:focusable="true"/>
+        <TextView android:layout_width="0dp" android:layout_height="match_parent" android:layout_weight="1"
+            android:gravity="center" android:text="o" android:textSize="18sp"
+            android:textColor="@color/key_text" android:background="@color/key_bg"
+            android:layout_marginEnd="2dp" android:tag="key:o" android:clickable="true" android:focusable="true"/>
+        <TextView android:layout_width="0dp" android:layout_height="match_parent" android:layout_weight="1"
+            android:gravity="center" android:text="p" android:textSize="18sp"
+            android:textColor="@color/key_text" android:background="@color/key_bg"
+            android:tag="key:p" android:clickable="true" android:focusable="true"/>
+    </LinearLayout>
+
+    <!-- Row 2: a s d f g h j k l (indented) -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="42dp"
+        android:orientation="horizontal"
+        android:layout_marginBottom="2dp"
+        android:paddingStart="14dp"
+        android:paddingEnd="14dp">
+
+        <TextView android:layout_width="0dp" android:layout_height="match_parent" android:layout_weight="1"
+            android:gravity="center" android:text="a" android:textSize="18sp"
+            android:textColor="@color/key_text" android:background="@color/key_bg"
+            android:layout_marginEnd="2dp" android:tag="key:a" android:clickable="true" android:focusable="true"/>
+        <TextView android:layout_width="0dp" android:layout_height="match_parent" android:layout_weight="1"
+            android:gravity="center" android:text="s" android:textSize="18sp"
+            android:textColor="@color/key_text" android:background="@color/key_bg"
+            android:layout_marginEnd="2dp" android:tag="key:s" android:clickable="true" android:focusable="true"/>
+        <TextView android:layout_width="0dp" android:layout_height="match_parent" android:layout_weight="1"
+            android:gravity="center" android:text="d" android:textSize="18sp"
+            android:textColor="@color/key_text" android:background="@color/key_bg"
+            android:layout_marginEnd="2dp" android:tag="key:d" android:clickable="true" android:focusable="true"/>
+        <TextView android:layout_width="0dp" android:layout_height="match_parent" android:layout_weight="1"
+            android:gravity="center" android:text="f" android:textSize="18sp"
+            android:textColor="@color/key_text" android:background="@color/key_bg"
+            android:layout_marginEnd="2dp" android:tag="key:f" android:clickable="true" android:focusable="true"/>
+        <TextView android:layout_width="0dp" android:layout_height="match_parent" android:layout_weight="1"
+            android:gravity="center" android:text="g" android:textSize="18sp"
+            android:textColor="@color/key_text" android:background="@color/key_bg"
+            android:layout_marginEnd="2dp" android:tag="key:g" android:clickable="true" android:focusable="true"/>
+        <TextView android:layout_width="0dp" android:layout_height="match_parent" android:layout_weight="1"
+            android:gravity="center" android:text="h" android:textSize="18sp"
+            android:textColor="@color/key_text" android:background="@color/key_bg"
+            android:layout_marginEnd="2dp" android:tag="key:h" android:clickable="true" android:focusable="true"/>
+        <TextView android:layout_width="0dp" android:layout_height="match_parent" android:layout_weight="1"
+            android:gravity="center" android:text="j" android:textSize="18sp"
+            android:textColor="@color/key_text" android:background="@color/key_bg"
+            android:layout_marginEnd="2dp" android:tag="key:j" android:clickable="true" android:focusable="true"/>
+        <TextView android:layout_width="0dp" android:layout_height="match_parent" android:layout_weight="1"
+            android:gravity="center" android:text="k" android:textSize="18sp"
+            android:textColor="@color/key_text" android:background="@color/key_bg"
+            android:layout_marginEnd="2dp" android:tag="key:k" android:clickable="true" android:focusable="true"/>
+        <TextView android:layout_width="0dp" android:layout_height="match_parent" android:layout_weight="1"
+            android:gravity="center" android:text="l" android:textSize="18sp"
+            android:textColor="@color/key_text" android:background="@color/key_bg"
+            android:tag="key:l" android:clickable="true" android:focusable="true"/>
+    </LinearLayout>
+
+    <!-- Row 3: Shift z x c v b n m Backspace -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="42dp"
+        android:orientation="horizontal"
+        android:layout_marginBottom="2dp">
+
+        <TextView android:layout_width="0dp" android:layout_height="match_parent" android:layout_weight="1.5"
+            android:gravity="center" android:text="⬆" android:textSize="16sp"
+            android:textColor="@color/key_text" android:background="@color/key_bg"
+            android:layout_marginEnd="2dp" android:tag="key:shift" android:clickable="true" android:focusable="true"/>
+        <TextView android:layout_width="0dp" android:layout_height="match_parent" android:layout_weight="1"
+            android:gravity="center" android:text="z" android:textSize="18sp"
+            android:textColor="@color/key_text" android:background="@color/key_bg"
+            android:layout_marginEnd="2dp" android:tag="key:z" android:clickable="true" android:focusable="true"/>
+        <TextView android:layout_width="0dp" android:layout_height="match_parent" android:layout_weight="1"
+            android:gravity="center" android:text="x" android:textSize="18sp"
+            android:textColor="@color/key_text" android:background="@color/key_bg"
+            android:layout_marginEnd="2dp" android:tag="key:x" android:clickable="true" android:focusable="true"/>
+        <TextView android:layout_width="0dp" android:layout_height="match_parent" android:layout_weight="1"
+            android:gravity="center" android:text="c" android:textSize="18sp"
+            android:textColor="@color/key_text" android:background="@color/key_bg"
+            android:layout_marginEnd="2dp" android:tag="key:c" android:clickable="true" android:focusable="true"/>
+        <TextView android:layout_width="0dp" android:layout_height="match_parent" android:layout_weight="1"
+            android:gravity="center" android:text="v" android:textSize="18sp"
+            android:textColor="@color/key_text" android:background="@color/key_bg"
+            android:layout_marginEnd="2dp" android:tag="key:v" android:clickable="true" android:focusable="true"/>
+        <TextView android:layout_width="0dp" android:layout_height="match_parent" android:layout_weight="1"
+            android:gravity="center" android:text="b" android:textSize="18sp"
+            android:textColor="@color/key_text" android:background="@color/key_bg"
+            android:layout_marginEnd="2dp" android:tag="key:b" android:clickable="true" android:focusable="true"/>
+        <TextView android:layout_width="0dp" android:layout_height="match_parent" android:layout_weight="1"
+            android:gravity="center" android:text="n" android:textSize="18sp"
+            android:textColor="@color/key_text" android:background="@color/key_bg"
+            android:layout_marginEnd="2dp" android:tag="key:n" android:clickable="true" android:focusable="true"/>
+        <TextView android:layout_width="0dp" android:layout_height="match_parent" android:layout_weight="1"
+            android:gravity="center" android:text="m" android:textSize="18sp"
+            android:textColor="@color/key_text" android:background="@color/key_bg"
+            android:layout_marginEnd="2dp" android:tag="key:m" android:clickable="true" android:focusable="true"/>
+        <TextView android:layout_width="0dp" android:layout_height="match_parent" android:layout_weight="1.5"
+            android:gravity="center" android:text="⌫" android:textSize="16sp"
+            android:textColor="@color/key_text" android:background="@color/key_bg"
+            android:tag="key:backspace" android:clickable="true" android:focusable="true"/>
+    </LinearLayout>
+
+    <!-- Row 4: Mic ?123 Space . Enter -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="42dp"
+        android:orientation="horizontal">
+
+        <TextView android:layout_width="0dp" android:layout_height="match_parent" android:layout_weight="1.5"
+            android:gravity="center" android:text="🎤" android:textSize="16sp"
+            android:textColor="@color/key_text" android:background="@color/mic_idle"
+            android:layout_marginEnd="2dp" android:tag="key:toVoice" android:clickable="true" android:focusable="true"/>
+        <TextView android:layout_width="0dp" android:layout_height="match_parent" android:layout_weight="1.5"
+            android:gravity="center" android:text="123" android:textSize="14sp"
+            android:textColor="@color/key_text" android:background="@color/key_bg"
+            android:layout_marginEnd="2dp" android:tag="key:toNumbers" android:clickable="true" android:focusable="true"/>
+        <TextView android:layout_width="0dp" android:layout_height="match_parent" android:layout_weight="5"
+            android:gravity="center" android:text="space" android:textSize="12sp"
+            android:textColor="#666666" android:background="@color/key_bg"
+            android:layout_marginEnd="2dp" android:tag="key:space" android:clickable="true" android:focusable="true"/>
+        <TextView android:layout_width="0dp" android:layout_height="match_parent" android:layout_weight="1"
+            android:gravity="center" android:text="." android:textSize="18sp"
+            android:textColor="@color/key_text" android:background="@color/key_bg"
+            android:layout_marginEnd="2dp" android:tag="key:." android:clickable="true" android:focusable="true"/>
+        <TextView android:layout_width="0dp" android:layout_height="match_parent" android:layout_weight="1.5"
+            android:gravity="center" android:text="↵" android:textSize="16sp"
+            android:textColor="#8fbc8f" android:background="#1b3326"
+            android:tag="key:enter" android:clickable="true" android:focusable="true"/>
+    </LinearLayout>
+
+</LinearLayout>

@@ -12,6 +12,7 @@ import android.util.Log;
 import android.view.LayoutInflater;
 import android.view.MotionEvent;
 import android.view.View;
+import android.view.ViewGroup;
 import android.view.inputmethod.EditorInfo;
 import android.view.inputmethod.InputConnection;
 import android.view.inputmethod.InputMethodManager;
@@ -70,9 +71,11 @@ public class SimonIMEService extends InputMethodService {
     private static final int ENCODING = AudioFormat.ENCODING_PCM_16BIT;
 
     enum Mode { APPEND, REPLACE, SPELL, TRANSLATE }
+    enum KeyboardMode { VOICE, ENGLISH, NUMBERS }
 
     private static final String PREF_MODE_KEY = "last_mode";
     private Mode currentMode = Mode.APPEND;
+    private KeyboardMode currentKeyboardMode = KeyboardMode.VOICE;
     private boolean isRecording = false;
     private AudioRecord audioRecord;
     private Thread recordingThread;
@@ -100,6 +103,13 @@ public class SimonIMEService extends InputMethodService {
     private View btnMic;
     private TextView btnMode;
     private FrameLayout panelContainer;
+
+    // Keyboard switching
+    private View voiceKeyboard;
+    private View englishKeyboard;
+    private View numbersKeyboard;
+    private boolean shiftActive = false;
+    private boolean capsLock = false;
 
     // Panel state
     private enum Panel { NONE, CLIPBOARD, COMMANDS }
@@ -269,13 +279,24 @@ public class SimonIMEService extends InputMethodService {
         // --- 常用指令 ---
         btnCommands.setOnClickListener(v -> togglePanel(Panel.COMMANDS));
 
-        // --- 跳轉輸入法 ---
-        btnSwitchIME.setOnClickListener(v -> {
+        // --- 切換英文鍵盤（短按）/ 跳轉輸入法（長按） ---
+        btnSwitchIME.setOnClickListener(v -> switchKeyboard(KeyboardMode.ENGLISH));
+        btnSwitchIME.setOnLongClickListener(v -> {
             InputMethodManager imm = (InputMethodManager) getSystemService(INPUT_METHOD_SERVICE);
             if (imm != null) {
                 imm.showInputMethodPicker();
             }
+            return true;
         });
+
+        // --- 鍵盤切換設定 ---
+        voiceKeyboard = rootView.findViewById(R.id.voiceKeyboard);
+        englishKeyboard = rootView.findViewById(R.id.englishKeyboard);
+        numbersKeyboard = rootView.findViewById(R.id.numbersKeyboard);
+
+        // 設定英文鍵盤和數字鍵盤的按鍵處理
+        setupTypingKeyboard(englishKeyboard);
+        setupTypingKeyboard(numbersKeyboard);
 
         updateModeUI();
         return rootView;
@@ -1207,6 +1228,191 @@ public class SimonIMEService extends InputMethodService {
                 Log.e(TAG, "Error handling response", e);
                 updateStatus("處理錯誤");
             }
+        });
+    }
+
+    // ==================== Keyboard Switching ====================
+
+    private void switchKeyboard(KeyboardMode mode) {
+        currentKeyboardMode = mode;
+        voiceKeyboard.setVisibility(mode == KeyboardMode.VOICE ? View.VISIBLE : View.GONE);
+        englishKeyboard.setVisibility(mode == KeyboardMode.ENGLISH ? View.VISIBLE : View.GONE);
+        numbersKeyboard.setVisibility(mode == KeyboardMode.NUMBERS ? View.VISIBLE : View.GONE);
+        // Close any open panel when switching keyboards
+        closePanel();
+    }
+
+    /**
+     * Recursively find all views with "key:xxx" tags and set up click listeners.
+     */
+    private void setupTypingKeyboard(View parent) {
+        if (!(parent instanceof ViewGroup)) return;
+        ViewGroup vg = (ViewGroup) parent;
+        for (int i = 0; i < vg.getChildCount(); i++) {
+            View child = vg.getChildAt(i);
+            Object tag = child.getTag();
+            if (tag != null && tag.toString().startsWith("key:")) {
+                String key = tag.toString().substring(4);
+                if (key.equals("backspace")) {
+                    setupBackspaceTouch(child);
+                } else {
+                    child.setOnClickListener(v -> onTypingKeyPressed(key));
+                }
+            }
+            if (child instanceof ViewGroup) {
+                setupTypingKeyboard(child);
+            }
+        }
+    }
+
+    private void onTypingKeyPressed(String key) {
+        InputConnection ic = getCurrentInputConnection();
+        if (ic == null) return;
+
+        switch (key) {
+            case "shift":
+                toggleShift();
+                break;
+            case "space":
+                ic.commitText(" ", 1);
+                break;
+            case "enter":
+                handleEnterKey();
+                break;
+            case "toVoice":
+                switchKeyboard(KeyboardMode.VOICE);
+                break;
+            case "toNumbers":
+                switchKeyboard(KeyboardMode.NUMBERS);
+                break;
+            case "toEnglish":
+                switchKeyboard(KeyboardMode.ENGLISH);
+                break;
+            default:
+                // Regular character — apply shift for letters only
+                String ch = key;
+                if (shiftActive && key.length() == 1 && Character.isLetter(key.charAt(0))) {
+                    ch = key.toUpperCase();
+                }
+                ic.commitText(ch, 1);
+                // Auto-unshift after one character (unless caps lock)
+                if (shiftActive && !capsLock) {
+                    shiftActive = false;
+                    updateShiftUI();
+                }
+                break;
+        }
+    }
+
+    private void toggleShift() {
+        if (!shiftActive) {
+            shiftActive = true;
+            capsLock = false;
+        } else if (!capsLock) {
+            // Second press = caps lock
+            capsLock = true;
+        } else {
+            // Third press = off
+            shiftActive = false;
+            capsLock = false;
+        }
+        updateShiftUI();
+    }
+
+    private void updateShiftUI() {
+        if (englishKeyboard == null) return;
+        // Update letter key labels
+        updateLetterCase(englishKeyboard);
+        // Update shift key appearance
+        View shiftKey = englishKeyboard.findViewWithTag("key:shift");
+        if (shiftKey instanceof TextView) {
+            if (capsLock) {
+                ((TextView) shiftKey).setText("⬆");
+                ((TextView) shiftKey).setTextColor(0xFF4ECCA3); // green = caps lock
+            } else if (shiftActive) {
+                ((TextView) shiftKey).setText("⬆");
+                ((TextView) shiftKey).setTextColor(0xFFFFFFFF); // white = shift active
+            } else {
+                ((TextView) shiftKey).setText("⬆");
+                ((TextView) shiftKey).setTextColor(getResources().getColor(R.color.key_text, null));
+            }
+        }
+    }
+
+    private void updateLetterCase(View parent) {
+        if (!(parent instanceof ViewGroup)) return;
+        ViewGroup vg = (ViewGroup) parent;
+        for (int i = 0; i < vg.getChildCount(); i++) {
+            View child = vg.getChildAt(i);
+            Object tag = child.getTag();
+            if (tag != null && child instanceof TextView) {
+                String tagStr = tag.toString();
+                if (tagStr.startsWith("key:") && tagStr.length() == 5) {
+                    char c = tagStr.charAt(4);
+                    if (Character.isLetter(c)) {
+                        String display = shiftActive ? String.valueOf(c).toUpperCase() : String.valueOf(c);
+                        ((TextView) child).setText(display);
+                    }
+                }
+            }
+            if (child instanceof ViewGroup) {
+                updateLetterCase(child);
+            }
+        }
+    }
+
+    private void handleEnterKey() {
+        InputConnection ic = getCurrentInputConnection();
+        if (ic != null) {
+            EditorInfo ei = getCurrentInputEditorInfo();
+            if (ei != null && (ei.imeOptions & EditorInfo.IME_FLAG_NO_ENTER_ACTION) == 0
+                    && (ei.imeOptions & EditorInfo.IME_MASK_ACTION) != EditorInfo.IME_ACTION_NONE) {
+                ic.performEditorAction(ei.imeOptions & EditorInfo.IME_MASK_ACTION);
+            } else {
+                ic.commitText("\n", 1);
+            }
+        }
+    }
+
+    /**
+     * Set up long-press repeat for a backspace key (works for any keyboard's backspace).
+     */
+    private void setupBackspaceTouch(View backspaceView) {
+        backspaceView.setOnTouchListener((v, event) -> {
+            switch (event.getAction()) {
+                case MotionEvent.ACTION_DOWN:
+                    backspacePressed = true;
+                    backspaceRepeatCount = 0;
+                    InputConnection ic0 = getCurrentInputConnection();
+                    if (ic0 != null) ic0.deleteSurroundingText(1, 0);
+                    backspaceRepeatRunnable = new Runnable() {
+                        @Override
+                        public void run() {
+                            if (!backspacePressed) return;
+                            InputConnection ic = getCurrentInputConnection();
+                            if (ic != null) {
+                                backspaceRepeatCount++;
+                                int deleteCount = backspaceRepeatCount < 5 ? 1
+                                        : backspaceRepeatCount < 15 ? 2 : 5;
+                                ic.deleteSurroundingText(deleteCount, 0);
+                            }
+                            long delay = Math.max(30, 120 - backspaceRepeatCount * 6);
+                            mainHandler.postDelayed(this, delay);
+                        }
+                    };
+                    mainHandler.postDelayed(backspaceRepeatRunnable, 400);
+                    v.setPressed(true);
+                    return true;
+                case MotionEvent.ACTION_UP:
+                case MotionEvent.ACTION_CANCEL:
+                    backspacePressed = false;
+                    if (backspaceRepeatRunnable != null) {
+                        mainHandler.removeCallbacks(backspaceRepeatRunnable);
+                    }
+                    v.setPressed(false);
+                    return true;
+            }
+            return false;
         });
     }
 
