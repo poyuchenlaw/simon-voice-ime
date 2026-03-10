@@ -777,12 +777,16 @@ public class SimonIMEService extends InputMethodService {
             localSTT.feedAudioChunk(floatSamples, segmentText -> {
                 // SenseVoice 辨識完一段 → 英文映射 → Qwen 後處理 → 上傳 chunk
                 String mapped = englishMapper.apply(segmentText);
+                long qT0 = System.currentTimeMillis();
                 String processed = qwenHelper.preprocess(mapped);
+                long qMs = System.currentTimeMillis() - qT0;
                 synchronized (streamChunkTexts) {
                     streamChunkTexts.add(processed);
                 }
                 streamingUpload.sendChunk(processed);
-                Log.d(TAG, "Stream chunk: '" + mapped + "' -> '" + processed + "'");
+                final String display = processed;
+                mainHandler.post(() -> updateStatus(qMs > 10 ? "🟢Q " + truncate(display, 18) : "⚪ " + truncate(display, 18)));
+                Log.d(TAG, "Stream chunk: '" + mapped + "' -> '" + processed + "' (Q:" + qMs + "ms)");
             });
         }
     }
@@ -894,12 +898,16 @@ public class SimonIMEService extends InputMethodService {
             // 1. Flush VAD — 處理最後殘留的語音段
             localSTT.flushVad(segmentText -> {
                 String mapped = englishMapper.apply(segmentText);
+                long qT0 = System.currentTimeMillis();
                 String processed = qwenHelper.preprocess(mapped);
+                long qMs = System.currentTimeMillis() - qT0;
                 synchronized (streamChunkTexts) {
                     streamChunkTexts.add(processed);
                 }
                 streamingUpload.sendChunk(processed);
-                Log.d(TAG, "Stream flush chunk: '" + mapped + "' -> '" + processed + "'");
+                final String display = processed;
+                mainHandler.post(() -> updateStatus(qMs > 10 ? "🟢Q " + truncate(display, 18) : "⚪ " + truncate(display, 18)));
+                Log.d(TAG, "Stream flush chunk: '" + mapped + "' -> '" + processed + "' (Q:" + qMs + "ms)");
             });
 
             // 2. 等待所有 SenseVoice 段落處理完成
