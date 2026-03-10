@@ -95,6 +95,7 @@ public class SimonIMEService extends InputMethodService {
 
     // Streaming state (APPEND mode with VAD)
     private volatile boolean streamingMode = false;
+    private volatile boolean streamQwenActive = false;
     private final List<String> streamChunkTexts = new ArrayList<>();
 
     // UI elements
@@ -780,12 +781,11 @@ public class SimonIMEService extends InputMethodService {
                 long qT0 = System.currentTimeMillis();
                 String processed = qwenHelper.preprocess(mapped);
                 long qMs = System.currentTimeMillis() - qT0;
+                if (qMs > 10) streamQwenActive = true;
                 synchronized (streamChunkTexts) {
                     streamChunkTexts.add(processed);
                 }
                 streamingUpload.sendChunk(processed);
-                final String display = processed;
-                mainHandler.post(() -> updateStatus(qMs > 10 ? "🟢Q " + truncate(display, 18) : "⚪ " + truncate(display, 18)));
                 Log.d(TAG, "Stream chunk: '" + mapped + "' -> '" + processed + "' (Q:" + qMs + "ms)");
             });
         }
@@ -901,12 +901,11 @@ public class SimonIMEService extends InputMethodService {
                 long qT0 = System.currentTimeMillis();
                 String processed = qwenHelper.preprocess(mapped);
                 long qMs = System.currentTimeMillis() - qT0;
+                if (qMs > 10) streamQwenActive = true;
                 synchronized (streamChunkTexts) {
                     streamChunkTexts.add(processed);
                 }
                 streamingUpload.sendChunk(processed);
-                final String display = processed;
-                mainHandler.post(() -> updateStatus(qMs > 10 ? "🟢Q " + truncate(display, 18) : "⚪ " + truncate(display, 18)));
                 Log.d(TAG, "Stream flush chunk: '" + mapped + "' -> '" + processed + "' (Q:" + qMs + "ms)");
             });
 
@@ -930,11 +929,13 @@ public class SimonIMEService extends InputMethodService {
                 public void onSuccess(String finalText) {
                     Log.i(TAG, "Stream finalize success: '" + finalText + "'");
                     streamingUpload.endSession();
+                    final boolean qActive = streamQwenActive;
+                    streamQwenActive = false;
                     mainHandler.post(() -> {
                         InputConnection ic = getCurrentInputConnection();
                         if (ic != null && !finalText.isEmpty()) {
                             ic.commitText(finalText, 1);
-                            updateStatus("✅ " + truncate(finalText, 20));
+                            updateStatus((qActive ? "✅Q " : "✅ ") + truncate(finalText, 20));
                         } else {
                             updateStatus("未辨識到文字");
                         }
