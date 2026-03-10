@@ -37,7 +37,7 @@ public class QwenHelper {
     private static final MediaType JSON_TYPE = MediaType.parse("application/json; charset=utf-8");
 
     private static final String PREF_KEY_MODEL = "qwen_model_name";
-    private static final String DEFAULT_MODEL = "qwen3:0.5b";
+    private static final String DEFAULT_MODEL = "qwen3:0.6b";
 
     // Qwen3 thinking tag pattern: <think>...</think>
     private static final Pattern THINK_TAG_PATTERN = Pattern.compile(
