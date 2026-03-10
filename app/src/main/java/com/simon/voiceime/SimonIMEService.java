@@ -776,17 +776,13 @@ public class SimonIMEService extends InputMethodService {
 
             // 餵入 VAD + SenseVoice（回調在 segmentExecutor 執行緒）
             localSTT.feedAudioChunk(floatSamples, segmentText -> {
-                // SenseVoice 辨識完一段 → 英文映射 → Qwen 後處理 → 上傳 chunk
+                // SenseVoice 辨識完一段 → 英文映射 → 上傳 chunk
                 String mapped = englishMapper.apply(segmentText);
-                long qT0 = System.currentTimeMillis();
-                String processed = qwenHelper.preprocess(mapped);
-                long qMs = System.currentTimeMillis() - qT0;
-                if (qMs > 10) streamQwenActive = true;
                 synchronized (streamChunkTexts) {
-                    streamChunkTexts.add(processed);
+                    streamChunkTexts.add(mapped);
                 }
-                streamingUpload.sendChunk(processed);
-                Log.d(TAG, "Stream chunk: '" + mapped + "' -> '" + processed + "' (Q:" + qMs + "ms)");
+                streamingUpload.sendChunk(mapped);
+                Log.d(TAG, "Stream chunk: '" + segmentText + "' -> '" + mapped + "'");
             });
         }
     }
@@ -858,14 +854,8 @@ public class SimonIMEService extends InputMethodService {
                     // 英文映射
                     spokenText = englishMapper.apply(spokenText);
 
-                    // Qwen 本地後處理（加標點、斷句、修正同音錯字）
-                    long qwenT0 = System.currentTimeMillis();
-                    spokenText = qwenHelper.preprocess(spokenText);
-                    long qwenMs = System.currentTimeMillis() - qwenT0;
-                    Log.i(TAG, "[Qwen] 後處理耗時 " + qwenMs + "ms");
-
                     final String finalText = spokenText;
-                    mainHandler.post(() -> updateStatus("辨識(" + sttMs + "ms+Q" + qwenMs + "ms): " + truncate(finalText, 15)));
+                    mainHandler.post(() -> updateStatus("辨識(" + sttMs + "ms): " + truncate(finalText, 15)));
                     if (modeNow == Mode.REPLACE) {
                         sendTextReplace(finalText, bc, ac);
                     } else {
@@ -898,15 +888,11 @@ public class SimonIMEService extends InputMethodService {
             // 1. Flush VAD — 處理最後殘留的語音段
             localSTT.flushVad(segmentText -> {
                 String mapped = englishMapper.apply(segmentText);
-                long qT0 = System.currentTimeMillis();
-                String processed = qwenHelper.preprocess(mapped);
-                long qMs = System.currentTimeMillis() - qT0;
-                if (qMs > 10) streamQwenActive = true;
                 synchronized (streamChunkTexts) {
-                    streamChunkTexts.add(processed);
+                    streamChunkTexts.add(mapped);
                 }
-                streamingUpload.sendChunk(processed);
-                Log.d(TAG, "Stream flush chunk: '" + mapped + "' -> '" + processed + "' (Q:" + qMs + "ms)");
+                streamingUpload.sendChunk(mapped);
+                Log.d(TAG, "Stream flush chunk: '" + segmentText + "' -> '" + mapped + "'");
             });
 
             // 2. 等待所有 SenseVoice 段落處理完成
@@ -929,13 +915,11 @@ public class SimonIMEService extends InputMethodService {
                 public void onSuccess(String finalText) {
                     Log.i(TAG, "Stream finalize success: '" + finalText + "'");
                     streamingUpload.endSession();
-                    final boolean qActive = streamQwenActive;
-                    streamQwenActive = false;
                     mainHandler.post(() -> {
                         InputConnection ic = getCurrentInputConnection();
                         if (ic != null && !finalText.isEmpty()) {
                             ic.commitText(finalText, 1);
-                            updateStatus((qActive ? "✅Q " : "✅ ") + truncate(finalText, 20));
+                            updateStatus("✅ " + truncate(finalText, 20));
                         } else {
                             updateStatus("未辨識到文字");
                         }
@@ -979,13 +963,8 @@ public class SimonIMEService extends InputMethodService {
             long sttMs = System.currentTimeMillis() - t0;
             if (spokenText != null && !spokenText.isEmpty()) {
                 spokenText = englishMapper.apply(spokenText);
-                // Qwen 本地後處理
-                long qwenT0 = System.currentTimeMillis();
-                spokenText = qwenHelper.preprocess(spokenText);
-                long qwenMs = System.currentTimeMillis() - qwenT0;
-                Log.i(TAG, "[Qwen] fallback 後處理耗時 " + qwenMs + "ms");
                 final String finalText = spokenText;
-                mainHandler.post(() -> updateStatus("辨識(" + sttMs + "ms+Q" + qwenMs + "ms): " + truncate(finalText, 15)));
+                mainHandler.post(() -> updateStatus("辨識(" + sttMs + "ms): " + truncate(finalText, 15)));
                 sendTextProcess(finalText, Mode.APPEND);
             } else {
                 mainHandler.post(() -> updateStatus("本機辨識無結果，上傳中..."));
@@ -1091,8 +1070,7 @@ public class SimonIMEService extends InputMethodService {
         MultipartBody.Builder bodyBuilder = new MultipartBody.Builder()
                 .setType(MultipartBody.FORM)
                 .addFormDataPart("text", spokenText)
-                .addFormDataPart("mode", modeStr)
-                .addFormDataPart("preprocessed", "true");
+                .addFormDataPart("mode", modeStr);
 
         if (mode == Mode.TRANSLATE) {
             bodyBuilder.addFormDataPart("target_language", "en");
@@ -1155,7 +1133,6 @@ public class SimonIMEService extends InputMethodService {
                 .addFormDataPart("spoken_text", spokenText)
                 .addFormDataPart("before_cursor", beforeCursor)
                 .addFormDataPart("after_cursor", afterCursor)
-                .addFormDataPart("preprocessed", "true")
                 .build();
 
         Request.Builder reqBuilder = new Request.Builder()
