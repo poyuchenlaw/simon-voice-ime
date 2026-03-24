@@ -827,7 +827,9 @@ public class SimonIMEService extends InputMethodService {
         }
 
         // === 非串流模式：本機 STT → 文字上傳 ===
-        if (localSTTReady) {
+        // v4.0: 只有 REPLACE 模式用本機 STT（需要游標上下文）
+        // APPEND/SPELL/TRANSLATE 一律傳音訊到 Server（Groq Whisper 品質遠超手機 SenseVoice）
+        if (localSTTReady && currentMode == Mode.REPLACE) {
             // 在主執行緒先取游標前後文字（背景執行緒拿不到 InputConnection）
             InputConnection icNow = getCurrentInputConnection();
             String beforeCursor = "";
