@@ -725,11 +725,10 @@ public class SimonIMEService extends InputMethodService {
         // v3.6: 停用舊串流模式（VAD 分段）
         streamingMode = false;
 
-        // v4.1: 串流暫時停用 — 需完整測試後再啟用
-        // TODO: v4.2 串流模式（WebSocket 音訊串流 + Gemini 統整）
-        // if (currentMode == Mode.APPEND) {
-        //     startAudioStreamWs();
-        // }
+        // v4.2: 音訊串流 WebSocket（已修復文字消失 + 亂序 bug）
+        if (currentMode == Mode.APPEND) {
+            startAudioStreamWs();
+        }
 
         updateStatus("🔴 錄音中...");
         btnMic.setBackgroundColor(getResources().getColor(R.color.mic_active, null));
@@ -809,20 +808,29 @@ public class SimonIMEService extends InputMethodService {
 
                     } else if ("final".equals(type)) {
                         String finalText = json.optString("text", "");
-                        if (!finalText.isEmpty()) {
-                            // Replace all streamed chunks with final version
+                        // v4.2 fix: Don't delete text if finalText is empty (Gemini failed)
+                        if (!finalText.isEmpty() && !streamedChunks.isEmpty()) {
+                            // Replace all streamed chunks with final polished version
                             int totalLen = 0;
                             for (String c : streamedChunks) totalLen += c.length();
                             final int deleteLen = totalLen;
+                            final String ft = finalText;
                             mainHandler.post(() -> {
                                 InputConnection ic = getCurrentInputConnection();
-                                if (ic != null) {
-                                    // Delete previously committed text
-                                    ic.deleteSurroundingText(deleteLen, 0);
-                                    ic.commitText(finalText, 1);
-                                    updateStatus("完成: " + truncate(finalText, 20));
+                                if (ic != null && deleteLen > 0) {
+                                    // Safety: cap deleteLen to actual text before cursor
+                                    CharSequence before = ic.getTextBeforeCursor(deleteLen + 10, 0);
+                                    int actualDelete = Math.min(deleteLen, before != null ? before.length() : 0);
+                                    if (actualDelete > 0) {
+                                        ic.deleteSurroundingText(actualDelete, 0);
+                                    }
+                                    ic.commitText(ft, 1);
+                                    updateStatus("完成: " + truncate(ft, 20));
                                 }
                             });
+                        } else if (finalText.isEmpty() && !streamedChunks.isEmpty()) {
+                            // Gemini failed — keep chunks as-is, don't delete anything
+                            mainHandler.post(() -> updateStatus("串流完成（保留原文）"));
                         }
                         Log.i(TAG, "[AudioStream] 最終文字: '" + truncate(finalText, 50) + "'");
 
