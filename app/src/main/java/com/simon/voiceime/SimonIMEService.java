@@ -712,11 +712,9 @@ public class SimonIMEService extends InputMethodService {
         isRecording = true;
         audioRecord.startRecording();
 
-        // 判斷是否啟用串流模式：APPEND 模式 + VAD 就緒 + 伺服器支援串流
-        boolean useStreaming = (currentMode == Mode.APPEND)
-                && localSTTReady
-                && localSTT.isStreamingReady()
-                && streamingUpload.isStreamingSupported();
+        // v3.6: 停用串流模式 — 本地 SenseVoice 單次辨識 + Moonshot K2 校正更快更穩
+        // 串流模式失敗率高，常降級到音訊上傳 → WSL2 whisper.cpp CPU (26秒)
+        boolean useStreaming = false;
 
         if (useStreaming) {
             streamingMode = true;
