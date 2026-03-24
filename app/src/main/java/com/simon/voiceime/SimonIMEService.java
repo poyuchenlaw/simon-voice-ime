@@ -736,20 +736,48 @@ public class SimonIMEService extends InputMethodService {
 
         recordingThread = new Thread(() -> {
             byte[] buffer = new byte[bufferSize];
+            int silentFrames = 0;           // 連續靜音 frame 計數
+            final int SILENCE_THRESHOLD = 800;  // 16-bit PCM RMS 門檻（靜音偵測）
+            final int SILENCE_FRAMES_TO_SPLIT = 8; // ~500ms 靜音觸發分段（取決於 bufferSize/sampleRate）
+            final int MIN_CHUNK_BYTES = 32000;  // 最小 1 秒才送（避免 Whisper 幻覺）
+            final int MAX_CHUNK_BYTES = 160000; // 最大 5 秒強制送（避免無限累積）
+
             while (isRecording) {
                 int read = audioRecord.read(buffer, 0, buffer.length);
                 if (read > 0) {
                     pcmBuffer.write(buffer, 0, read);
 
-                    // v4.2.1: Check audioStreamActive directly (not cached boolean)
-                    // The WebSocket connection is async, so audioStreamActive may become true
-                    // after recording starts. Checking it live fixes the "all audio as one chunk" bug.
-                    if (currentMode == Mode.APPEND && audioStreamActive && audioStreamWs != null && pcmBuffer.size() >= 64000) {
-                        byte[] chunkData = pcmBuffer.toByteArray();
-                        pcmBuffer.reset();
-                        audioStreamWs.send(ByteString.of(chunkData, 0, chunkData.length));
-                        streamChunkTotal++;
-                        Log.i(TAG, "[AudioStream] sent chunk #" + streamChunkTotal + " (" + chunkData.length + " bytes)");
+                    // v4.3: 音量偵測 — 依語音停頓分段，不依固定秒數
+                    if (currentMode == Mode.APPEND && audioStreamActive && audioStreamWs != null) {
+                        // 計算 RMS 音量
+                        long sumSq = 0;
+                        for (int i = 0; i < read - 1; i += 2) {
+                            short sample = (short) ((buffer[i] & 0xFF) | (buffer[i + 1] << 8));
+                            sumSq += (long) sample * sample;
+                        }
+                        double rms = Math.sqrt(sumSq / (double) (read / 2));
+
+                        if (rms < SILENCE_THRESHOLD) {
+                            silentFrames++;
+                        } else {
+                            silentFrames = 0;
+                        }
+
+                        int bufSize = pcmBuffer.size();
+                        // 送出條件：(停頓 ≥500ms 且累積 ≥1s) 或 (累積 ≥5s 強制送)
+                        boolean pauseDetected = silentFrames >= SILENCE_FRAMES_TO_SPLIT && bufSize >= MIN_CHUNK_BYTES;
+                        boolean forceFlush = bufSize >= MAX_CHUNK_BYTES;
+
+                        if (pauseDetected || forceFlush) {
+                            byte[] chunkData = pcmBuffer.toByteArray();
+                            pcmBuffer.reset();
+                            silentFrames = 0;
+                            audioStreamWs.send(ByteString.of(chunkData, 0, chunkData.length));
+                            streamChunkTotal++;
+                            Log.i(TAG, "[AudioStream] chunk #" + streamChunkTotal
+                                    + " (" + chunkData.length + "B, "
+                                    + (pauseDetected ? "pause" : "maxlen") + ")");
+                        }
                     }
                 }
             }
