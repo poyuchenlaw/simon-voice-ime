@@ -725,10 +725,11 @@ public class SimonIMEService extends InputMethodService {
         // v3.6: 停用舊串流模式（VAD 分段）
         streamingMode = false;
 
-        // v4.1: APPEND 模式啟用音訊串流 WebSocket
-        if (currentMode == Mode.APPEND) {
-            startAudioStreamWs();
-        }
+        // v4.1: 串流暫時停用 — 需完整測試後再啟用
+        // TODO: v4.2 串流模式（WebSocket 音訊串流 + Gemini 統整）
+        // if (currentMode == Mode.APPEND) {
+        //     startAudioStreamWs();
+        // }
 
         updateStatus("🔴 錄音中...");
         btnMic.setBackgroundColor(getResources().getColor(R.color.mic_active, null));
