@@ -844,33 +844,21 @@ public class SimonIMEService extends InputMethodService {
 
                     } else if ("final".equals(type)) {
                         String finalText = json.optString("text", "");
-                        // v4.2.1: Capture composing length before clearing (avoid race with mainHandler)
-                        final boolean hadChunks = !streamedChunks.isEmpty();
-                        int cLen = 0;
-                        for (String c : streamedChunks) cLen += c.length();
-                        final int composingLen = cLen;
                         streamedChunks.clear();
 
                         mainHandler.post(() -> {
                             InputConnection ic = getCurrentInputConnection();
                             if (ic != null) {
-                                // Clear composing text first
-                                ic.finishComposingText();
-                                if (!finalText.isEmpty() && hadChunks) {
-                                    // finishComposingText() commits the composing text, so delete it
-                                    CharSequence before = ic.getTextBeforeCursor(composingLen + 10, 0);
-                                    int actualDelete = Math.min(composingLen, before != null ? before.length() : 0);
-                                    if (actualDelete > 0) {
-                                        ic.deleteSurroundingText(actualDelete, 0);
-                                    }
-                                    ic.commitText(finalText, 1);
+                                if (!finalText.isEmpty()) {
+                                    // v4.3.1: 用 setComposingText 覆蓋預覽 → finishComposingText 確定
+                                    // 不再 finishComposingText + delete + commitText（會造成重複）
+                                    ic.setComposingText(finalText, 1);
+                                    ic.finishComposingText();
                                     updateStatus("完成: " + truncate(finalText, 20));
-                                } else if (finalText.isEmpty() && hadChunks) {
-                                    // Gemini failed — composing text was already committed by finishComposingText
+                                } else {
+                                    // Gemini 失敗 — 直接確定現有預覽文字
+                                    ic.finishComposingText();
                                     updateStatus("串流完成");
-                                } else if (!finalText.isEmpty()) {
-                                    ic.commitText(finalText, 1);
-                                    updateStatus("完成: " + truncate(finalText, 20));
                                 }
                             }
                         });
