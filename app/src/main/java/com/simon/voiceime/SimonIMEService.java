@@ -37,6 +37,7 @@ import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
 
@@ -48,9 +49,12 @@ import okhttp3.OkHttpClient;
 import okhttp3.Request;
 import okhttp3.RequestBody;
 import okhttp3.Response;
+import okhttp3.WebSocket;
+import okhttp3.WebSocketListener;
+import okio.ByteString;
 
 /**
- * Simon Voice IME v3.3
+ * Simon Voice IME v4.1
  *
  * 功能：
  * - 語音輸入（追加/替換/拼字/翻譯四模式）
@@ -97,6 +101,12 @@ public class SimonIMEService extends InputMethodService {
     private volatile boolean streamingMode = false;
     private volatile boolean streamQwenActive = false;
     private final List<String> streamChunkTexts = new ArrayList<>();
+
+    // v4.1: Audio streaming state (APPEND mode → WebSocket PCM chunks)
+    private WebSocket audioStreamWs = null;
+    private final List<String> streamedChunks = Collections.synchronizedList(new ArrayList<>());
+    private int streamChunkTotal = 0;
+    private volatile boolean audioStreamActive = false;
 
     // UI elements
     private View rootView;
@@ -712,40 +722,133 @@ public class SimonIMEService extends InputMethodService {
         isRecording = true;
         audioRecord.startRecording();
 
-        // v3.6: 停用串流模式 — 本地 SenseVoice 單次辨識 + Moonshot K2 校正更快更穩
-        // 串流模式失敗率高，常降級到音訊上傳 → WSL2 whisper.cpp CPU (26秒)
-        boolean useStreaming = false;
+        // v3.6: 停用舊串流模式（VAD 分段）
+        streamingMode = false;
 
-        if (useStreaming) {
-            streamingMode = true;
-            streamChunkTexts.clear();
-            streamingUpload.startSession(getServerUrl(), getAuthPassword());
-            Log.i(TAG, "串流模式啟動 session=" + streamingUpload.getSessionId());
-        } else {
-            streamingMode = false;
+        // v4.1: APPEND 模式啟用音訊串流 WebSocket
+        if (currentMode == Mode.APPEND) {
+            startAudioStreamWs();
         }
 
         updateStatus("🔴 錄音中...");
         btnMic.setBackgroundColor(getResources().getColor(R.color.mic_active, null));
         if (btnMic instanceof Button) ((Button) btnMic).setText("⏹");
 
-        final boolean streaming = streamingMode;
+        final boolean useAudioStream = (currentMode == Mode.APPEND && audioStreamActive);
         recordingThread = new Thread(() -> {
-            if (streaming) {
-                // 串流模式：餵音訊給 VAD，VAD 偵測到停頓 → SenseVoice 辨識 → 上傳 chunk
-                recordWithVAD();
-            } else {
-                // 原有模式：純錄音到 buffer
-                byte[] buffer = new byte[bufferSize];
-                while (isRecording) {
-                    int read = audioRecord.read(buffer, 0, buffer.length);
-                    if (read > 0) {
-                        pcmBuffer.write(buffer, 0, read);
+            byte[] buffer = new byte[bufferSize];
+            while (isRecording) {
+                int read = audioRecord.read(buffer, 0, buffer.length);
+                if (read > 0) {
+                    pcmBuffer.write(buffer, 0, read);
+
+                    // v4.1: Stream audio chunks every ~2 seconds (64000 bytes of 16-bit 16kHz mono)
+                    if (useAudioStream && audioStreamWs != null && pcmBuffer.size() >= 64000) {
+                        byte[] chunkData = pcmBuffer.toByteArray();
+                        pcmBuffer.reset();
+                        audioStreamWs.send(ByteString.of(chunkData, 0, chunkData.length));
+                        streamChunkTotal++;
+                        Log.i(TAG, "[AudioStream] sent chunk #" + streamChunkTotal + " (" + chunkData.length + " bytes)");
                     }
                 }
             }
         }, "AudioRecorder");
         recordingThread.start();
+    }
+
+    /**
+     * v4.1: 開啟音訊串流 WebSocket 連線。
+     * APPEND 模式下，每 2 秒送 PCM chunk → Server Groq Whisper + Moonshot K2 → 即時回傳文字。
+     */
+    private void startAudioStreamWs() {
+        streamedChunks.clear();
+        streamChunkTotal = 0;
+        audioStreamActive = false;
+
+        String serverUrl = getServerUrl();
+        String wsUrl = serverUrl.replace("http://", "ws://").replace("https://", "wss://") + "/ws/stream-audio";
+
+        Request wsReq = new Request.Builder().url(wsUrl).build();
+        audioStreamWs = httpClient.newWebSocket(wsReq, new WebSocketListener() {
+            @Override
+            public void onOpen(WebSocket ws, Response response) {
+                // Send auth
+                String auth = getAuthPassword();
+                ws.send("{\"type\":\"auth\",\"password\":\"" + (auth != null ? auth : "") + "\"}");
+                audioStreamActive = true;
+                Log.i(TAG, "[AudioStream] WebSocket 已連線，已送出認證");
+            }
+
+            @Override
+            public void onMessage(WebSocket ws, String text) {
+                try {
+                    JSONObject json = new JSONObject(text);
+                    String type = json.optString("type");
+
+                    if ("auth_ok".equals(type)) {
+                        Log.i(TAG, "[AudioStream] 認證成功");
+
+                    } else if ("auth_fail".equals(type)) {
+                        Log.e(TAG, "[AudioStream] 認證失敗");
+                        audioStreamActive = false;
+                        audioStreamWs = null;
+
+                    } else if ("chunk".equals(type)) {
+                        String chunkText = json.optString("text", "");
+                        int idx = json.optInt("index", -1);
+                        if (!chunkText.isEmpty()) {
+                            streamedChunks.add(chunkText);
+                            mainHandler.post(() -> {
+                                InputConnection ic = getCurrentInputConnection();
+                                if (ic != null) ic.commitText(chunkText, 1);
+                                updateStatus("串流: " + truncate(chunkText, 15));
+                            });
+                        }
+                        Log.i(TAG, "[AudioStream] chunk#" + idx + " 回傳: '" + chunkText + "'");
+
+                    } else if ("final".equals(type)) {
+                        String finalText = json.optString("text", "");
+                        if (!finalText.isEmpty()) {
+                            // Replace all streamed chunks with final version
+                            int totalLen = 0;
+                            for (String c : streamedChunks) totalLen += c.length();
+                            final int deleteLen = totalLen;
+                            mainHandler.post(() -> {
+                                InputConnection ic = getCurrentInputConnection();
+                                if (ic != null) {
+                                    // Delete previously committed text
+                                    ic.deleteSurroundingText(deleteLen, 0);
+                                    ic.commitText(finalText, 1);
+                                    updateStatus("完成: " + truncate(finalText, 20));
+                                }
+                            });
+                        }
+                        Log.i(TAG, "[AudioStream] 最終文字: '" + truncate(finalText, 50) + "'");
+
+                    } else if ("error".equals(type)) {
+                        String msg = json.optString("message", "unknown");
+                        Log.e(TAG, "[AudioStream] 伺服器錯誤: " + msg);
+                    }
+                } catch (Exception e) {
+                    Log.e(TAG, "[AudioStream] 訊息解析錯誤", e);
+                }
+            }
+
+            @Override
+            public void onFailure(WebSocket ws, Throwable t, Response response) {
+                Log.e(TAG, "[AudioStream] WebSocket 連線失敗", t);
+                audioStreamActive = false;
+                audioStreamWs = null;
+                mainHandler.post(() -> updateStatus("串流連線失敗，將使用傳統模式"));
+            }
+
+            @Override
+            public void onClosed(WebSocket ws, int code, String reason) {
+                Log.i(TAG, "[AudioStream] WebSocket 已關閉: " + code + " " + reason);
+                audioStreamActive = false;
+                audioStreamWs = null;
+            }
+        });
     }
 
     /**
@@ -816,11 +919,33 @@ public class SimonIMEService extends InputMethodService {
 
         if (pcmData.length < 3200) {
             if (wasStreaming) streamingUpload.cancelSession();
+            if (audioStreamWs != null) {
+                audioStreamWs.cancel();
+                audioStreamWs = null;
+                audioStreamActive = false;
+            }
             mainHandler.post(() -> updateStatus("錄音太短，請再試一次"));
             return;
         }
 
-        // === 串流模式收尾 ===
+        // === v4.1: 音訊串流收尾 (APPEND mode WebSocket) ===
+        if (currentMode == Mode.APPEND && audioStreamWs != null) {
+            // Send remaining audio in buffer (less than 2 seconds)
+            if (pcmData.length > 0) {
+                audioStreamWs.send(ByteString.of(pcmData, 0, pcmData.length));
+                Log.i(TAG, "[AudioStream] 送出剩餘音訊 (" + pcmData.length + " bytes)");
+            }
+            // Send finalize command
+            audioStreamWs.send("{\"type\":\"finalize\"}");
+            Log.i(TAG, "[AudioStream] 已送出 finalize，共 " + streamChunkTotal + " chunks");
+            // The final result will come via onMessage callback — don't send via HTTP
+            mainHandler.post(() -> updateStatus("整理中..."));
+            audioStreamWs = null;
+            audioStreamActive = false;
+            return;
+        }
+
+        // === 舊串流模式收尾 ===
         if (wasStreaming && streamingUpload.isStreamingSupported()) {
             finalizeStreamingSession(pcmData);
             return;
@@ -1548,6 +1673,11 @@ public class SimonIMEService extends InputMethodService {
         }
         if (streamingUpload != null && streamingUpload.isSessionActive()) {
             streamingUpload.cancelSession();
+        }
+        if (audioStreamWs != null) {
+            audioStreamWs.cancel();
+            audioStreamWs = null;
+            audioStreamActive = false;
         }
         if (localSTT != null) {
             localSTT.release();
