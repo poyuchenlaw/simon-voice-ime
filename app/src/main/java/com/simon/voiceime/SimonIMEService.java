@@ -54,7 +54,7 @@ import okhttp3.WebSocketListener;
 import okio.ByteString;
 
 /**
- * Simon Voice IME v4.1
+ * Simon Voice IME v4.2.1
  *
  * 功能：
  * - 語音輸入（追加/替換/拼字/翻譯四模式）
@@ -734,7 +734,6 @@ public class SimonIMEService extends InputMethodService {
         btnMic.setBackgroundColor(getResources().getColor(R.color.mic_active, null));
         if (btnMic instanceof Button) ((Button) btnMic).setText("⏹");
 
-        final boolean useAudioStream = (currentMode == Mode.APPEND && audioStreamActive);
         recordingThread = new Thread(() -> {
             byte[] buffer = new byte[bufferSize];
             while (isRecording) {
@@ -742,8 +741,10 @@ public class SimonIMEService extends InputMethodService {
                 if (read > 0) {
                     pcmBuffer.write(buffer, 0, read);
 
-                    // v4.1: Stream audio chunks every ~2 seconds (64000 bytes of 16-bit 16kHz mono)
-                    if (useAudioStream && audioStreamWs != null && pcmBuffer.size() >= 64000) {
+                    // v4.2.1: Check audioStreamActive directly (not cached boolean)
+                    // The WebSocket connection is async, so audioStreamActive may become true
+                    // after recording starts. Checking it live fixes the "all audio as one chunk" bug.
+                    if (currentMode == Mode.APPEND && audioStreamActive && audioStreamWs != null && pcmBuffer.size() >= 64000) {
                         byte[] chunkData = pcmBuffer.toByteArray();
                         pcmBuffer.reset();
                         audioStreamWs.send(ByteString.of(chunkData, 0, chunkData.length));
@@ -798,9 +799,16 @@ public class SimonIMEService extends InputMethodService {
                         int idx = json.optInt("index", -1);
                         if (!chunkText.isEmpty()) {
                             streamedChunks.add(chunkText);
+                            // v4.2.1: Build full composing text from all chunks so far
+                            StringBuilder composing = new StringBuilder();
+                            for (String c : streamedChunks) composing.append(c);
+                            final String composingText = composing.toString();
                             mainHandler.post(() -> {
                                 InputConnection ic = getCurrentInputConnection();
-                                if (ic != null) ic.commitText(chunkText, 1);
+                                if (ic != null) {
+                                    // setComposingText shows as underlined preview (not committed)
+                                    ic.setComposingText(composingText, 1);
+                                }
                                 updateStatus("串流: " + truncate(chunkText, 15));
                             });
                         }
@@ -808,30 +816,36 @@ public class SimonIMEService extends InputMethodService {
 
                     } else if ("final".equals(type)) {
                         String finalText = json.optString("text", "");
-                        // v4.2 fix: Don't delete text if finalText is empty (Gemini failed)
-                        if (!finalText.isEmpty() && !streamedChunks.isEmpty()) {
-                            // Replace all streamed chunks with final polished version
-                            int totalLen = 0;
-                            for (String c : streamedChunks) totalLen += c.length();
-                            final int deleteLen = totalLen;
-                            final String ft = finalText;
-                            mainHandler.post(() -> {
-                                InputConnection ic = getCurrentInputConnection();
-                                if (ic != null && deleteLen > 0) {
-                                    // Safety: cap deleteLen to actual text before cursor
-                                    CharSequence before = ic.getTextBeforeCursor(deleteLen + 10, 0);
-                                    int actualDelete = Math.min(deleteLen, before != null ? before.length() : 0);
+                        // v4.2.1: Capture composing length before clearing (avoid race with mainHandler)
+                        final boolean hadChunks = !streamedChunks.isEmpty();
+                        int cLen = 0;
+                        for (String c : streamedChunks) cLen += c.length();
+                        final int composingLen = cLen;
+                        streamedChunks.clear();
+
+                        mainHandler.post(() -> {
+                            InputConnection ic = getCurrentInputConnection();
+                            if (ic != null) {
+                                // Clear composing text first
+                                ic.finishComposingText();
+                                if (!finalText.isEmpty() && hadChunks) {
+                                    // finishComposingText() commits the composing text, so delete it
+                                    CharSequence before = ic.getTextBeforeCursor(composingLen + 10, 0);
+                                    int actualDelete = Math.min(composingLen, before != null ? before.length() : 0);
                                     if (actualDelete > 0) {
                                         ic.deleteSurroundingText(actualDelete, 0);
                                     }
-                                    ic.commitText(ft, 1);
-                                    updateStatus("完成: " + truncate(ft, 20));
+                                    ic.commitText(finalText, 1);
+                                    updateStatus("完成: " + truncate(finalText, 20));
+                                } else if (finalText.isEmpty() && hadChunks) {
+                                    // Gemini failed — composing text was already committed by finishComposingText
+                                    updateStatus("串流完成");
+                                } else if (!finalText.isEmpty()) {
+                                    ic.commitText(finalText, 1);
+                                    updateStatus("完成: " + truncate(finalText, 20));
                                 }
-                            });
-                        } else if (finalText.isEmpty() && !streamedChunks.isEmpty()) {
-                            // Gemini failed — keep chunks as-is, don't delete anything
-                            mainHandler.post(() -> updateStatus("串流完成（保留原文）"));
-                        }
+                            }
+                        });
                         Log.i(TAG, "[AudioStream] 最終文字: '" + truncate(finalText, 50) + "'");
 
                     } else if ("error".equals(type)) {
