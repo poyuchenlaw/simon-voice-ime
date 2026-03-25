@@ -956,6 +956,25 @@ public class SimonIMEService extends InputMethodService {
             updateStatus("辨識中...");
         });
 
+        // === v4.4: 音訊串流收尾必須在 "太短" 檢查之前 ===
+        // 修正 bug: pcmBuffer 在每次送 WS chunk 時 reset()，所以停止錄音時殘餘可能 < 3200
+        // 但此時 WS 已經送了 N 個 chunks，不能 cancel()，必須 finalize
+        if (currentMode == Mode.APPEND && audioStreamWs != null && streamChunkTotal > 0) {
+            // Send remaining audio in buffer if substantial
+            if (pcmData.length >= 3200) {
+                audioStreamWs.send(ByteString.of(pcmData, 0, pcmData.length));
+                Log.i(TAG, "[AudioStream] 送出剩餘音訊 (" + pcmData.length + " bytes)");
+            }
+            // Send finalize command
+            audioStreamWs.send("{\"type\":\"finalize\"}");
+            Log.i(TAG, "[AudioStream] 已送出 finalize，共 " + streamChunkTotal + " chunks");
+            // The final result will come via onMessage callback — don't send via HTTP
+            mainHandler.post(() -> updateStatus("整理中..."));
+            audioStreamWs = null;
+            audioStreamActive = false;
+            return;
+        }
+
         if (pcmData.length < 3200) {
             if (wasStreaming) streamingUpload.cancelSession();
             if (audioStreamWs != null) {
@@ -967,7 +986,7 @@ public class SimonIMEService extends InputMethodService {
             return;
         }
 
-        // === v4.1: 音訊串流收尾 (APPEND mode WebSocket) ===
+        // === v4.1: 音訊串流收尾 (APPEND mode, 0 chunks 已送但殘餘 ≥ 3200) ===
         if (currentMode == Mode.APPEND && audioStreamWs != null) {
             // Send remaining audio in buffer (less than 2 seconds)
             if (pcmData.length > 0) {
