@@ -875,10 +875,32 @@ public class SimonIMEService extends InputMethodService {
 
             @Override
             public void onFailure(WebSocket ws, Throwable t, Response response) {
-                Log.e(TAG, "[AudioStream] WebSocket 連線失敗", t);
+                Log.w(TAG, "[AudioStream] WebSocket 連線失敗（將自動 fallback）", t);
                 audioStreamActive = false;
                 audioStreamWs = null;
-                mainHandler.post(() -> updateStatus("串流連線失敗，將使用傳統模式"));
+                // v4.4.1: 清理殘留的 composing text，避免與 fallback 結果重複
+                mainHandler.post(() -> {
+                    if (!streamedChunks.isEmpty()) {
+                        InputConnection ic = getCurrentInputConnection();
+                        if (ic != null) {
+                            // 把已收到的串流文字確定提交，不浪費
+                            StringBuilder sb = new StringBuilder();
+                            for (String c : streamedChunks) sb.append(c);
+                            if (sb.length() > 0) {
+                                ic.setComposingText(sb.toString(), 1);
+                                ic.finishComposingText();
+                                Log.i(TAG, "[AudioStream] 斷線前已收文字已提交: " + sb);
+                            } else {
+                                ic.finishComposingText();
+                            }
+                        }
+                        streamedChunks.clear();
+                    }
+                    // 靜默 fallback，不顯示嚇人的錯誤訊息
+                    if (isRecording) {
+                        updateStatus("🔴 錄音中...");
+                    }
+                });
             }
 
             @Override
@@ -982,7 +1004,15 @@ public class SimonIMEService extends InputMethodService {
                 audioStreamWs = null;
                 audioStreamActive = false;
             }
-            mainHandler.post(() -> updateStatus("錄音太短，請再試一次"));
+            // v4.4.1: 清理可能殘留的 composing text
+            mainHandler.post(() -> {
+                if (!streamedChunks.isEmpty()) {
+                    InputConnection ic = getCurrentInputConnection();
+                    if (ic != null) ic.finishComposingText();
+                    streamedChunks.clear();
+                }
+                updateStatus("錄音太短，請再試一次");
+            });
             return;
         }
 
@@ -1001,6 +1031,17 @@ public class SimonIMEService extends InputMethodService {
             audioStreamWs = null;
             audioStreamActive = false;
             return;
+        }
+
+        // v4.4.1: 如果 WS 中途斷線，此時 audioStreamWs=null 但 composing text 可能殘留
+        // 清理後再走 fallback HTTP 路徑，避免重複文字
+        if (!streamedChunks.isEmpty()) {
+            Log.i(TAG, "[AudioStream] WS 已斷但有殘留 composing text，清理後 fallback HTTP");
+            mainHandler.post(() -> {
+                InputConnection ic = getCurrentInputConnection();
+                if (ic != null) ic.finishComposingText();
+                streamedChunks.clear();
+            });
         }
 
         // === 舊串流模式收尾 ===
