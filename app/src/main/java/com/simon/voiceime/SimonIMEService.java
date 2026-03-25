@@ -982,8 +982,8 @@ public class SimonIMEService extends InputMethodService {
         // 修正 bug: pcmBuffer 在每次送 WS chunk 時 reset()，所以停止錄音時殘餘可能 < 3200
         // 但此時 WS 已經送了 N 個 chunks，不能 cancel()，必須 finalize
         if (currentMode == Mode.APPEND && audioStreamWs != null && streamChunkTotal > 0) {
-            // Send remaining audio in buffer if substantial
-            if (pcmData.length >= 3200) {
+            // v4.4.2: 送出所有殘餘音訊（不管多短），避免末尾 1-2 字被裁切
+            if (pcmData.length > 0) {
                 audioStreamWs.send(ByteString.of(pcmData, 0, pcmData.length));
                 Log.i(TAG, "[AudioStream] 送出剩餘音訊 (" + pcmData.length + " bytes)");
             }
