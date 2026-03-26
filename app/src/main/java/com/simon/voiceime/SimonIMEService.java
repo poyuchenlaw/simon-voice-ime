@@ -167,6 +167,25 @@ public class SimonIMEService extends InputMethodService {
                 Log.i(TAG, "本機 STT 就緒" +
                         (localSTT.isStreamingReady() ? "（含 VAD 串流）" : "（單次辨識）"));
             }
+
+            // v5.4: 預熱音訊引擎 — 提前初始化 AudioRecord，暖機 HAL
+            // 首次按麥克風時 AudioRecord 初始化更快（~100-200ms 改善）
+            try {
+                int warmBuf = AudioRecord.getMinBufferSize(SAMPLE_RATE, CHANNEL, ENCODING);
+                if (warmBuf > 0) {
+                    AudioRecord warmRec = new AudioRecord(
+                            MediaRecorder.AudioSource.MIC, SAMPLE_RATE, CHANNEL, ENCODING, warmBuf);
+                    if (warmRec.getState() == AudioRecord.STATE_INITIALIZED) {
+                        warmRec.startRecording();
+                        Thread.sleep(50); // 短暫啟動讓 HAL 完成初始化
+                        warmRec.stop();
+                        warmRec.release();
+                        Log.i(TAG, "音訊引擎預熱完成");
+                    }
+                }
+            } catch (Exception e) {
+                Log.w(TAG, "音訊預熱失敗（不影響功能）: " + e.getMessage());
+            }
         }, "LocalSTT-Init").start();
     }
 
@@ -756,10 +775,18 @@ public class SimonIMEService extends InputMethodService {
             final int SILENCE_FRAMES_TO_SPLIT = 8; // ~500ms 靜音觸發分段（取決於 bufferSize/sampleRate）
             final int MIN_CHUNK_BYTES = 32000;  // 最小 1 秒才送（避免 Whisper 幻覺）
             final int MAX_CHUNK_BYTES = 160000; // 最大 5 秒強制送（避免無限累積）
+            // v5.4: 跳過前 400ms 音訊（避免按鈕點擊聲干擾 STT）
+            final int SKIP_INITIAL_BYTES = 12800; // 400ms @ 16kHz 16-bit mono
+            int totalBytesRead = 0;
 
             while (isRecording) {
                 int read = audioRecord.read(buffer, 0, buffer.length);
                 if (read > 0) {
+                    totalBytesRead += read;
+                    // v5.4: 前 400ms 不寫入 buffer（丟掉點擊聲）
+                    if (totalBytesRead <= SKIP_INITIAL_BYTES) {
+                        continue;
+                    }
                     pcmBuffer.write(buffer, 0, read);
 
                     // v4.3: 音量偵測 — 依語音停頓分段，不依固定秒數
@@ -809,6 +836,23 @@ public class SimonIMEService extends InputMethodService {
         streamChunkTotal = 0;
         audioStreamActive = false;
 
+        // v5.4: 錄音開始前抓取游標上下文（送給 Gemini 當校正語境）
+        String ctxBefore = "";
+        String ctxAfter = "";
+        try {
+            InputConnection icCtx = getCurrentInputConnection();
+            if (icCtx != null) {
+                CharSequence b = icCtx.getTextBeforeCursor(100, 0);
+                CharSequence a = icCtx.getTextAfterCursor(50, 0);
+                if (b != null) ctxBefore = b.toString();
+                if (a != null) ctxAfter = a.toString();
+            }
+        } catch (Exception e) {
+            Log.w(TAG, "取得游標上下文失敗: " + e.getMessage());
+        }
+        final String contextBefore = ctxBefore;
+        final String contextAfter = ctxAfter;
+
         String serverUrl = getServerUrl();
         String wsUrl = serverUrl.replace("http://", "ws://").replace("https://", "wss://") + "/ws/stream-audio";
 
@@ -816,11 +860,21 @@ public class SimonIMEService extends InputMethodService {
         audioStreamWs = httpClient.newWebSocket(wsReq, new WebSocketListener() {
             @Override
             public void onOpen(WebSocket ws, Response response) {
-                // Send auth
+                // Send auth + context
                 String auth = getAuthPassword();
-                ws.send("{\"type\":\"auth\",\"password\":\"" + (auth != null ? auth : "") + "\"}");
+                try {
+                    JSONObject authMsg = new JSONObject();
+                    authMsg.put("type", "auth");
+                    authMsg.put("password", auth != null ? auth : "");
+                    if (!contextBefore.isEmpty()) authMsg.put("context_before", contextBefore);
+                    if (!contextAfter.isEmpty()) authMsg.put("context_after", contextAfter);
+                    ws.send(authMsg.toString());
+                } catch (Exception e) {
+                    ws.send("{\"type\":\"auth\",\"password\":\"" + (auth != null ? auth : "") + "\"}");
+                }
                 audioStreamActive = true;
-                Log.i(TAG, "[AudioStream] WebSocket 已連線，已送出認證");
+                Log.i(TAG, "[AudioStream] WebSocket 已連線，已送出認證" +
+                        (contextBefore.isEmpty() ? "" : " (含上下文)"));
             }
 
             @Override
