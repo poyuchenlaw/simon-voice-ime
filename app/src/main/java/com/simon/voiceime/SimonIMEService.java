@@ -132,6 +132,7 @@ public class SimonIMEService extends InputMethodService {
     private static final long DOUBLE_TAP_THRESHOLD = 400;
     private boolean longPressTriggered = false;
     private Runnable longPressRunnable;
+    private Runnable pendingFinalizeRunnable;  // v5.3: 延遲 finalize
     private static final long LONG_PRESS_THRESHOLD = 500;
 
     // Backspace repeat acceleration
@@ -653,6 +654,12 @@ public class SimonIMEService extends InputMethodService {
     // ==================== Touch event handling ====================
 
     private void handleTouchDown() {
+        // v5.3: 取消延遲 finalize（如果使用者在 1s 內再次按下）
+        if (pendingFinalizeRunnable != null) {
+            mainHandler.removeCallbacks(pendingFinalizeRunnable);
+            pendingFinalizeRunnable = null;
+        }
+
         long now = System.currentTimeMillis();
         longPressTriggered = false;
 
@@ -684,7 +691,15 @@ public class SimonIMEService extends InputMethodService {
         mainHandler.removeCallbacks(longPressRunnable);
 
         if (isRecording) {
-            stopRecordingAndSend();
+            // v5.3: APPEND 串流模式延遲 1s finalize
+            // 繼續錄音讓最後幾個字有時間送出並被 server 處理
+            if (currentMode == Mode.APPEND && audioStreamWs != null && streamChunkTotal > 0) {
+                mainHandler.post(() -> updateStatus("收尾中..."));
+                pendingFinalizeRunnable = () -> stopRecordingAndSend();
+                mainHandler.postDelayed(pendingFinalizeRunnable, 1000);
+            } else {
+                stopRecordingAndSend();
+            }
         } else if (!longPressTriggered) {
             // Short tap toggle
             startRecording();
