@@ -710,9 +710,9 @@ public class SimonIMEService extends InputMethodService {
         mainHandler.removeCallbacks(longPressRunnable);
 
         if (isRecording) {
-            // v5.3: APPEND 串流模式延遲 1s finalize
-            // 繼續錄音讓最後幾個字有時間送出並被 server 處理
-            if (currentMode == Mode.APPEND && audioStreamWs != null && streamChunkTotal > 0) {
+            // v5.4.1: APPEND 模式一律延遲 1s finalize（含短句）
+            // 修正：短句 streamChunkTotal==0 時也要延遲，否則尾巴幾個字會被切掉
+            if (currentMode == Mode.APPEND && audioStreamWs != null) {
                 mainHandler.post(() -> updateStatus("收尾中..."));
                 pendingFinalizeRunnable = () -> stopRecordingAndSend();
                 mainHandler.postDelayed(pendingFinalizeRunnable, 1000);
@@ -729,7 +729,14 @@ public class SimonIMEService extends InputMethodService {
 
     private void startRecording() {
         if (isRecording) {
-            stopRecordingAndSend();
+            // v5.4.1: tap-toggle 停止也走延遲（和 handleTouchUp 一致）
+            if (currentMode == Mode.APPEND && audioStreamWs != null) {
+                mainHandler.post(() -> updateStatus("收尾中..."));
+                pendingFinalizeRunnable = () -> stopRecordingAndSend();
+                mainHandler.postDelayed(pendingFinalizeRunnable, 1000);
+            } else {
+                stopRecordingAndSend();
+            }
             return;
         }
 
