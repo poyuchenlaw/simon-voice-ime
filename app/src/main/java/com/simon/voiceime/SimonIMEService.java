@@ -147,6 +147,8 @@ public class SimonIMEService extends InputMethodService {
     private Runnable longPressRunnable;
     private Runnable pendingFinalizeRunnable;  // v5.3: 延遲 finalize
     private static final long LONG_PRESS_THRESHOLD = 500;
+    // v6.2: 收尾 grace（放手後等多久才送 finalize；原 1000ms，Simon 要求縮短加速→400ms）
+    private static final long FINALIZE_DELAY_MS = 400;
 
     // Backspace repeat acceleration
     private boolean backspacePressed = false;
@@ -728,7 +730,7 @@ public class SimonIMEService extends InputMethodService {
             if (currentMode == Mode.APPEND && audioStreamWs != null) {
                 mainHandler.post(() -> updateStatus("收尾中..."));
                 pendingFinalizeRunnable = () -> stopRecordingAndSend();
-                mainHandler.postDelayed(pendingFinalizeRunnable, 1000);
+                mainHandler.postDelayed(pendingFinalizeRunnable, FINALIZE_DELAY_MS);
             } else {
                 stopRecordingAndSend();
             }
@@ -746,7 +748,7 @@ public class SimonIMEService extends InputMethodService {
             if (currentMode == Mode.APPEND && audioStreamWs != null) {
                 mainHandler.post(() -> updateStatus("收尾中..."));
                 pendingFinalizeRunnable = () -> stopRecordingAndSend();
-                mainHandler.postDelayed(pendingFinalizeRunnable, 1000);
+                mainHandler.postDelayed(pendingFinalizeRunnable, FINALIZE_DELAY_MS);
             } else {
                 stopRecordingAndSend();
             }
