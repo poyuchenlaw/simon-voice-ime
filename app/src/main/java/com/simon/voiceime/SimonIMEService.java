@@ -8,6 +8,7 @@ import android.media.AudioRecord;
 import android.media.MediaRecorder;
 import android.os.Handler;
 import android.os.Looper;
+import android.os.PowerManager;
 import android.util.Log;
 import android.view.LayoutInflater;
 import android.view.MotionEvent;
@@ -83,6 +84,8 @@ public class SimonIMEService extends InputMethodService {
     private boolean isRecording = false;
     private AudioRecord audioRecord;
     private Thread recordingThread;
+    // v5.6: 鎖屏期間保 CPU，避免 AudioRecord underrun + WebSocket 心跳逾時
+    private PowerManager.WakeLock recordingWakeLock;
     private ByteArrayOutputStream pcmBuffer;
     private OkHttpClient httpClient;
     private Handler mainHandler;
@@ -107,6 +110,16 @@ public class SimonIMEService extends InputMethodService {
     private final List<String> streamedChunks = Collections.synchronizedList(new ArrayList<>());
     private int streamChunkTotal = 0;
     private volatile boolean audioStreamActive = false;
+
+    // v6.1: 全程保留整段音訊 → WS 失敗 / final 為空時做一次「乾淨重轉錄」(有標點、走伺服器校正)，
+    //       絕不再把無標點的串流預覽倒進輸入框。streamFailed = WS 中途斷線旗標。
+    private ByteArrayOutputStream fullPcmBuffer;
+    private volatile boolean streamFailed = false;
+    // v6.1: 每段口述只允許一次「終局動作」（commit final 或 HTTP fallback），防 WS 晚到回呼重複提交
+    private final java.util.concurrent.atomic.AtomicBoolean utteranceFinished =
+            new java.util.concurrent.atomic.AtomicBoolean(false);
+    // v6.1: fullPcmBuffer 封頂 ~10 分鐘（19.2MB）防無界成長
+    private static final int MAX_FULL_PCM_BYTES = SAMPLE_RATE * 2 * 600;
 
     // UI elements
     private View rootView;
@@ -760,7 +773,27 @@ public class SimonIMEService extends InputMethodService {
         }
 
         pcmBuffer = new ByteArrayOutputStream();
+        fullPcmBuffer = new ByteArrayOutputStream();  // v6.1: 整段音訊保留供乾淨 fallback
+        streamFailed = false;
+        utteranceFinished.set(false);
         isRecording = true;
+
+        // v6.1: 錄音期間維持螢幕常亮 → 長口述時螢幕不休眠、IME 視窗不被回收，
+        //       根除「半句預覽被系統強制提交（無標點）」的元兇。停止錄音時釋放。
+        if (rootView != null) rootView.setKeepScreenOn(true);
+
+        // v5.6: 取 PARTIAL_WAKE_LOCK 保 CPU（不亮螢幕），鎖屏中 AudioRecord/WebSocket/Gemini 不中斷
+        try {
+            PowerManager pm = (PowerManager) getSystemService(POWER_SERVICE);
+            if (pm != null) {
+                recordingWakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "SimonIME:Recording");
+                recordingWakeLock.setReferenceCounted(false);
+                recordingWakeLock.acquire(10 * 60 * 1000L);  // 10 min 安全上限
+            }
+        } catch (Exception e) {
+            Log.w(TAG, "WakeLock 取得失敗，繼續錄音", e);
+        }
+
         audioRecord.startRecording();
 
         // v3.6: 停用舊串流模式（VAD 分段）
@@ -795,6 +828,13 @@ public class SimonIMEService extends InputMethodService {
                         continue;
                     }
                     pcmBuffer.write(buffer, 0, read);
+                    // v6.1: APPEND 串流模式下，pcmBuffer 會每送一個 chunk 就 reset()，
+                    //       fullPcmBuffer 不 reset → 保留整段音訊供失敗時乾淨重轉錄。
+                    //       封頂 ~10 分鐘防無界成長（超過則停止累積，fallback 退化為前 10 分鐘，極端罕見）。
+                    if (currentMode == Mode.APPEND && fullPcmBuffer != null
+                            && fullPcmBuffer.size() < MAX_FULL_PCM_BYTES) {
+                        fullPcmBuffer.write(buffer, 0, read);
+                    }
 
                     // v4.3: 音量偵測 — 依語音停頓分段，不依固定秒數
                     if (currentMode == Mode.APPEND && audioStreamActive && audioStreamWs != null) {
@@ -903,39 +943,40 @@ public class SimonIMEService extends InputMethodService {
                         int idx = json.optInt("index", -1);
                         if (!chunkText.isEmpty()) {
                             streamedChunks.add(chunkText);
-                            // v4.2.1: Build full composing text from all chunks so far
+                            // v6.1: 不再寫進輸入框（移除 setComposingText）。串流預覽只顯示在鍵盤自己的
+                            //       previewText 預覽列 → 輸入框在 final 之前保持乾淨、空無一物，
+                            //       螢幕休眠/失焦時系統也沒有 composing text 可倒。
                             StringBuilder composing = new StringBuilder();
                             for (String c : streamedChunks) composing.append(c);
-                            final String composingText = composing.toString();
-                            mainHandler.post(() -> {
-                                InputConnection ic = getCurrentInputConnection();
-                                if (ic != null) {
-                                    // setComposingText shows as underlined preview (not committed)
-                                    ic.setComposingText(composingText, 1);
-                                }
-                                updateStatus("串流: " + truncate(chunkText, 15));
-                            });
+                            String live = composing.toString();
+                            String tail = live.length() > 28 ? "…" + live.substring(live.length() - 28) : live;
+                            final int liveLen = live.length();
+                            // v6.1: onMessage 在 WS 執行緒；UI 更新一律切回主執行緒（updatePreviewStrip 內部已 post）
+                            updatePreviewStrip("🎧 " + tail);
+                            mainHandler.post(() -> updateStatus("聆聽中…（" + liveLen + " 字）"));
                         }
                         Log.i(TAG, "[AudioStream] chunk#" + idx + " 回傳: '" + chunkText + "'");
 
                     } else if ("final".equals(type)) {
                         String finalText = json.optString("text", "");
                         streamedChunks.clear();
+                        updatePreviewStrip("");
 
                         mainHandler.post(() -> {
                             InputConnection ic = getCurrentInputConnection();
-                            if (ic != null) {
-                                if (!finalText.isEmpty()) {
-                                    // v4.3.1: 用 setComposingText 覆蓋預覽 → finishComposingText 確定
-                                    // 不再 finishComposingText + delete + commitText（會造成重複）
-                                    ic.setComposingText(finalText, 1);
-                                    ic.finishComposingText();
+                            if (!finalText.isEmpty()) {
+                                // v6.1: 一次性提交最終（雲端已拼接＋校正）結果。全程未動 composing text，故直接 commitText。
+                                //       utteranceFinished 守衛：晚到的 onFailure fallback 會被擋，不會重複提交。
+                                if (utteranceFinished.compareAndSet(false, true)) {
+                                    if (ic != null) ic.commitText(finalText, 1);
                                     updateStatus("完成: " + truncate(finalText, 20));
-                                } else {
-                                    // Gemini 失敗 — 直接確定現有預覽文字
-                                    ic.finishComposingText();
-                                    updateStatus("串流完成");
                                 }
+                            } else {
+                                // 伺服器最終結果為空 → 用保留的整段音訊做一次乾淨重轉錄（有標點），
+                                //       而非把無標點串流文字倒進輸入框。
+                                Log.w(TAG, "[AudioStream] final 為空，改用整段音訊 HTTP fallback");
+                                updateStatus("整理中…");
+                                httpFallbackFullAudio();
                             }
                         });
                         Log.i(TAG, "[AudioStream] 最終文字: '" + truncate(finalText, 50) + "'");
@@ -951,30 +992,21 @@ public class SimonIMEService extends InputMethodService {
 
             @Override
             public void onFailure(WebSocket ws, Throwable t, Response response) {
-                Log.w(TAG, "[AudioStream] WebSocket 連線失敗（將自動 fallback）", t);
+                Log.w(TAG, "[AudioStream] WebSocket 連線失敗（改走整段音訊 fallback）", t);
+                streamFailed = true;
                 audioStreamActive = false;
                 audioStreamWs = null;
-                // v4.4.1: 清理殘留的 composing text，避免與 fallback 結果重複
+                streamedChunks.clear();
+                updatePreviewStrip("");
+                // v6.1: 不再把已收到的「無標點串流文字」倒進輸入框（那正是 Simon 要根除的半成品）。
+                //   - 仍在錄音：什麼都不提交，繼續本地累積整段音訊；停止時用整段走乾淨 HTTP。
+                //   - 已停止（finalize 階段才斷）：立刻用整段保留音訊重轉錄（有標點、走校正）。
                 mainHandler.post(() -> {
-                    if (!streamedChunks.isEmpty()) {
-                        InputConnection ic = getCurrentInputConnection();
-                        if (ic != null) {
-                            // 把已收到的串流文字確定提交，不浪費
-                            StringBuilder sb = new StringBuilder();
-                            for (String c : streamedChunks) sb.append(c);
-                            if (sb.length() > 0) {
-                                ic.setComposingText(sb.toString(), 1);
-                                ic.finishComposingText();
-                                Log.i(TAG, "[AudioStream] 斷線前已收文字已提交: " + sb);
-                            } else {
-                                ic.finishComposingText();
-                            }
-                        }
-                        streamedChunks.clear();
-                    }
-                    // 靜默 fallback，不顯示嚇人的錯誤訊息
                     if (isRecording) {
-                        updateStatus("🔴 錄音中...");
+                        updateStatus("🔴 錄音中…（連線中斷，本地暫存）");
+                    } else {
+                        updateStatus("整理中…");
+                        httpFallbackFullAudio();
                     }
                 });
             }
@@ -1029,6 +1061,10 @@ public class SimonIMEService extends InputMethodService {
         if (!isRecording) return;
         isRecording = false;
 
+        // v6.1: 停止錄音 → 釋放螢幕常亮、清掉鍵盤預覽列（輸入框本來就沒被碰過）
+        if (rootView != null) rootView.setKeepScreenOn(false);
+        updatePreviewStrip("");
+
         final boolean wasStreaming = streamingMode;
         streamingMode = false;
 
@@ -1037,6 +1073,17 @@ public class SimonIMEService extends InputMethodService {
             audioRecord.release();
         } catch (Exception e) {
             Log.e(TAG, "Error stopping recorder", e);
+        }
+
+        // v5.6: 釋放 WakeLock
+        try {
+            if (recordingWakeLock != null && recordingWakeLock.isHeld()) {
+                recordingWakeLock.release();
+            }
+        } catch (Exception e) {
+            Log.w(TAG, "WakeLock 釋放失敗", e);
+        } finally {
+            recordingWakeLock = null;
         }
 
         try {
@@ -1053,6 +1100,14 @@ public class SimonIMEService extends InputMethodService {
             if (btnMic instanceof Button) ((Button) btnMic).setText("🎤");
             updateStatus("辨識中...");
         });
+
+        // v6.1: 串流中途斷線（streamFailed）→ audioStreamWs 已 null。用整段保留音訊走乾淨 HTTP
+        //       （有標點、走伺服器校正），而非 pcmData 殘片（只剩斷線後那段）。
+        if (currentMode == Mode.APPEND && streamFailed) {
+            streamedChunks.clear();
+            httpFallbackFullAudio();
+            return;
+        }
 
         // === v4.4: 音訊串流收尾必須在 "太短" 檢查之前 ===
         // 修正 bug: pcmBuffer 在每次送 WS chunk 時 reset()，所以停止錄音時殘餘可能 < 3200
@@ -1080,13 +1135,10 @@ public class SimonIMEService extends InputMethodService {
                 audioStreamWs = null;
                 audioStreamActive = false;
             }
-            // v4.4.1: 清理可能殘留的 composing text
+            // v6.1: 不再有 composing text 需清理（輸入框全程乾淨），只清狀態
+            streamedChunks.clear();
             mainHandler.post(() -> {
-                if (!streamedChunks.isEmpty()) {
-                    InputConnection ic = getCurrentInputConnection();
-                    if (ic != null) ic.finishComposingText();
-                    streamedChunks.clear();
-                }
+                updatePreviewStrip("");
                 updateStatus("錄音太短，請再試一次");
             });
             return;
@@ -1109,15 +1161,10 @@ public class SimonIMEService extends InputMethodService {
             return;
         }
 
-        // v4.4.1: 如果 WS 中途斷線，此時 audioStreamWs=null 但 composing text 可能殘留
-        // 清理後再走 fallback HTTP 路徑，避免重複文字
+        // v6.1: WS 中途斷線已由上方 streamFailed 早退處理；此處僅清殘留狀態（無 composing text）
         if (!streamedChunks.isEmpty()) {
-            Log.i(TAG, "[AudioStream] WS 已斷但有殘留 composing text，清理後 fallback HTTP");
-            mainHandler.post(() -> {
-                InputConnection ic = getCurrentInputConnection();
-                if (ic != null) ic.finishComposingText();
-                streamedChunks.clear();
-            });
+            streamedChunks.clear();
+            mainHandler.post(() -> updatePreviewStrip(""));
         }
 
         // === 舊串流模式收尾 ===
@@ -1791,6 +1838,41 @@ public class SimonIMEService extends InputMethodService {
         }
     }
 
+    /**
+     * v6.1: 串流即時預覽只顯示在「鍵盤自己的」預覽列（previewText），絕不碰輸入框。
+     * 可由任意執行緒呼叫（內部切回主執行緒）。
+     */
+    private void updatePreviewStrip(String text) {
+        mainHandler.post(() -> {
+            if (previewText == null) return;
+            if (text == null || text.isEmpty()) {
+                previewText.setText("");
+                previewText.setVisibility(View.GONE);
+            } else {
+                previewText.setText(text);
+                previewText.setVisibility(View.VISIBLE);
+            }
+        });
+    }
+
+    /**
+     * v6.1: 用整段保留音訊（fullPcmBuffer）做一次乾淨的 HTTP 轉錄（APPEND 走 /v1/audio/transcriptions，
+     * 伺服器端會做標點＋法律詞校正），避免把無標點的串流預覽倒進輸入框。
+     * 只在 WS 失敗或 final 為空時呼叫。須在錄音停止後（fullPcmBuffer 寫入已完成）呼叫。
+     */
+    private void httpFallbackFullAudio() {
+        // v6.1: 終局守衛——每段口述只允許一次 commit/fallback，擋 WS 晚到回呼造成的重複提交
+        if (!utteranceFinished.compareAndSet(false, true)) return;
+        byte[] pcm = (fullPcmBuffer != null) ? fullPcmBuffer.toByteArray() : null;
+        if (pcm == null || pcm.length < 3200) {
+            mainHandler.post(() -> updateStatus("沒有可用的音訊，請再試一次"));
+            return;
+        }
+        byte[] wavData = pcmToWav(pcm, SAMPLE_RATE, 1, 16);
+        Log.i(TAG, "[AudioStream] 整段音訊 HTTP fallback (" + pcm.length + " bytes)");
+        sendToWTI(wavData, Mode.APPEND);
+    }
+
     private String getServerUrl() {
         SharedPreferences prefs = getSharedPreferences("simon_ime_prefs", MODE_PRIVATE);
         return prefs.getString("server_url", "http://100.84.86.128:8001");
@@ -1837,6 +1919,13 @@ public class SimonIMEService extends InputMethodService {
     }
 
     @Override
+    public void onFinishInputView(boolean finishingInput) {
+        // v6.1: 鍵盤收起 → 釋放螢幕常亮，避免非錄音時殘留 keepScreenOn 拖電
+        if (rootView != null) rootView.setKeepScreenOn(false);
+        super.onFinishInputView(finishingInput);
+    }
+
+    @Override
     public void onDestroy() {
         if (isRecording) {
             isRecording = false;
@@ -1846,6 +1935,15 @@ public class SimonIMEService extends InputMethodService {
                 audioRecord.release();
             } catch (Exception ignored) {}
         }
+        // v6.1: safety net 釋放螢幕常亮（IME 被系統回收時）
+        if (rootView != null) rootView.setKeepScreenOn(false);
+        // v5.6: safety net 釋放 WakeLock（IME 被系統殺掉時）
+        try {
+            if (recordingWakeLock != null && recordingWakeLock.isHeld()) {
+                recordingWakeLock.release();
+            }
+        } catch (Exception ignored) {}
+        recordingWakeLock = null;
         if (streamingUpload != null && streamingUpload.isSessionActive()) {
             streamingUpload.cancelSession();
         }
