@@ -110,6 +110,10 @@ public class SimonIMEService extends InputMethodService {
     private final List<String> streamedChunks = Collections.synchronizedList(new ArrayList<>());
     private int streamChunkTotal = 0;
     private volatile boolean audioStreamActive = false;
+    // v6.4: APPEND 即時預覽改由手機端 VAD+SenseVoice 供應；WS chunk 仍保留給伺服器 final 路徑。
+    private volatile boolean onDeviceAppendPreviewEnabled = false;
+    private final Object onDeviceAppendPreviewLock = new Object();
+    private final List<String> onDeviceAppendPreviewSegments = new ArrayList<>();
 
     // v6.1: 全程保留整段音訊 → WS 失敗 / final 為空時做一次「乾淨重轉錄」(有標點、走伺服器校正)，
     //       絕不再把無標點的串流預覽倒進輸入框。streamFailed = WS 中途斷線旗標。
@@ -800,6 +804,7 @@ public class SimonIMEService extends InputMethodService {
 
         // v3.6: 停用舊串流模式（VAD 分段）
         streamingMode = false;
+        prepareOnDeviceAppendPreview();
 
         // v4.2: 音訊串流 WebSocket（已修復文字消失 + 亂序 bug）
         if (currentMode == Mode.APPEND) {
@@ -836,6 +841,10 @@ public class SimonIMEService extends InputMethodService {
                     if (currentMode == Mode.APPEND && fullPcmBuffer != null
                             && fullPcmBuffer.size() < MAX_FULL_PCM_BYTES) {
                         fullPcmBuffer.write(buffer, 0, read);
+                    }
+
+                    if (currentMode == Mode.APPEND && onDeviceAppendPreviewEnabled) {
+                        feedOnDeviceAppendPreview(buffer, read);
                     }
 
                     // v4.3: 音量偵測 — 依語音停頓分段，不依固定秒數
@@ -962,8 +971,11 @@ public class SimonIMEService extends InputMethodService {
                             String live = composing.toString();
                             String tail = live.length() > 28 ? "…" + live.substring(live.length() - 28) : live;
                             final int liveLen = live.length();
-                            // v6.1: onMessage 在 WS 執行緒；UI 更新一律切回主執行緒（updatePreviewStrip 內部已 post）
-                            updatePreviewStrip("🎧 " + tail);
+                            // v6.4: 手機端 SenseVoice 預覽可用時，WS chunk 不再覆蓋預覽列；
+                            //       WS 仍持續上傳/收集，final commit 路徑完全不變。
+                            if (!onDeviceAppendPreviewEnabled) {
+                                updatePreviewStrip("🎧 " + tail);
+                            }
                             mainHandler.post(() -> updateStatus("聆聽中…（" + liveLen + " 字）"));
                         }
                         Log.i(TAG, "[AudioStream] chunk#" + idx + " 回傳: '" + chunkText + "'");
@@ -1019,7 +1031,9 @@ public class SimonIMEService extends InputMethodService {
                 audioStreamActive = false;
                 audioStreamWs = null;
                 streamedChunks.clear();
-                updatePreviewStrip("");
+                if (!onDeviceAppendPreviewEnabled || !isRecording) {
+                    updatePreviewStrip("");
+                }
                 // v6.1: 不再把已收到的「無標點串流文字」倒進輸入框（那正是 Simon 要根除的半成品）。
                 //   - 仍在錄音：什麼都不提交，繼續本地累積整段音訊；停止時用整段走乾淨 HTTP。
                 //   - 已停止（finalize 階段才斷）：立刻用整段保留音訊重轉錄（有標點、走校正）。
@@ -1082,6 +1096,7 @@ public class SimonIMEService extends InputMethodService {
     private void stopRecordingAndSend() {
         if (!isRecording) return;
         isRecording = false;
+        onDeviceAppendPreviewEnabled = false;
 
         // v6.1: 停止錄音 → 釋放螢幕常亮、清掉鍵盤預覽列（輸入框本來就沒被碰過）
         if (rootView != null) rootView.setKeepScreenOn(false);
@@ -1243,6 +1258,69 @@ public class SimonIMEService extends InputMethodService {
         // fallback: 本機 STT 未就緒 → 上傳音訊（舊流程）
         byte[] wavData = pcmToWav(pcmData, SAMPLE_RATE, 1, 16);
         sendToWTI(wavData, currentMode);
+    }
+
+    /**
+     * v6.4: 啟用 APPEND 手機端即時預覽。只影響 previewText，不參與 final/commit。
+     */
+    private void prepareOnDeviceAppendPreview() {
+        synchronized (onDeviceAppendPreviewLock) {
+            onDeviceAppendPreviewSegments.clear();
+        }
+        onDeviceAppendPreviewEnabled = currentMode == Mode.APPEND
+                && localSTTReady
+                && localSTT != null
+                && localSTT.isStreamingReady();
+        if (onDeviceAppendPreviewEnabled) {
+            localSTT.resetStreamingState();
+            Log.i(TAG, "[OnDevicePreview] enabled for APPEND");
+        } else if (currentMode == Mode.APPEND) {
+            Log.i(TAG, "[OnDevicePreview] unavailable; WS chunk preview remains fallback");
+        }
+    }
+
+    /**
+     * v6.4: 錄音執行緒複製 PCM 給 LocalSTT VAD；SenseVoice 解碼在 LocalSTTHelper 背景緒完成。
+     */
+    private void feedOnDeviceAppendPreview(byte[] pcm, int byteCount) {
+        if (localSTT == null || !localSTT.isStreamingReady() || byteCount < 2) return;
+
+        int numSamples = byteCount / 2;
+        float[] floatSamples = new float[numSamples];
+        for (int i = 0; i < numSamples; i++) {
+            short sample = (short) ((pcm[i * 2] & 0xFF) | (pcm[i * 2 + 1] << 8));
+            floatSamples[i] = sample / 32768.0f;
+        }
+
+        try {
+            localSTT.feedAudioChunk(floatSamples, segmentText -> {
+                try {
+                    if (!isRecording || !onDeviceAppendPreviewEnabled) return;
+                    String mapped = englishMapper.apply(segmentText != null ? segmentText.trim() : "");
+                    if (mapped == null || mapped.isEmpty()) return;
+
+                    String live;
+                    synchronized (onDeviceAppendPreviewLock) {
+                        onDeviceAppendPreviewSegments.add(mapped);
+                        StringBuilder sb = new StringBuilder();
+                        for (String segment : onDeviceAppendPreviewSegments) sb.append(segment);
+                        live = sb.toString();
+                    }
+
+                    String tail = live.length() > 28 ? "…" + live.substring(live.length() - 28) : live;
+                    int liveLen = live.length();
+                    updatePreviewStrip("📱 " + tail);
+                    mainHandler.post(() -> updateStatus("聆聽中…（本機預覽 " + liveLen + " 字）"));
+                    Log.d(TAG, "[OnDevicePreview] segment: '" + mapped + "'");
+                } catch (Throwable t) {
+                    onDeviceAppendPreviewEnabled = false;
+                    Log.w(TAG, "[OnDevicePreview] disabled after callback error", t);
+                }
+            });
+        } catch (Throwable t) {
+            onDeviceAppendPreviewEnabled = false;
+            Log.w(TAG, "[OnDevicePreview] disabled after feed error", t);
+        }
     }
 
     /**

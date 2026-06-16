@@ -247,6 +247,18 @@ public class LocalSTTHelper {
     public boolean isReady() { return offlineReady; }
     public boolean isStreamingReady() { return vadReady && offlineReady; }
 
+    /**
+     * 重置串流 VAD 狀態。APPEND 預覽每次錄音開始前呼叫，避免上一段殘留音訊跨 utterance。
+     */
+    public void resetStreamingState() {
+        if (!vadReady || vad == null) return;
+        try {
+            vad.reset();
+        } catch (Throwable t) {
+            Log.w(TAG, "VAD reset error", t);
+        }
+    }
+
     // ==================== Cleanup ====================
 
     /** 清理舊版下載的模型目錄（v2.7/v3.0 殘留） */
