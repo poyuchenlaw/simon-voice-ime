@@ -937,8 +937,17 @@ public class SimonIMEService extends InputMethodService {
 
                     } else if ("auth_fail".equals(type)) {
                         Log.e(TAG, "[AudioStream] 認證失敗");
+                        streamFailed = true;
                         audioStreamActive = false;
                         audioStreamWs = null;
+                        mainHandler.post(() -> {
+                            if (isRecording) {
+                                updateStatus("🔴 錄音中…（連線中斷，本地暫存）");
+                            } else {
+                                updateStatus("整理中…");
+                                httpFallbackFullAudio();
+                            }
+                        });
 
                     } else if ("chunk".equals(type)) {
                         String chunkText = json.optString("text", "");
@@ -986,6 +995,17 @@ public class SimonIMEService extends InputMethodService {
                     } else if ("error".equals(type)) {
                         String msg = json.optString("message", "unknown");
                         Log.e(TAG, "[AudioStream] 伺服器錯誤: " + msg);
+                        streamFailed = true;
+                        audioStreamActive = false;
+                        audioStreamWs = null;
+                        mainHandler.post(() -> {
+                            if (isRecording) {
+                                updateStatus("🔴 錄音中…（連線中斷，本地暫存）");
+                            } else {
+                                updateStatus("整理中…");
+                                httpFallbackFullAudio();
+                            }
+                        });
                     }
                 } catch (Exception e) {
                     Log.e(TAG, "[AudioStream] 訊息解析錯誤", e);
@@ -1214,7 +1234,7 @@ public class SimonIMEService extends InputMethodService {
                     // 本機 STT 失敗 → fallback 上傳音訊
                     mainHandler.post(() -> updateStatus("本機辨識無結果，上傳中..."));
                     byte[] wavData = pcmToWav(pcmData, SAMPLE_RATE, 1, 16);
-                    sendToWTI(wavData, modeNow);
+                    sendToWTI(wavData, modeNow, false);
                 }
             }, "LocalSTT-Recognize").start();
             return;
@@ -1318,17 +1338,21 @@ public class SimonIMEService extends InputMethodService {
             } else {
                 mainHandler.post(() -> updateStatus("本機辨識無結果，上傳中..."));
                 byte[] wavData = pcmToWav(pcmData, SAMPLE_RATE, 1, 16);
-                sendToWTI(wavData, Mode.APPEND);
+                sendToWTI(wavData, Mode.APPEND, false);
             }
         } else {
             byte[] wavData = pcmToWav(pcmData, SAMPLE_RATE, 1, 16);
-            sendToWTI(wavData, Mode.APPEND);
+            sendToWTI(wavData, Mode.APPEND, false);
         }
     }
 
     // ==================== Network ====================
 
     private void sendToWTI(byte[] wavData, Mode mode) {
+        sendToWTI(wavData, mode, mode == Mode.APPEND);
+    }
+
+    private void sendToWTI(byte[] wavData, Mode mode, boolean allowOfflineAppendFallback) {
         String serverUrl = getServerUrl();
 
         String endpoint;
@@ -1379,7 +1403,11 @@ public class SimonIMEService extends InputMethodService {
             @Override
             public void onFailure(Call call, IOException e) {
                 Log.e(TAG, "WTI request failed", e);
-                mainHandler.post(() -> updateStatus("連線失敗: " + e.getMessage()));
+                if (allowOfflineAppendFallback && mode == Mode.APPEND) {
+                    runOfflineFullAudioFallback("HTTP request failed: " + e.getMessage(), false);
+                } else {
+                    mainHandler.post(() -> updateStatus("連線失敗: " + e.getMessage()));
+                }
             }
 
             @Override
@@ -1387,14 +1415,27 @@ public class SimonIMEService extends InputMethodService {
                 try {
                     String responseBody = response.body() != null ? response.body().string() : "";
                     if (!response.isSuccessful()) {
-                        mainHandler.post(() -> updateStatus("伺服器錯誤: " + response.code()));
+                        if (allowOfflineAppendFallback && mode == Mode.APPEND) {
+                            runOfflineFullAudioFallback("HTTP response " + response.code(), false);
+                        } else {
+                            mainHandler.post(() -> updateStatus("伺服器錯誤: " + response.code()));
+                        }
                         return;
                     }
                     JSONObject json = new JSONObject(responseBody);
-                    handleWTIResponse(json, mode);
+                    if (allowOfflineAppendFallback && mode == Mode.APPEND
+                            && json.optString("text", "").trim().isEmpty()) {
+                        runOfflineFullAudioFallback("HTTP response text empty", false);
+                    } else {
+                        handleWTIResponse(json, mode);
+                    }
                 } catch (Exception e) {
                     Log.e(TAG, "Error parsing response", e);
-                    mainHandler.post(() -> updateStatus("解析錯誤"));
+                    if (allowOfflineAppendFallback && mode == Mode.APPEND) {
+                        runOfflineFullAudioFallback("HTTP response parse error: " + e.getMessage(), false);
+                    } else {
+                        mainHandler.post(() -> updateStatus("解析錯誤"));
+                    }
                 }
             }
         });
@@ -1531,8 +1572,10 @@ public class SimonIMEService extends InputMethodService {
                     case APPEND: {
                         String text = json.optString("text", "").trim();
                         if (!text.isEmpty()) {
-                            ic.commitText(text, 1);
-                            updateStatus("✅ " + truncate(text, 20));
+                            if (utteranceFinished.compareAndSet(false, true)) {
+                                ic.commitText(text, 1);
+                                updateStatus("✅ " + truncate(text, 20));
+                            }
                         } else {
                             updateStatus("未辨識到文字");
                         }
@@ -1872,7 +1915,118 @@ public class SimonIMEService extends InputMethodService {
         }
         byte[] wavData = pcmToWav(pcm, SAMPLE_RATE, 1, 16);
         Log.i(TAG, "[AudioStream] 整段音訊 HTTP fallback (" + pcm.length + " bytes)");
-        sendToWTI(wavData, Mode.APPEND);
+        sendFullAudioHttpFallback(wavData, pcm);
+    }
+
+    /**
+     * v6.3: WS 已失敗或 final 為空後，先嘗試整段 HTTP 轉錄；HTTP 也失敗/空結果時，
+     * 使用手機端內建 SenseVoice 對同一段 fullPcmBuffer 做最終兜底。
+     */
+    private void sendFullAudioHttpFallback(byte[] wavData, byte[] pcm) {
+        String serverUrl = getServerUrl();
+        MultipartBody.Builder bodyBuilder = new MultipartBody.Builder()
+                .setType(MultipartBody.FORM)
+                .addFormDataPart("file", "recording.wav",
+                        RequestBody.create(wavData, MediaType.parse("audio/wav")));
+
+        String auth = getAuthPassword();
+        Request.Builder reqBuilder = new Request.Builder()
+                .url(serverUrl + "/v1/audio/transcriptions")
+                .post(bodyBuilder.build());
+        if (auth != null && !auth.isEmpty()) {
+            reqBuilder.addHeader("Authorization", "Bearer " + auth);
+        }
+
+        httpClient.newCall(reqBuilder.build()).enqueue(new Callback() {
+            @Override
+            public void onFailure(@NonNull Call call, @NonNull IOException e) {
+                Log.e(TAG, "[AudioStream] HTTP fallback failed", e);
+                runOfflineFullAudioFallback("HTTP fallback failed: " + e.getMessage(), true, pcm);
+            }
+
+            @Override
+            public void onResponse(@NonNull Call call, @NonNull Response response) throws IOException {
+                try {
+                    String responseBody = response.body() != null ? response.body().string() : "";
+                    if (!response.isSuccessful()) {
+                        Log.w(TAG, "[AudioStream] HTTP fallback server error: " + response.code());
+                        runOfflineFullAudioFallback("HTTP fallback response " + response.code(), true, pcm);
+                        return;
+                    }
+
+                    JSONObject json = new JSONObject(responseBody);
+                    String text = json.optString("text", "").trim();
+                    if (text.isEmpty()) {
+                        Log.w(TAG, "[AudioStream] HTTP fallback returned empty text");
+                        runOfflineFullAudioFallback("HTTP fallback text empty", true, pcm);
+                        return;
+                    }
+
+                    mainHandler.post(() -> {
+                        InputConnection ic = getCurrentInputConnection();
+                        if (ic != null) {
+                            ic.commitText(text, 1);
+                            updateStatus("✅ " + truncate(text, 20));
+                        } else {
+                            updateStatus("無法取得輸入連線");
+                        }
+                    });
+                } catch (Exception e) {
+                    Log.e(TAG, "[AudioStream] HTTP fallback parse error", e);
+                    runOfflineFullAudioFallback("HTTP fallback parse error: " + e.getMessage(), true, pcm);
+                }
+            }
+        });
+    }
+
+    private void runOfflineFullAudioFallback(String reason, boolean utteranceAlreadyReserved) {
+        byte[] pcm = (fullPcmBuffer != null) ? fullPcmBuffer.toByteArray() : null;
+        runOfflineFullAudioFallback(reason, utteranceAlreadyReserved, pcm);
+    }
+
+    /**
+     * v6.3: 最後防線。只在 APPEND 伺服器路徑確定失敗後呼叫；成功時一次性 commitText，
+     * 不使用 composing text，不貼錯誤訊息。
+     */
+    private void runOfflineFullAudioFallback(String reason, boolean utteranceAlreadyReserved, byte[] pcm) {
+        if (!utteranceAlreadyReserved && !utteranceFinished.compareAndSet(false, true)) return;
+
+        if (pcm == null || pcm.length < 3200) {
+            Log.w(TAG, "[OfflineFallback] no usable PCM after server failure: " + reason);
+            mainHandler.post(() -> updateStatus("沒有可用的音訊，請再試一次"));
+            return;
+        }
+        if (!localSTTReady || localSTT == null || !localSTT.isReady()) {
+            Log.e(TAG, "[OfflineFallback] SenseVoice not ready after server failure: " + reason);
+            mainHandler.post(() -> updateStatus("離線辨識未就緒"));
+            return;
+        }
+
+        mainHandler.post(() -> updateStatus("離線辨識…"));
+        new Thread(() -> {
+            long t0 = System.currentTimeMillis();
+            String text = localSTT.recognize(pcm, SAMPLE_RATE);
+            long sttMs = System.currentTimeMillis() - t0;
+            if (text != null) text = englishMapper.apply(text.trim());
+
+            if (text != null && !text.isEmpty()) {
+                final String finalText = text;
+                Log.i(TAG, "[OfflineFallback] SenseVoice success after " + reason
+                        + " (" + sttMs + "ms): '" + truncate(finalText, 50) + "'");
+                mainHandler.post(() -> {
+                    InputConnection ic = getCurrentInputConnection();
+                    if (ic != null) {
+                        ic.commitText(finalText, 1);
+                        updateStatus("離線辨識: " + truncate(finalText, 20));
+                    } else {
+                        updateStatus("無法取得輸入連線");
+                    }
+                });
+            } else {
+                Log.e(TAG, "[OfflineFallback] SenseVoice returned empty after server failure: " + reason);
+                mainHandler.post(() -> updateStatus("離線辨識無結果"));
+            }
+        }, "OfflineFallback-SenseVoice").start();
     }
 
     private String getServerUrl() {
