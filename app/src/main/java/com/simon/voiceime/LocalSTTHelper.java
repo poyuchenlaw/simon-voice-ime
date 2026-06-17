@@ -44,6 +44,8 @@ public class LocalSTTHelper {
     // SenseVoice per-segment executor (ensures sequential processing)
     private ExecutorService segmentExecutor = Executors.newSingleThreadExecutor();
     private final AtomicInteger pendingSegments = new AtomicInteger(0);
+    private float[] lastTailSamples = null;
+    private static final int OVERLAP_SAMPLES = 6400;   // 0.4s at 16kHz; preview-only context
 
     private final Context context;
 
@@ -98,7 +100,7 @@ public class LocalSTTHelper {
             sileroConfig.setMinSilenceDuration(0.5f);  // 0.5 秒靜音斷句（串流模式需要快速分段）
             sileroConfig.setMinSpeechDuration(0.3f);
             sileroConfig.setWindowSize(512);
-            sileroConfig.setMaxSpeechDuration(3.0f);  // 最長 3 秒強制切割（~10 字），確保串流均勻上傳
+            sileroConfig.setMaxSpeechDuration(6.0f);  // v6.5 C5 3.0->6.0 reduce forced mid-word cut.
 
             VadModelConfig vadConfig = new VadModelConfig();
             vadConfig.setSileroVadModelConfig(sileroConfig);
@@ -140,8 +142,20 @@ public class LocalSTTHelper {
                 continue;
             }
 
+            float[] recogInput;
+            if (lastTailSamples != null && lastTailSamples.length > 0) {
+                recogInput = new float[lastTailSamples.length + segSamples.length];
+                System.arraycopy(lastTailSamples, 0, recogInput, 0, lastTailSamples.length);
+                System.arraycopy(segSamples, 0, recogInput, lastTailSamples.length, segSamples.length);
+            } else {
+                recogInput = segSamples;
+            }
+            int ov = Math.min(OVERLAP_SAMPLES, segSamples.length);
+            lastTailSamples = new float[ov];
+            System.arraycopy(segSamples, segSamples.length - ov, lastTailSamples, 0, ov);
+
             pendingSegments.incrementAndGet();
-            final float[] finalSamples = segSamples;
+            final float[] finalSamples = recogInput;
             segmentExecutor.submit(() -> {
                 try {
                     String text = recognizeOffline(finalSamples, SAMPLE_RATE);
@@ -251,6 +265,7 @@ public class LocalSTTHelper {
      * 重置串流 VAD 狀態。APPEND 預覽每次錄音開始前呼叫，避免上一段殘留音訊跨 utterance。
      */
     public void resetStreamingState() {
+        lastTailSamples = null;
         if (!vadReady || vad == null) return;
         try {
             vad.reset();

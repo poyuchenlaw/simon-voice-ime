@@ -152,7 +152,8 @@ public class SimonIMEService extends InputMethodService {
     private Runnable pendingFinalizeRunnable;  // v5.3: 延遲 finalize
     private static final long LONG_PRESS_THRESHOLD = 500;
     // v6.2: 收尾 grace（放手後等多久才送 finalize；原 1000ms，Simon 要求縮短加速→400ms）
-    private static final long FINALIZE_DELAY_MS = 400;
+    // v6.5 (C2): 400→650ms 捕捉放手瞬間仍在說的尾音（搭配伺服器 ASR_TAIL_PAD 尾端補靜音讓 ASR 吐出最後 token）；非還原 1000ms
+    private static final long FINALIZE_DELAY_MS = 650;
 
     // Backspace repeat acceleration
     private boolean backspacePressed = false;
@@ -817,9 +818,11 @@ public class SimonIMEService extends InputMethodService {
 
         recordingThread = new Thread(() -> {
             byte[] buffer = new byte[bufferSize];
-            int silentFrames = 0;           // 連續靜音 frame 計數
+            int silentBytes = 0;           // 連續靜音 byte 計數
             final int SILENCE_THRESHOLD = 800;  // 16-bit PCM RMS 門檻（靜音偵測）
-            final int SILENCE_FRAMES_TO_SPLIT = 8; // ~500ms 靜音觸發分段（取決於 bufferSize/sampleRate）
+            final int BYTES_PER_MS = 32; // 16000*2/1000
+            final int SILENCE_MS_TO_SPLIT = 500;
+            final int SILENCE_BYTES_TO_SPLIT = SILENCE_MS_TO_SPLIT * BYTES_PER_MS; // 16000 bytes = 500ms
             final int MIN_CHUNK_BYTES = 32000;  // 最小 1 秒才送（避免 Whisper 幻覺）
             final int MAX_CHUNK_BYTES = 160000; // 最大 5 秒強制送（避免無限累積）
             // v5.4: 跳過前 400ms 音訊（避免按鈕點擊聲干擾 STT）
@@ -858,20 +861,20 @@ public class SimonIMEService extends InputMethodService {
                         double rms = Math.sqrt(sumSq / (double) (read / 2));
 
                         if (rms < SILENCE_THRESHOLD) {
-                            silentFrames++;
+                            silentBytes += read;
                         } else {
-                            silentFrames = 0;
+                            silentBytes = 0;
                         }
 
                         int bufSize = pcmBuffer.size();
-                        // 送出條件：(停頓 ≥500ms 且累積 ≥1s) 或 (累積 ≥5s 強制送)
-                        boolean pauseDetected = silentFrames >= SILENCE_FRAMES_TO_SPLIT && bufSize >= MIN_CHUNK_BYTES;
+                        // 送出條件：(停頓 ≥500ms deterministic 且累積 ≥1s) 或 (累積 ≥5s 強制送)
+                        boolean pauseDetected = silentBytes >= SILENCE_BYTES_TO_SPLIT && bufSize >= MIN_CHUNK_BYTES;
                         boolean forceFlush = bufSize >= MAX_CHUNK_BYTES;
 
                         if (pauseDetected || forceFlush) {
                             byte[] chunkData = pcmBuffer.toByteArray();
                             pcmBuffer.reset();
-                            silentFrames = 0;
+                            silentBytes = 0;
                             audioStreamWs.send(ByteString.of(chunkData, 0, chunkData.length));
                             streamChunkTotal++;
                             Log.i(TAG, "[AudioStream] chunk #" + streamChunkTotal
@@ -1303,7 +1306,12 @@ public class SimonIMEService extends InputMethodService {
                     synchronized (onDeviceAppendPreviewLock) {
                         onDeviceAppendPreviewSegments.add(mapped);
                         StringBuilder sb = new StringBuilder();
-                        for (String segment : onDeviceAppendPreviewSegments) sb.append(segment);
+                        String prev = "";
+                        for (String segment : onDeviceAppendPreviewSegments) {
+                            String seg = dedupOverlapHead(prev, segment, 6);
+                            sb.append(seg);
+                            prev = sb.toString();
+                        }
                         live = sb.toString();
                     }
 
@@ -1321,6 +1329,15 @@ public class SimonIMEService extends InputMethodService {
             onDeviceAppendPreviewEnabled = false;
             Log.w(TAG, "[OnDevicePreview] disabled after feed error", t);
         }
+    }
+
+    private static String dedupOverlapHead(String prev, String seg, int maxWindow) {
+        if (prev == null || prev.isEmpty() || seg == null || seg.isEmpty()) return seg == null ? "" : seg;
+        int max = Math.min(maxWindow, Math.min(prev.length(), seg.length()));
+        for (int k = max; k > 0; k--) {
+            if (prev.regionMatches(prev.length() - k, seg, 0, k)) return seg.substring(k);
+        }
+        return seg;
     }
 
     /**
