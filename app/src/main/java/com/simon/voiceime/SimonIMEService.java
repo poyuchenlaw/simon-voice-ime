@@ -18,6 +18,7 @@ import android.view.inputmethod.EditorInfo;
 import android.view.inputmethod.InputConnection;
 import android.view.inputmethod.InputMethodManager;
 import android.widget.Button;
+import android.widget.CheckBox;
 import android.widget.FrameLayout;
 import android.widget.LinearLayout;
 import android.widget.TextView;
@@ -131,6 +132,7 @@ public class SimonIMEService extends InputMethodService {
     private TextView previewText;
     private View btnMic;
     private TextView btnMode;
+    private TextView btnClipboard;  // 勾選式上下文 armed 指示器掛在這顆按鈕（面板關閉後仍可見）
     private FrameLayout panelContainer;
 
     // Keyboard switching
@@ -143,6 +145,10 @@ public class SimonIMEService extends InputMethodService {
     // Panel state
     private enum Panel { NONE, CLIPBOARD, COMMANDS }
     private Panel activePanel = Panel.NONE;
+
+    // 勾選式 AI 回覆：把勾選的剪貼組成上下文，REPLACE(換) 模式講指令 → /v1/ai-command 插入回應
+    private String aiContextText = "";   // assembled clipboard context, "" = not armed
+    private int aiContextCount = 0;
 
     // Long press / double tap
     private long lastTapTime = 0;
@@ -210,6 +216,20 @@ public class SimonIMEService extends InputMethodService {
     }
 
     @Override
+    public void onStartInput(EditorInfo info, boolean restarting) {
+        super.onStartInput(info, restarting);
+        // 跨欄位防呆：restarting==false 代表換到了真正的新編輯框 → 已 armed 的勾選上下文必須清掉，
+        // 否則在任意欄位長按麥克風就會誤觸 AI 指令（cross-field footgun）。
+        // restarting==true（同一欄位 restart）保留上下文；面板設定後在同一欄位講指令不會有 onStartInput，
+        // 故同欄位多輪追問仍然存活。
+        if (!restarting && !aiContextText.isEmpty()) {
+            aiContextText = "";
+            aiContextCount = 0;
+            updateArmedIndicator();
+        }
+    }
+
+    @Override
     public View onCreateInputView() {
         rootView = LayoutInflater.from(this).inflate(R.layout.keyboard_view, null);
 
@@ -222,7 +242,7 @@ public class SimonIMEService extends InputMethodService {
         View btnBackspace = rootView.findViewById(R.id.btnBackspace);
         View btnEnter = rootView.findViewById(R.id.btnEnter);
         View btnSettings = rootView.findViewById(R.id.btnSettings);
-        View btnClipboard = rootView.findViewById(R.id.btnClipboard);
+        btnClipboard = rootView.findViewById(R.id.btnClipboard);
         View btnCommands = rootView.findViewById(R.id.btnCommands);
         View btnSwitchIME = rootView.findViewById(R.id.btnSwitchIME);
 
@@ -352,6 +372,7 @@ public class SimonIMEService extends InputMethodService {
         setupTypingKeyboard(numbersKeyboard);
 
         updateModeUI();
+        updateArmedIndicator();
         return rootView;
     }
 
@@ -407,6 +428,43 @@ public class SimonIMEService extends InputMethodService {
             }
         });
         recycler.setAdapter(adapter);
+
+        // 勾選式 AI 回覆 footer
+        final TextView ctxCount = view.findViewById(R.id.clipCtxCount);
+        adapter.setSelectionListener(count -> mainHandler.post(() ->
+                ctxCount.setText(count > 0 ? ("已勾選 " + count + " 則") : "")));
+        // 載入時若已 armed，顯示目前上下文狀態
+        if (aiContextCount > 0) {
+            ctxCount.setText("📎 目前上下文 " + aiContextCount + " 則");
+        }
+
+        Button btnSetCtx = view.findViewById(R.id.btnClipSetContext);
+        btnSetCtx.setOnClickListener(v -> {
+            java.util.List<String> sel = adapter.getSelectedTexts();
+            if (sel.isEmpty()) {
+                updateStatus("先勾選要當上下文的剪貼");
+                return;
+            }
+            StringBuilder sb = new StringBuilder();
+            for (int i = 0; i < sel.size(); i++) {
+                if (i > 0) sb.append("\n\n");
+                sb.append(sel.get(i));
+            }
+            aiContextText = sb.toString();
+            aiContextCount = sel.size();
+            updateArmedIndicator();
+            updateStatus("📎 已設定 " + aiContextCount + " 則為上下文 · 切到換模式講指令");
+            closePanel();
+        });
+
+        Button btnClearCtx = view.findViewById(R.id.btnClipClearContext);
+        btnClearCtx.setOnClickListener(v -> {
+            aiContextText = "";
+            aiContextCount = 0;
+            updateArmedIndicator();
+            updateStatus("已清除上下文");
+            showPanel(Panel.CLIPBOARD);
+        });
 
         // 右滑 → 加入常用指令
         new ItemTouchHelper(new ItemTouchHelper.SimpleCallback(0, ItemTouchHelper.RIGHT) {
@@ -560,12 +618,23 @@ public class SimonIMEService extends InputMethodService {
     private static class ClipAdapter extends RecyclerView.Adapter<ClipAdapter.VH> {
         private final List<String> items;
         private final OnItemClick listener;
+        // 勾選式多選：記錄被勾的 position（panel 開啟期間 items 不變動，position 穩定）
+        // 不變式：selection 以 RecyclerView position 為 key，僅因為剪貼清單在 panel 生命週期內不可變
+        //         （每次 showClipboardPanel 都 new 一個 adapter，期間絕無 insert/remove/move）。
+        //         未來若加入 notifyItemRemoved/Moved，必須改以「內容」重新 key，否則勾選會錯位。
+        private final java.util.Set<Integer> selected = new java.util.HashSet<>();
+        private OnSelectionChanged selectionListener;
 
         interface OnItemClick { void onClick(int position); }
+        interface OnSelectionChanged { void changed(int count); }
 
         ClipAdapter(List<String> items, OnItemClick listener) {
             this.items = items;
             this.listener = listener;
+        }
+
+        void setSelectionListener(OnSelectionChanged l) {
+            this.selectionListener = l;
         }
 
         @Override public VH onCreateViewHolder(android.view.ViewGroup parent, int viewType) {
@@ -575,16 +644,40 @@ public class SimonIMEService extends InputMethodService {
 
         @Override public void onBindViewHolder(VH holder, int position) {
             holder.text.setText(items.get(position));
-            holder.itemView.setOnClickListener(v -> listener.onClick(position));
+            // 點文字 = 貼上（維持原行為）
+            holder.text.setOnClickListener(v -> listener.onClick(position));
+            // 勾選 = 加入/移除上下文；先清回呼避免 recycle 誤觸
+            holder.check.setOnCheckedChangeListener(null);
+            holder.check.setChecked(selected.contains(position));
+            holder.check.setOnClickListener(v -> {
+                if (holder.check.isChecked()) selected.add(position);
+                else selected.remove(position);
+                if (selectionListener != null) selectionListener.changed(selected.size());
+            });
         }
 
         @Override public int getItemCount() { return items.size(); }
 
+        /** 已勾選的剪貼文字，依 index 升序回傳 */
+        java.util.List<String> getSelectedTexts() {
+            java.util.List<Integer> idx = new java.util.ArrayList<>(selected);
+            java.util.Collections.sort(idx);
+            java.util.List<String> out = new java.util.ArrayList<>();
+            for (int i : idx) {
+                if (i >= 0 && i < items.size()) out.add(items.get(i));
+            }
+            return out;
+        }
+
+        int getSelectedCount() { return selected.size(); }
+
         static class VH extends RecyclerView.ViewHolder {
             TextView text;
+            CheckBox check;
             VH(View v) {
                 super(v);
                 text = v.findViewById(R.id.clipText);
+                check = v.findViewById(R.id.clipCheck);
             }
         }
     }
@@ -813,6 +906,10 @@ public class SimonIMEService extends InputMethodService {
         }
 
         updateStatus("🔴 錄音中...");
+        // 勾選式上下文已 armed，但目前不是換模式 → 這段語音不會套用 AI 指令，提醒避免靜默落空
+        if (!aiContextText.isEmpty() && currentMode != Mode.REPLACE) {
+            updateStatus("📎 已勾選上下文，長按麥克風切到換模式才會套用");
+        }
         btnMic.setBackgroundColor(getResources().getColor(R.color.mic_active, null));
         if (btnMic instanceof Button) ((Button) btnMic).setText("⏹");
 
@@ -1230,6 +1327,9 @@ public class SimonIMEService extends InputMethodService {
             final String bc = beforeCursor;
             final String ac = afterCursor;
             final Mode modeNow = currentMode;
+            // 勾選式 AI 回覆：REPLACE(換) 模式且已 armed 上下文 → 走 /v1/ai-command（插入，不刪除）
+            final boolean armed = !aiContextText.isEmpty();
+            final String ctxNow = aiContextText;
 
             new Thread(() -> {
                 long t0 = System.currentTimeMillis();
@@ -1243,7 +1343,9 @@ public class SimonIMEService extends InputMethodService {
 
                     final String finalText = spokenText;
                     mainHandler.post(() -> updateStatus("辨識(" + sttMs + "ms): " + truncate(finalText, 15)));
-                    if (modeNow == Mode.REPLACE) {
+                    if (modeNow == Mode.REPLACE && armed) {
+                        sendAiCommand(finalText, ctxNow);
+                    } else if (modeNow == Mode.REPLACE) {
                         sendTextReplace(finalText, bc, ac);
                     } else {
                         sendTextProcess(finalText, modeNow);
@@ -1252,13 +1354,24 @@ public class SimonIMEService extends InputMethodService {
                     // 本機 STT 失敗 → fallback 上傳音訊
                     mainHandler.post(() -> updateStatus("本機辨識無結果，上傳中..."));
                     byte[] wavData = pcmToWav(pcmData, SAMPLE_RATE, 1, 16);
-                    sendToWTI(wavData, modeNow, false);
+                    if (modeNow == Mode.REPLACE && armed) {
+                        // armed AI 回覆：交伺服器轉錄 + 套上下文（插入，不刪除）
+                        sendAiCommandAudio(wavData, ctxNow);
+                    } else {
+                        sendToWTI(wavData, modeNow, false);
+                    }
                 }
             }, "LocalSTT-Recognize").start();
             return;
         }
 
         // fallback: 本機 STT 未就緒 → 上傳音訊（舊流程）
+        // 勾選式 AI 回覆：REPLACE(換) 模式且已 armed → 交伺服器轉錄 + 套上下文（插入）
+        if (currentMode == Mode.REPLACE && !aiContextText.isEmpty()) {
+            byte[] aiWav = pcmToWav(pcmData, SAMPLE_RATE, 1, 16);
+            sendAiCommandAudio(aiWav, aiContextText);
+            return;
+        }
         byte[] wavData = pcmToWav(pcmData, SAMPLE_RATE, 1, 16);
         sendToWTI(wavData, currentMode);
     }
@@ -1654,6 +1767,94 @@ public class SimonIMEService extends InputMethodService {
         });
     }
 
+    /**
+     * 勾選式 AI 回覆（本機 STT 路徑）：instruction = 語音指令、context = 勾選的剪貼。
+     * 伺服器回 {"text": apply(instruction, context)}，在游標處 commitText 插入（不刪除前後文）。
+     */
+    private void sendAiCommand(String instruction, String context) {
+        String serverUrl = getServerUrl();
+
+        MultipartBody body = new MultipartBody.Builder()
+                .setType(MultipartBody.FORM)
+                .addFormDataPart("instruction", instruction)
+                .addFormDataPart("context", context)
+                .addFormDataPart("language", "zh")
+                .build();
+
+        Request.Builder reqBuilder = new Request.Builder()
+                .url(serverUrl + "/v1/ai-command")
+                .post(body);
+
+        String auth = getAuthPassword();
+        if (auth != null && !auth.isEmpty()) {
+            reqBuilder.addHeader("Authorization", "Bearer " + auth);
+        }
+
+        httpClient.newCall(reqBuilder.build()).enqueue(new AiCommandCallback());
+    }
+
+    /**
+     * 勾選式 AI 回覆（fallback 音訊路徑）：本機 STT 未就緒/無結果時，
+     * 連同音訊上傳由伺服器轉錄為 instruction，再套上下文。回應同樣 commitText 插入。
+     */
+    private void sendAiCommandAudio(byte[] wavData, String context) {
+        String serverUrl = getServerUrl();
+
+        MultipartBody body = new MultipartBody.Builder()
+                .setType(MultipartBody.FORM)
+                .addFormDataPart("instruction", "")
+                .addFormDataPart("context", context)
+                .addFormDataPart("language", "zh")
+                .addFormDataPart("file", "audio.wav",
+                        RequestBody.create(wavData, MediaType.parse("audio/wav")))
+                .build();
+
+        Request.Builder reqBuilder = new Request.Builder()
+                .url(serverUrl + "/v1/ai-command")
+                .post(body);
+
+        String auth = getAuthPassword();
+        if (auth != null && !auth.isEmpty()) {
+            reqBuilder.addHeader("Authorization", "Bearer " + auth);
+        }
+
+        httpClient.newCall(reqBuilder.build()).enqueue(new AiCommandCallback());
+    }
+
+    /** /v1/ai-command 回應處理：插入 text 於游標（commitText），絕不刪除前後文。 */
+    private class AiCommandCallback implements Callback {
+        @Override
+        public void onFailure(@NonNull Call call, @NonNull IOException e) {
+            Log.e(TAG, "AI command request failed", e);
+            mainHandler.post(() -> updateStatus("連線失敗: " + e.getMessage()));
+        }
+
+        @Override
+        public void onResponse(@NonNull Call call, @NonNull Response response) throws IOException {
+            try {
+                String responseBody = response.body() != null ? response.body().string() : "";
+                if (!response.isSuccessful()) {
+                    mainHandler.post(() -> updateStatus("伺服器錯誤: " + response.code()));
+                    return;
+                }
+                JSONObject json = new JSONObject(responseBody);
+                final String text = json.optString("text", "").trim();
+                mainHandler.post(() -> {
+                    InputConnection ic = getCurrentInputConnection();
+                    if (ic != null && !text.isEmpty()) {
+                        ic.commitText(text, 1);
+                        updateStatus("🤖 " + truncate(text, 20));
+                    } else {
+                        updateStatus("AI 無回應");
+                    }
+                });
+            } catch (Exception e) {
+                Log.e(TAG, "Error parsing ai-command response", e);
+                mainHandler.post(() -> updateStatus("解析錯誤"));
+            }
+        }
+    }
+
     private void handleWTIResponse(JSONObject json, Mode mode) {
         mainHandler.post(() -> {
             try {
@@ -1956,6 +2157,15 @@ public class SimonIMEService extends InputMethodService {
                 btnMode.setTextColor(0xFF6bc5f0);
                 break;
         }
+    }
+
+    /**
+     * 勾選式上下文 armed 指示器：在剪貼簿按鈕（📋）上加掛 📎，面板關閉後仍長駐可見。
+     * aiContextText 任何變動處都要呼叫（set/clear/onStartInput 自動清/鍵盤重建）。
+     */
+    private void updateArmedIndicator() {
+        if (btnClipboard == null) return;
+        btnClipboard.setText(aiContextCount > 0 ? "📋📎" : "📋");
     }
 
     // ==================== Helpers ====================
