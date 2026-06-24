@@ -80,6 +80,11 @@ public class SimonIMEService extends InputMethodService {
     enum KeyboardMode { VOICE, ENGLISH, NUMBERS }
 
     private static final String PREF_MODE_KEY = "last_mode";
+    // v6.8: APPEND 高精確切換。預設 false = 手機端 SenseVoice 辨識（音訊不離機，§37 完美）+
+    //       文字走 gated /v1/process-text 校正（~500ms）。true = 原本伺服器 MiMo 音訊上傳路徑
+    //       （法律/術語關鍵口述用，較慢但 ASR 品質高）。長按模式鍵切換、持久化於 simon_ime prefs。
+    private static final String PREF_APPEND_HIGH_ACCURACY_KEY = "append_high_accuracy";
+    private volatile boolean appendHighAccuracy = false;
     private Mode currentMode = Mode.APPEND;
     private KeyboardMode currentKeyboardMode = KeyboardMode.VOICE;
     private boolean isRecording = false;
@@ -260,8 +265,12 @@ public class SimonIMEService extends InputMethodService {
             return false;
         });
 
-        // --- 模式切換 ---
+        // --- 模式切換（短按循環四模式；長按切換追加模式的 快速/高精確）---
         btnMode.setOnClickListener(v -> cycleMode());
+        btnMode.setOnLongClickListener(v -> {
+            toggleAppendHighAccuracy();
+            return true;
+        });
 
         // --- 空格 ---
         btnSpace.setOnClickListener(v -> {
@@ -823,9 +832,9 @@ public class SimonIMEService extends InputMethodService {
         mainHandler.removeCallbacks(longPressRunnable);
 
         if (isRecording) {
-            // v5.4.1: APPEND 模式一律延遲 1s finalize（含短句）
-            // 修正：短句 streamChunkTotal==0 時也要延遲，否則尾巴幾個字會被切掉
-            if (currentMode == Mode.APPEND && audioStreamWs != null) {
+            // v5.4.1: APPEND 模式一律延遲 finalize（含短句），否則尾巴幾個字會被切掉。
+            // v6.8: 快速模式（無 WS）同樣延遲，讓放手瞬間的尾音被手機端 VAD/全段 buffer 收進來。
+            if (currentMode == Mode.APPEND) {
                 mainHandler.post(() -> updateStatus("收尾中..."));
                 pendingFinalizeRunnable = () -> stopRecordingAndSend();
                 mainHandler.postDelayed(pendingFinalizeRunnable, FINALIZE_DELAY_MS);
@@ -843,7 +852,8 @@ public class SimonIMEService extends InputMethodService {
     private void startRecording() {
         if (isRecording) {
             // v5.4.1: tap-toggle 停止也走延遲（和 handleTouchUp 一致）
-            if (currentMode == Mode.APPEND && audioStreamWs != null) {
+            // v6.8: 快速模式（無 WS）同樣延遲，避免尾音被切。
+            if (currentMode == Mode.APPEND) {
                 mainHandler.post(() -> updateStatus("收尾中..."));
                 pendingFinalizeRunnable = () -> stopRecordingAndSend();
                 mainHandler.postDelayed(pendingFinalizeRunnable, FINALIZE_DELAY_MS);
@@ -900,8 +910,9 @@ public class SimonIMEService extends InputMethodService {
         streamingMode = false;
         prepareOnDeviceAppendPreview();
 
-        // v4.2: 音訊串流 WebSocket（已修復文字消失 + 亂序 bug）
-        if (currentMode == Mode.APPEND) {
+        // v6.8: APPEND 預設走「手機端 SenseVoice 辨識 → 文字 gated 校正」，音訊不離機（§37 完美）。
+        //       僅在「高精確切換開啟」或「手機端辨識未就緒」時才開啟 WS 音訊串流上傳（伺服器 MiMo）。
+        if (currentMode == Mode.APPEND && shouldUploadAppendAudio()) {
             startAudioStreamWs();
         }
 
@@ -1238,6 +1249,46 @@ public class SimonIMEService extends InputMethodService {
             updateStatus("辨識中...");
         });
 
+        // v6.8: APPEND 快速模式（預設）——音訊全程留在手機端，從不上傳。
+        //       手機端 SenseVoice 辨識整段 → 只傳「文字」到 gated /v1/process-text 做標點+術語校正。
+        //       校正失敗/逾時 → 直接 commit 原始手機端文字（永不阻塞使用者）。
+        //       手機端辨識空結果 → 退回伺服器音訊路徑（離線/品質兜底）。
+        //       此分支放在所有 WS 收尾邏輯之前；快速模式下 audioStreamWs 本就為 null。
+        if (currentMode == Mode.APPEND && !shouldUploadAppendAudio() && localSTTReady) {
+            // pcmBuffer 在快速模式從未被 mid-stream reset（無 WS chunk），pcmData 即整段音訊。
+            final byte[] appendPcm = pcmData;
+            if (appendPcm.length < 3200) {
+                mainHandler.post(() -> {
+                    updatePreviewStrip("");
+                    updateStatus("錄音太短，請再試一次");
+                });
+                return;
+            }
+            new Thread(() -> {
+                long t0 = System.currentTimeMillis();
+                String spokenText = localSTT.recognize(appendPcm, SAMPLE_RATE);
+                long sttMs = System.currentTimeMillis() - t0;
+                Log.i(TAG, "[OnDeviceAppend] 辨識耗時 " + sttMs + "ms: '" + spokenText + "'");
+                if (spokenText != null && !spokenText.isEmpty()) {
+                    spokenText = englishMapper.apply(spokenText);
+                    final String finalText = spokenText;
+                    mainHandler.post(() -> updateStatus("辨識(" + sttMs + "ms)→校正中…"));
+                    // 文字（非音訊）走 gated /v1/process-text；該端點失敗時內部已 fallback，
+                    // 但連線層失敗只會更新狀態，故下方提供端上 commit 兜底。
+                    sendTextProcessOrCommitRaw(finalText, Mode.APPEND);
+                } else {
+                    // §37: 快速模式（追⚡）的承諾＝音訊全程不離機。手機端辨識空結果時
+                    //      「絕不」靜默上傳音訊兜底——改提示使用者重說，並指向唯一允許上傳
+                    //      音訊的逃生口：長按模式鍵切到 🎯 高精確（會走伺服器）。
+                    mainHandler.post(() -> {
+                        updatePreviewStrip("");
+                        updateStatus("🤔 沒聽清楚，再說一次（長按模式鍵可切 🎯 高精確，會用伺服器）");
+                    });
+                }
+            }, "OnDeviceAppend").start();
+            return;
+        }
+
         // v6.1: 串流中途斷線（streamFailed）→ audioStreamWs 已 null。用整段保留音訊走乾淨 HTTP
         //       （有標點、走伺服器校正），而非 pcmData 殘片（只剩斷線後那段）。
         if (currentMode == Mode.APPEND && streamFailed) {
@@ -1374,6 +1425,15 @@ public class SimonIMEService extends InputMethodService {
         }
         byte[] wavData = pcmToWav(pcmData, SAMPLE_RATE, 1, 16);
         sendToWTI(wavData, currentMode);
+    }
+
+    /**
+     * v6.8: APPEND 是否需要把音訊上傳伺服器辨識（MiMo）。
+     * 預設 false → 走手機端 SenseVoice（音訊不離機）。
+     * 高精確切換開啟，或手機端辨識引擎尚未就緒（如模型仍在下載）時 → true，退回伺服器音訊路徑。
+     */
+    private boolean shouldUploadAppendAudio() {
+        return appendHighAccuracy || !localSTTReady;
     }
 
     /**
@@ -1719,6 +1779,77 @@ public class SimonIMEService extends InputMethodService {
                     Log.e(TAG, "Error parsing process-text response", e);
                     mainHandler.post(() -> updateStatus("解析錯誤"));
                 }
+            }
+        });
+    }
+
+    /**
+     * v6.8: 手機端 APPEND 文字 → gated /v1/process-text 校正（標點/術語/§37 隱私閘）。
+     * 與 sendTextProcess 的差別：任何「連線失敗 / 伺服器錯誤 / 空結果 / 解析錯誤」都直接
+     * commit 原始手機端文字（rawText），絕不讓使用者的口述憑空消失（永不阻塞）。
+     */
+    private void sendTextProcessOrCommitRaw(String rawText, Mode mode) {
+        if (rawText == null || rawText.isEmpty()) return;
+        final String raw = rawText;
+        String serverUrl = getServerUrl();
+
+        MultipartBody.Builder bodyBuilder = new MultipartBody.Builder()
+                .setType(MultipartBody.FORM)
+                .addFormDataPart("text", raw)
+                .addFormDataPart("mode", "append");
+
+        Request.Builder reqBuilder = new Request.Builder()
+                .url(serverUrl + "/v1/process-text")
+                .post(bodyBuilder.build());
+
+        String auth = getAuthPassword();
+        if (auth != null && !auth.isEmpty()) {
+            reqBuilder.addHeader("Authorization", "Bearer " + auth);
+        }
+
+        httpClient.newCall(reqBuilder.build()).enqueue(new Callback() {
+            @Override
+            public void onFailure(@NonNull Call call, @NonNull IOException e) {
+                // 校正連線失敗 → commit 原始手機端文字
+                Log.w(TAG, "[OnDeviceAppend] 校正連線失敗，commit 原始文字", e);
+                commitAppendRaw(raw, "（未校正）");
+            }
+
+            @Override
+            public void onResponse(@NonNull Call call, @NonNull Response response) throws IOException {
+                String corrected = null;
+                try {
+                    String responseBody = response.body() != null ? response.body().string() : "";
+                    if (response.isSuccessful()) {
+                        JSONObject json = new JSONObject(responseBody);
+                        String t = json.optString("text", "").trim();
+                        if (!t.isEmpty()) corrected = t;
+                    } else {
+                        Log.w(TAG, "[OnDeviceAppend] 校正伺服器錯誤 " + response.code() + "，commit 原始文字");
+                    }
+                } catch (Exception e) {
+                    Log.w(TAG, "[OnDeviceAppend] 校正回應解析錯誤，commit 原始文字", e);
+                }
+                if (corrected != null) {
+                    commitAppendRaw(corrected, "");
+                } else {
+                    // 空結果/錯誤 → 退回原始文字
+                    commitAppendRaw(raw, "（未校正）");
+                }
+            }
+        });
+    }
+
+    /** v6.8: 在主執行緒一次性 commit APPEND 結果並更新狀態列。 */
+    private void commitAppendRaw(String text, String suffix) {
+        if (text == null || text.isEmpty()) return;
+        mainHandler.post(() -> {
+            InputConnection ic = getCurrentInputConnection();
+            if (ic != null) {
+                ic.commitText(text, 1);
+                updateStatus(truncate(text, 20) + suffix);
+            } else {
+                updateStatus("未辨識到文字");
             }
         });
     }
@@ -2128,12 +2259,28 @@ public class SimonIMEService extends InputMethodService {
     }
 
     private void loadSavedMode() {
-        String saved = getSharedPreferences("simon_ime", MODE_PRIVATE)
-                .getString(PREF_MODE_KEY, Mode.APPEND.name());
+        SharedPreferences prefs = getSharedPreferences("simon_ime", MODE_PRIVATE);
+        String saved = prefs.getString(PREF_MODE_KEY, Mode.APPEND.name());
         try {
             currentMode = Mode.valueOf(saved);
         } catch (Exception e) {
             currentMode = Mode.APPEND;
+        }
+        appendHighAccuracy = prefs.getBoolean(PREF_APPEND_HIGH_ACCURACY_KEY, false);
+    }
+
+    /** v6.8: 切換 APPEND 高精確（伺服器 MiMo 音訊）/ 快速（手機端 SenseVoice）模式並持久化。 */
+    private void toggleAppendHighAccuracy() {
+        appendHighAccuracy = !appendHighAccuracy;
+        getSharedPreferences("simon_ime", MODE_PRIVATE)
+                .edit()
+                .putBoolean(PREF_APPEND_HIGH_ACCURACY_KEY, appendHighAccuracy)
+                .apply();
+        updateModeUI();
+        if (appendHighAccuracy) {
+            updateStatus("🎯 追加=高精確（伺服器辨識，較慢較準）");
+        } else {
+            updateStatus("⚡ 追加=快速（手機端辨識，音訊不離機）");
         }
     }
 
@@ -2141,7 +2288,8 @@ public class SimonIMEService extends InputMethodService {
         if (btnMode == null) return;
         switch (currentMode) {
             case APPEND:
-                btnMode.setText("追");
+                // v6.8: APPEND 顯示當前辨識路徑指示器（⚡快=手機端 / 🎯準=伺服器 MiMo）
+                btnMode.setText(appendHighAccuracy ? "追🎯" : "追⚡");
                 btnMode.setTextColor(getResources().getColor(R.color.mode_append, null));
                 break;
             case REPLACE:
