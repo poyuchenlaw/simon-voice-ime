@@ -1277,11 +1277,47 @@ public class SimonIMEService extends InputMethodService {
             }
             new Thread(() -> {
                 long t0 = System.currentTimeMillis();
-                String spokenText = localSTT.recognize(appendPcm, SAMPLE_RATE);
+                // v6.9.1 修復：停止錄音時「不再」對整段音訊重跑單次辨識（單次全段辨識會退化、
+                //   且與 segmentExecutor 上尚未完成的分段辨識在「同一個非執行緒安全的 recognizer」
+                //   上競爭 → 產出「嗯」之類垃圾 → 被 OnDeviceCorrector 當填充詞刪光 → 退伺服器 →
+                //   離線時 commit「嗯（未校正）」）。
+                //   改用「預覽列已顯示、實測正確」的分段累積文字：先 flush VAD 收尾段＋等所有
+                //   pending 分段辨識完成，再取去重串接結果。空（如預覽未啟用/VAD 未就緒）才退單次辨識。
+                String spokenText = null;
+                // 預覽 segments 內的文字「已經」過 englishMapper（在 appendPreviewSegment 內），
+                // 後備單次辨識路徑才需要再 map；用此旗標避免對預覽文字重複映射。
+                boolean spokenFromPreview = false;
+                try {
+                    if (localSTT.isStreamingReady()) {
+                        // 收尾：把 VAD 緩衝區殘留語音刷成最後一段，累積進預覽 segments。
+                        localSTT.flushVad(seg -> appendPreviewSegment(seg));
+                        // 等 segmentExecutor 上所有 SenseVoice 分段辨識完成（最多 5s）。
+                        localSTT.waitForPendingSegments();
+                    }
+                    String preview = currentAppendPreviewText();
+                    if (preview != null && !preview.isEmpty()) {
+                        spokenText = preview;
+                        spokenFromPreview = true;
+                        Log.i(TAG, "[OnDeviceAppend] 用分段累積文字（預覽）: '" + spokenText + "'");
+                    }
+                } catch (Throwable t) {
+                    Log.w(TAG, "[OnDeviceAppend] 取分段累積文字失敗，退單次辨識", t);
+                    spokenText = null;
+                    spokenFromPreview = false;
+                }
+                // 後備：預覽文字為空（預覽未啟用 / VAD 未就緒 / flush 失敗）→ 單次全段辨識。
+                if (spokenText == null || spokenText.isEmpty()) {
+                    spokenText = localSTT.recognize(appendPcm, SAMPLE_RATE);
+                    spokenFromPreview = false;
+                    Log.i(TAG, "[OnDeviceAppend] 後備單次辨識: '" + spokenText + "'");
+                }
                 long sttMs = System.currentTimeMillis() - t0;
                 Log.i(TAG, "[OnDeviceAppend] 辨識耗時 " + sttMs + "ms: '" + spokenText + "'");
                 if (spokenText != null && !spokenText.isEmpty()) {
-                    spokenText = englishMapper.apply(spokenText);
+                    // 預覽路徑已映射過，不重複；只有後備單次辨識才 map。
+                    if (!spokenFromPreview) {
+                        spokenText = englishMapper.apply(spokenText);
+                    }
                     final String finalText = spokenText;
                     // v6.9: 端上確定性校正（簡→繁 + 法律術語 + 標點）——校正引擎就緒時整段留在手機端，
                     //       不再 round-trip 伺服器（省掉使用者感受到的 ~5s）。引擎未就緒/拋例外才退伺服器。
@@ -1516,27 +1552,13 @@ public class SimonIMEService extends InputMethodService {
             localSTT.feedAudioChunk(floatSamples, segmentText -> {
                 try {
                     if (!isRecording || !onDeviceAppendPreviewEnabled) return;
-                    String mapped = englishMapper.apply(segmentText != null ? segmentText.trim() : "");
-                    if (mapped == null || mapped.isEmpty()) return;
-
-                    String live;
-                    synchronized (onDeviceAppendPreviewLock) {
-                        onDeviceAppendPreviewSegments.add(mapped);
-                        StringBuilder sb = new StringBuilder();
-                        String prev = "";
-                        for (String segment : onDeviceAppendPreviewSegments) {
-                            String seg = dedupOverlapHead(prev, segment, 6);
-                            sb.append(seg);
-                            prev = sb.toString();
-                        }
-                        live = sb.toString();
-                    }
+                    String live = appendPreviewSegment(segmentText);
+                    if (live == null) return;
 
                     String tail = live.length() > 28 ? "…" + live.substring(live.length() - 28) : live;
                     int liveLen = live.length();
                     updatePreviewStrip("📱 " + tail);
                     mainHandler.post(() -> updateStatus("聆聽中…（本機預覽 " + liveLen + " 字）"));
-                    Log.d(TAG, "[OnDevicePreview] segment: '" + mapped + "'");
                 } catch (Throwable t) {
                     onDeviceAppendPreviewEnabled = false;
                     Log.w(TAG, "[OnDevicePreview] disabled after callback error", t);
@@ -1548,6 +1570,30 @@ public class SimonIMEService extends InputMethodService {
         }
     }
 
+    /**
+     * v6.9.1: 把一個 VAD 分段辨識結果（經 englishMapper 映射、去空白）累積進
+     * {@link #onDeviceAppendPreviewSegments}，回傳目前去重串接後的整段文字（即預覽列的 live）。
+     * 串流預覽 callback 與停止錄音時的 flushVad callback 共用同一條累積邏輯，
+     * 確保「停止時 commit 的文字」就是「使用者預覽看到的文字」。
+     * 空白／無效段回傳 null（呼叫端略過更新）。
+     */
+    private String appendPreviewSegment(String segmentText) {
+        String mapped = englishMapper.apply(segmentText != null ? segmentText.trim() : "");
+        if (mapped == null || mapped.isEmpty()) return null;
+        synchronized (onDeviceAppendPreviewLock) {
+            onDeviceAppendPreviewSegments.add(mapped);
+            StringBuilder sb = new StringBuilder();
+            String prev = "";
+            for (String segment : onDeviceAppendPreviewSegments) {
+                String seg = dedupOverlapHead(prev, segment, 6);
+                sb.append(seg);
+                prev = sb.toString();
+            }
+            Log.d(TAG, "[OnDevicePreview] segment: '" + mapped + "'");
+            return sb.toString();
+        }
+    }
+
     private static String dedupOverlapHead(String prev, String seg, int maxWindow) {
         if (prev == null || prev.isEmpty() || seg == null || seg.isEmpty()) return seg == null ? "" : seg;
         int max = Math.min(maxWindow, Math.min(prev.length(), seg.length()));
@@ -1555,6 +1601,24 @@ public class SimonIMEService extends InputMethodService {
             if (prev.regionMatches(prev.length() - k, seg, 0, k)) return seg.substring(k);
         }
         return seg;
+    }
+
+    /**
+     * v6.9.1: 回傳目前累積的 APPEND 端上預覽文字（與預覽列顯示的 {@code live} 同一條串接結果，
+     * 共用 {@link #dedupOverlapHead} 去除重疊）。這是 {@code feedAudioChunk}/VAD 分段辨識
+     * 出來、實測「正確」的整段文字。停止錄音時改 commit 這個，而非對整段音訊重跑單次辨識。
+     */
+    private String currentAppendPreviewText() {
+        synchronized (onDeviceAppendPreviewLock) {
+            StringBuilder sb = new StringBuilder();
+            String prev = "";
+            for (String segment : onDeviceAppendPreviewSegments) {
+                String seg = dedupOverlapHead(prev, segment, 6);
+                sb.append(seg);
+                prev = sb.toString();
+            }
+            return sb.toString();
+        }
     }
 
     /**

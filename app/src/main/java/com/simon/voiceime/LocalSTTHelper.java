@@ -84,6 +84,14 @@ public class LocalSTTHelper {
     private OfflineRecognizer offlineRecognizer;
     private Vad vad;
 
+    // v6.9.1: the AAR's OfflineRecognizer.decode() is NOT synchronized (verified by
+    // javap on sherpa-onnx-1.12.28.aar: it calls native decode(JJ)V on the shared ptr
+    // with no lock). Segment recognitions run on segmentExecutor while a single-shot
+    // recognize() may fire from the stop thread → two threads decode on the ONE shared
+    // recognizer concurrently. Guard every createStream/decode/getResult with this lock
+    // so they never overlap on the shared native recognizer (defense-in-depth).
+    private final Object recognizerLock = new Object();
+
     // State
     private volatile boolean offlineReady = false;
     private volatile boolean vadReady = false;
@@ -532,17 +540,23 @@ public class LocalSTTHelper {
 
     private String recognizeOffline(float[] samples, int sampleRate) {
         if (!offlineReady || offlineRecognizer == null) return "";
-        try {
-            OfflineStream stream = offlineRecognizer.createStream();
-            stream.acceptWaveform(samples, sampleRate);
-            offlineRecognizer.decode(stream);
-            OfflineRecognizerResult result = offlineRecognizer.getResult(stream);
-            String text = result != null ? result.getText() : "";
-            if (text != null) text = text.trim();
-            return text != null ? text : "";
-        } catch (Exception e) {
-            Log.e(TAG, "SenseVoice decode failed", e);
-            return "";
+        // v6.9.1: serialize createStream/decode/getResult on the shared recognizer.
+        // The native OfflineRecognizer is not thread-safe; without this, a stop-time
+        // single-shot can race still-pending segment decodes on segmentExecutor.
+        synchronized (recognizerLock) {
+            if (!offlineReady || offlineRecognizer == null) return "";
+            try {
+                OfflineStream stream = offlineRecognizer.createStream();
+                stream.acceptWaveform(samples, sampleRate);
+                offlineRecognizer.decode(stream);
+                OfflineRecognizerResult result = offlineRecognizer.getResult(stream);
+                String text = result != null ? result.getText() : "";
+                if (text != null) text = text.trim();
+                return text != null ? text : "";
+            } catch (Exception e) {
+                Log.e(TAG, "SenseVoice decode failed", e);
+                return "";
+            }
         }
     }
 

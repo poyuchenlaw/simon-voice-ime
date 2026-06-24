@@ -1,0 +1,65 @@
+==============================================================================
+STRESS REPRO: multi-segment VAD + concurrent shared-recognizer race
+==============================================================================
+
+--- Part 1: gapped clips split into MULTIPLE segments ---
+  gapped_dictation.wav (17s): 4 segment(s)
+    segments      = ['今天下午3点要跟客户开会。', '讨论遗产分割协议的细节。', '记得把估价报告印出来带过去。', '顺便确认对造的答辩状有没有送到。']
+    seg-joined    = '今天下午3点要跟客户开会。讨论遗产分割协议的细节。记得把估价报告印出来带过去。顺便确认对造的答辩状有没有送到。' (len=55)
+    single-shot   = '今天下午3点要跟客户开会，讨论遗产分割协议的细节，记得把估价报告印出来，带过去，顺便确认对造的答辩状有没有送到。' (len=56)
+  gapped_dictation_0.wav (4s): 1 segment(s)
+    segments      = ['今天下午3点要跟客户开会。']
+    seg-joined    = '今天下午3点要跟客户开会。' (len=13)
+    single-shot   = '今天下午3点要跟客户开会。' (len=13)
+  gapped_dictation_1.wav (3s): 1 segment(s)
+    segments      = ['讨论遗产分割协议的细节。']
+    seg-joined    = '讨论遗产分割协议的细节。' (len=12)
+    single-shot   = '讨论遗产分割协议的细节。' (len=12)
+  gapped_dictation_2.wav (4s): 1 segment(s)
+    segments      = ['记得把估价报告印出来带过去。']
+    seg-joined    = '记得把估价报告印出来带过去。' (len=14)
+    single-shot   = '记得把估价报告印出来带过去。' (len=14)
+  gapped_dictation_3.wav (4s): 1 segment(s)
+    segments      = ['顺便确认对造的答辩状有没有送到。']
+    seg-joined    = '顺便确认对造的答辩状有没有送到。' (len=16)
+    single-shot   = '顺便确认对造的答辩状有没有送到。' (len=16)
+  gapped_legal.wav (14s): 4 segment(s)
+    segments      = ['军越名鉴。', '被告所辩挪用款项一节。', '与券内存折往来明细不符。', '请求依法驳回原告之诉。']
+    seg-joined    = '军越名鉴。被告所辩挪用款项一节。与券内存折往来明细不符。请求依法驳回原告之诉。' (len=39)
+    single-shot   = '君阅名鉴被告所辩挪用款项一节与卷内存折往来明细不符，请求依法驳回原告之诉。' (len=37)
+  gapped_legal_0.wav (2s): 1 segment(s)
+    segments      = ['军越名鉴。']
+    seg-joined    = '军越名鉴。' (len=5)
+    single-shot   = '君越名鉴。' (len=5)
+  gapped_legal_1.wav (3s): 1 segment(s)
+    segments      = ['被告所辩挪用款项一节。']
+    seg-joined    = '被告所辩挪用款项一节。' (len=11)
+    single-shot   = '被告所辩挪用款项一节。' (len=11)
+  gapped_legal_2.wav (3s): 1 segment(s)
+    segments      = ['与券内存折往来明细不符。']
+    seg-joined    = '与券内存折往来明细不符。' (len=12)
+    single-shot   = '与卷内存折往来明细不符。' (len=12)
+  gapped_legal_3.wav (3s): 1 segment(s)
+    segments      = ['请求依法驳回原告之诉。']
+    seg-joined    = '请求依法驳回原告之诉。' (len=11)
+    single-shot   = '请求依法驳回原告之诉。' (len=11)
+  gapped_long.wav (33s): 8 segment(s)
+    segments      = ['军越名鉴。', '被告所辩挪用款项一节。', '与券内存折往来明细不符。', '请求依法驳回原告之诉。', '今天下午3点要跟客户开会。', '讨论遗产分割协议的细节。', '记得把估价报告印出来带过去。', '顺便确认对造的答辩状有没有送到。']
+    seg-joined    = '军越名鉴。被告所辩挪用款项一节。与券内存折往来明细不符。请求依法驳回原告之诉。今天下午3点要跟客户开会。讨论遗产分割协议的细节。记得把估价报告印出来带过去。顺便确认对造的答辩状有没有送到。' (len=94)
+    single-shot   = '君阅名鉴被告所变挪用款项一节与卷内存折往来明细不符，请求依法驳回原告之诉。今天下午3点要跟客户开会，讨论遗产分割协议的细节，记得把估价报告印出来带过去。顺便确认对造的答辩状有没有送到。' (len=92)
+
+--- Part 2: concurrent decode on ONE shared recognizer (race) ---
+  clip: gapped_long (33s), 8 segments
+  ISOLATED single-shot baseline = '君阅名鉴被告所变挪用款项一节与卷内存折往来明细不符，请求依法驳回原告之诉。今天下午3点要跟客户开会，讨论遗产分割协议的细节，记得把估价报告印出来带过去。顺便确认对造的答辩状有没有送到。' (len=92)
+  trials=12  single-shot != baseline: 0/12  errors: 0/12  empty: 0/12
+
+--- Part 3: do per-segment decodes themselves corrupt under race? ---
+  trials=12  any segment differs from isolated baseline: 0/12
+
+==============================================================================
+CONCLUSION
+  If Part 2/3 show >0 corruption/errors, the shared OfflineRecognizer is
+  not thread-safe -> stop-time single-shot racing pending segment decodes
+  can corrupt output. synchronized(recognizeOffline) is required.
+  Regardless: the segmented PREVIEW text is the reliable source to commit.
+==============================================================================
