@@ -100,6 +100,64 @@ public class OnDeviceCorrectorSelfTest {
             }
         }
 
+        // --- LLM-punctuator cage tests (independent of corpus) -----------------------------------
+        // Model "output style": ChatML-ish, punctuation inserted. The cage must accept punctuation-
+        // only changes and REJECT any non-punctuation char change — incl. simplified-char drift and
+        // legal-term alteration — regardless of what the model returns.
+        {
+            String pre = corrector.correctDeterministic("被告應給付原告新台幣一百萬元");
+
+            // (1) LLM inserts only punctuation -> ACCEPT.
+            total++;
+            OnDeviceCorrector.Punctuator llmGood = t -> t + "。"; // append a period
+            String g1 = corrector.correct("被告應給付原告新台幣一百萬元", null, llmGood);
+            if (g1.endsWith("。") && OnDeviceCorrector.stripPunct(g1).equals(pre)) pass++;
+            else { fail++; failures.add("LLM-cage punctuation-only should be accepted, got=[" + g1 + "]"); }
+
+            // (2) LLM injects a SIMPLIFIED char (应 for 應) while adding punctuation -> REJECT.
+            //     Proves simplified-drift is structurally impossible regardless of base model.
+            total++;
+            OnDeviceCorrector.Punctuator llmSimp = t -> t.replace("應", "应") + "。";
+            String g2 = corrector.correct("被告應給付原告新台幣一百萬元", null, llmSimp);
+            if (g2.equals(pre)) pass++; // rejected -> falls back to deterministic (no punctuation)
+            else { fail++; failures.add("LLM-cage simplified-drift should be REJECTED, got=[" + g2 + "]"); }
+
+            // (3) LLM drops a character -> REJECT.
+            total++;
+            OnDeviceCorrector.Punctuator llmDrop = t -> t.substring(1) + "。";
+            String g3 = corrector.correct("被告應給付原告新台幣一百萬元", null, llmDrop);
+            if (g3.equals(pre)) pass++;
+            else { fail++; failures.add("LLM-cage char-drop should be REJECTED, got=[" + g3 + "]"); }
+
+            // (4) CHAIN: LLM (primary) hallucinates a char-change -> rejected; CT-Transformer-style
+            //     fallback (punctuation-only) -> accepted. Proves graceful degradation within ONE call.
+            total++;
+            OnDeviceCorrector.Punctuator badPrimary = t -> "X" + t; // char added -> reject
+            OnDeviceCorrector.Punctuator goodFallback = t -> insertCommas(t); // punctuation only
+            String g4 = corrector.correct("被告應給付原告新台幣一百萬元", null, badPrimary, goodFallback);
+            if (OnDeviceCorrector.stripPunct(g4).equals(pre) && !g4.equals(pre)) pass++;
+            else { fail++; failures.add("CHAIN should fall back primary->fallback, got=[" + g4 + "]"); }
+
+            // (5) CHAIN: both reject -> deterministic (no punctuation).
+            total++;
+            OnDeviceCorrector.Punctuator badA = t -> "甲" + t;
+            OnDeviceCorrector.Punctuator badB = t -> t.substring(1);
+            String g5 = corrector.correct("被告應給付原告新台幣一百萬元", null, badA, badB);
+            if (g5.equals(pre)) pass++;
+            else { fail++; failures.add("CHAIN both-reject should return deterministic, got=[" + g5 + "]"); }
+
+            // (6) context overload is reachable (default method delegates); a context-only impl that
+            //     ignores ctx and adds punctuation is accepted.
+            total++;
+            OnDeviceCorrector.Punctuator ctxAware = new OnDeviceCorrector.Punctuator() {
+                public String addPunctuation(String t) { return t; }
+                public String addPunctuation(String t, String ctx) { return t + "！"; }
+            };
+            String g6 = corrector.correct("被告應給付原告新台幣一百萬元", "前文範例", ctxAware);
+            if (g6.endsWith("！") && OnDeviceCorrector.stripPunct(g6).equals(pre)) pass++;
+            else { fail++; failures.add("context-aware punctuator should be accepted, got=[" + g6 + "]"); }
+        }
+
         // --- explicit unit checks for guard internals (independent of corpus) ---
         total++;
         if (OnDeviceCorrector.stripPunct("債權，人。對！債？務").equals("債權人對債務")) {

@@ -48,13 +48,16 @@ public final class PunctuationHelper implements OnDeviceCorrector.Punctuator {
     private static final int MAX_RETRIES = 3;
     private static final int BUF = 64 * 1024;
 
-    // int8 CT-Transformer punctuation model (~72MB extracted). Mirror the IME's own release host.
+    // int8 CT-Transformer punctuation model (extracted model.int8.onnx from k2-fsa release
+    // punctuation-models / sherpa-onnx-punct-ct-transformer-zh-en-vocab272727-2024-04-12-int8).
+    // Hosted on the IME's own release. Metadata is REAL for the produced artifact; the upload is the
+    // orchestrator's final step (see report — model staged, not yet uploaded).
     private static final String MODEL_REL = "models/punct/model.int8.onnx";
     private static final String MODEL_URL =
             "https://github.com/poyuchenlaw/simon-voice-ime/releases/download/models-v1/punct-model.int8.onnx";
-    // size/sha are verification metadata; 0 / "" => skip strict check (set once known-good).
-    private static final long MODEL_SIZE = 0L;
-    private static final String MODEL_SHA256 = "";
+    private static final long MODEL_SIZE = 75519198L; // 75,519,198 bytes (~72 MiB)
+    private static final String MODEL_SHA256 =
+            "65a3fb9f5ad7bfb96bf69e0dc4481df97f6ee60513c1d94ce981ba6effd524b1";
 
     private final Context context;
     private final OkHttpClient client;

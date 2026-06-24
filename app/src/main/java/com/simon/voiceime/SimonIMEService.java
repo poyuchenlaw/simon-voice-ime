@@ -1287,12 +1287,23 @@ public class SimonIMEService extends InputMethodService {
                     //       不再 round-trip 伺服器（省掉使用者感受到的 ~5s）。引擎未就緒/拋例外才退伺服器。
                     if (onDeviceCorrection != null && onDeviceCorrection.isCorrectorReady()) {
                         String corrected = null;
+                        // 前文：游標前已輸入的文字，給端上 LLM 標點當上下文，讓接縫處標點正確。
+                        // 在背景執行緒讀 InputConnection 可能回 null，全程容錯。
+                        String precedingContext = "";
+                        try {
+                            InputConnection icCtx = getCurrentInputConnection();
+                            if (icCtx != null) {
+                                CharSequence before = icCtx.getTextBeforeCursor(60, 0);
+                                if (before != null) precedingContext = before.toString();
+                            }
+                        } catch (Throwable ignored) {}
                         try {
                             long c0 = System.currentTimeMillis();
-                            corrected = onDeviceCorrection.correct(finalText);
+                            corrected = onDeviceCorrection.correct(finalText, precedingContext);
                             long corrMs = System.currentTimeMillis() - c0;
                             Log.i(TAG, "[OnDeviceAppend] 端上校正耗時 " + corrMs + "ms"
-                                    + (onDeviceCorrection.isPunctuationReady() ? "（含標點）" : "（無標點）"));
+                                    + (onDeviceCorrection.isSmartPunctuationReady() ? "（智慧標點）"
+                                       : onDeviceCorrection.isPunctuationReady() ? "（標點）" : "（無標點）"));
                         } catch (Throwable t) {
                             Log.w(TAG, "[OnDeviceAppend] 端上校正拋例外，退回伺服器", t);
                             corrected = null;

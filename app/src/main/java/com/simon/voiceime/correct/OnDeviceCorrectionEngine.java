@@ -33,16 +33,22 @@ public final class OnDeviceCorrectionEngine {
     private static final String DIR = "correction";
 
     private final Context context;
-    private final PunctuationHelper punctuation;
+    private final LlmPunctuator llm;             // primary (smart, context-aware)
+    private final PunctuationHelper punctuation;  // fallback (CT-Transformer tagger)
     private volatile OnDeviceCorrector corrector;
     private volatile boolean correctorReady = false;
 
     public OnDeviceCorrectionEngine(Context context) {
         this.context = context.getApplicationContext();
+        this.llm = new LlmPunctuator(this.context);
         this.punctuation = new PunctuationHelper(this.context);
     }
 
-    /** Background init: load asset dicts (fast) then download/init punctuation model (slow). */
+    /**
+     * Background init: load asset dicts (fast), then init BOTH punctuators (slow, first-run
+     * downloads). The CT-Transformer tagger (~72MB) is the fast floor; the LLM (~1GB) is the smart
+     * primary. Until each is ready, the punctuation chain simply skips it.
+     */
     public void init() {
         AssetManager am = context.getAssets();
         try (InputStream para = open(am, DIR + "/paraformer_legal.txt");
@@ -60,11 +66,18 @@ public final class OnDeviceCorrectionEngine {
             correctorReady = false;
             return;
         }
-        // Punctuation model (first-run download). Until ready, correct() runs steps 1-4 only.
+        // Fast floor first: CT-Transformer tagger (~72MB). Smart punctuation joins once the
+        // LLM model has downloaded; until then the chain falls through to the tagger.
         try {
             punctuation.init();
         } catch (Throwable t) {
-            Log.w(TAG, "標點初始化失敗（確定性校正仍可用）", t);
+            Log.w(TAG, "CT-Transformer 標點初始化失敗（確定性校正仍可用）", t);
+        }
+        // Smart primary: on-device LLM (~1GB, one-time download). Errors degrade to the tagger.
+        try {
+            llm.init();
+        } catch (Throwable t) {
+            Log.w(TAG, "LLM 標點初始化失敗（退 CT-Transformer 標點）", t);
         }
     }
 
@@ -77,23 +90,40 @@ public final class OnDeviceCorrectionEngine {
         return correctorReady && corrector != null;
     }
 
+    /** True once any punctuation source (LLM primary or CT-Transformer fallback) is available. */
     public boolean isPunctuationReady() {
-        return punctuation.isReady();
+        return llm.isReady() || punctuation.isReady();
+    }
+
+    /** True once the smart (LLM) punctuator is loaded. */
+    public boolean isSmartPunctuationReady() {
+        return llm.isReady();
+    }
+
+    public String correct(String senseVoiceText) {
+        return correct(senseVoiceText, null);
     }
 
     /**
-     * Run the on-device pipeline. Steps 1-4 always; step 5 punctuation iff the model is ready
-     * (behind the 改字 guard). Caller MUST check {@link #isCorrectorReady()} first; if false,
-     * use the server fallback.
+     * Run the on-device pipeline. Steps 1-4 (deterministic) always; step 5 punctuation via the
+     * CAGED chain LLM(primary) -> CT-Transformer(fallback) -> none, all behind the 改字 guard.
+     * Caller MUST check {@link #isCorrectorReady()} first; if false, use the server fallback.
+     *
+     * @param precedingContext the user's already-typed text before the cursor (前文; from
+     *                         {@code getTextBeforeCursor}); passed to the LLM punctuator so junction
+     *                         punctuation is correct. May be {@code null}.
      */
-    public String correct(String senseVoiceText) {
+    public String correct(String senseVoiceText, String precedingContext) {
         OnDeviceCorrector c = corrector;
         if (c == null) return senseVoiceText;
-        OnDeviceCorrector.Punctuator p = punctuation.isReady() ? punctuation : null;
-        return c.correct(senseVoiceText, p);
+        // Chain order = primary first. Only include ready punctuators; the chain skips nulls.
+        OnDeviceCorrector.Punctuator primary  = llm.isReady() ? llm : null;
+        OnDeviceCorrector.Punctuator fallback = punctuation.isReady() ? punctuation : null;
+        return c.correct(senseVoiceText, precedingContext, primary, fallback);
     }
 
     public void release() {
-        punctuation.release();
+        try { llm.release(); } catch (Throwable ignored) {}
+        try { punctuation.release(); } catch (Throwable ignored) {}
     }
 }

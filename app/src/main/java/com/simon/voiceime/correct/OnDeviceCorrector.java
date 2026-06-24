@@ -46,6 +46,20 @@ public final class OnDeviceCorrector {
     public interface Punctuator {
         /** @return punctuated text, or {@code null} to skip (e.g. model not ready). */
         String addPunctuation(String text);
+
+        /**
+         * Context-aware variant: {@code precedingContext} is the user's already-typed text just
+         * before the cursor (前文), so punctuation at the junction is correct. Implementations that
+         * ignore context (e.g. the CT-Transformer tagger) inherit the default, which delegates to
+         * {@link #addPunctuation(String)}.
+         *
+         * @param text             the newly-dictated, deterministically-corrected text to punctuate
+         * @param precedingContext bounded window of text before the cursor (may be {@code null}/empty)
+         * @return punctuated text, or {@code null} to skip / fall back
+         */
+        default String addPunctuation(String text, String precedingContext) {
+            return addPunctuation(text);
+        }
     }
 
     // Compiled exact-match replacement rules, longest-key-first.
@@ -178,6 +192,39 @@ public final class OnDeviceCorrector {
      * @return corrected, optionally-punctuated text.
      */
     public String correct(String senseVoiceText, Punctuator punctuator) {
+        return correct(senseVoiceText, punctuator, null);
+    }
+
+    /**
+     * Full deterministic correction + punctuation + guard, with 前文 context for the punctuator.
+     *
+     * @param senseVoiceText on-device SenseVoice text (simplified, no punctuation).
+     * @param punctuator     step-5 hook; may be {@code null} to skip punctuation entirely.
+     * @param precedingContext text already typed before the cursor (前文), passed to the punctuator
+     *                         so junction punctuation is correct; may be {@code null}.
+     * @return corrected, optionally-punctuated text.
+     */
+    public String correct(String senseVoiceText, Punctuator punctuator, String precedingContext) {
+        return correct(senseVoiceText, precedingContext,
+                punctuator == null ? new Punctuator[0] : new Punctuator[]{punctuator});
+    }
+
+    /**
+     * Full deterministic correction (steps 1-4), then a CAGED punctuation CHAIN (steps 5-6).
+     *
+     * <p>The {@code punctuators} are tried in order (primary first, fallbacks after). Each candidate
+     * is independently put through the 改字 GUARD: if it only added punctuation, it is accepted and
+     * returned; if it altered/added/dropped a non-punctuation character (or returned {@code null}/
+     * empty/threw), the NEXT punctuator is tried. If none passes, the deterministic step-4 text is
+     * returned (no punctuation). This is how the LLM punctuator (primary) degrades gracefully to the
+     * CT-Transformer tagger (fallback) to deterministic — all within one call, cage-checked per try.
+     *
+     * @param senseVoiceText   on-device SenseVoice text (simplified, no punctuation).
+     * @param precedingContext 前文 passed to context-aware punctuators; may be {@code null}.
+     * @param punctuators      ordered chain; empty/{@code null} entries skipped. May be empty.
+     * @return corrected text, punctuated by the first chain member whose output passes the guard.
+     */
+    public String correct(String senseVoiceText, String precedingContext, Punctuator... punctuators) {
         if (senseVoiceText == null || senseVoiceText.isEmpty()) return senseVoiceText;
 
         // Step 1: paraformer legal homophone correction (SIMPLIFIED, before conversion).
@@ -194,16 +241,27 @@ public final class OnDeviceCorrector {
         // Step 4: legal_dictionary exact-match corrections (protected terms never touched).
         String preGuard = applyMishearProtected(t);
 
-        // Step 5 + 6: punctuation behind the 改字 guard.
-        if (punctuator == null) return preGuard;
-        String punctuated;
-        try {
-            punctuated = punctuator.addPunctuation(preGuard);
-        } catch (Throwable th) {
-            return preGuard; // punctuation failure must never alter/drop text
+        // Step 5 + 6: punctuation CHAIN behind the 改字 guard (primary -> fallbacks).
+        if (punctuators == null) return preGuard;
+        for (Punctuator p : punctuators) {
+            if (p == null) continue;
+            String punctuated;
+            try {
+                punctuated = p.addPunctuation(preGuard, precedingContext);
+            } catch (Throwable th) {
+                continue; // this punctuator failed; try the next
+            }
+            if (punctuated == null || punctuated.isEmpty()) continue;
+            String guarded = applyChangedCharGuard(preGuard, punctuated);
+            // Guard returns preGuard when it REJECTS (chars changed). Treat "accepted" as
+            // "punctuation actually added and chars unchanged"; otherwise fall through to next.
+            if (!guarded.equals(preGuard)) {
+                return guarded; // accepted: only punctuation differs
+            }
+            // If this punctuator added nothing (output == preGuard char-wise but no punctuation),
+            // or the guard rejected it, fall through to the next chain member.
         }
-        if (punctuated == null || punctuated.isEmpty()) return preGuard;
-        return applyChangedCharGuard(preGuard, punctuated);
+        return preGuard; // no punctuator produced an accepted result
     }
 
     /** Steps 1-4 only (no punctuation). Exposed for testing and as the guard's reference text. */

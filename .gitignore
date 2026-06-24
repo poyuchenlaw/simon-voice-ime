@@ -20,6 +20,13 @@ release.keystore
 app/src/main/assets/*.onnx
 app/src/main/assets/sensevoice/
 
+# Staged release models (uploaded to GitHub Releases, never committed)
+release_staging/
+
+# Native build outputs (vendored llama.cpp SOURCE is committed; build artifacts are not)
+app/.cxx/
+.cxx/
+
 # OS
 .DS_Store
 Thumbs.db
