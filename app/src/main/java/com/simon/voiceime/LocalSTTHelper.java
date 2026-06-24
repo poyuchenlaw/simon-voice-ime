@@ -506,11 +506,20 @@ public class LocalSTTHelper {
     }
 
     /**
-     * 等待所有 pending SenseVoice 段落處理完成（最多 5 秒）。
+     * 等待所有 pending SenseVoice 段落處理完成。
+     *
+     * <p>v6.9.2: 預設上限自 5s 降到 1.2s，避免停止錄音時的等待主宰整段 stop-time pipeline。
+     * 使用者在錄音過程中「已經」看到預覽列即時累積這些分段文字，所以即使少數尾段尚未 decode 完，
+     * commit 已顯示的預覽文字也不會丟字；真正的硬保證在 SimonIMEService 的 ~2s 整體 timeout wall。
      */
     public void waitForPendingSegments() {
+        waitForPendingSegments(1200);
+    }
+
+    /** 等待所有 pending SenseVoice 段落完成，最多 {@code maxWaitMs} 毫秒。 */
+    public void waitForPendingSegments(long maxWaitMs) {
         if (pendingSegments.get() == 0) return;
-        long deadline = System.currentTimeMillis() + 5000;
+        long deadline = System.currentTimeMillis() + Math.max(0, maxWaitMs);
         while (pendingSegments.get() > 0 && System.currentTimeMillis() < deadline) {
             try { Thread.sleep(50); } catch (InterruptedException ignored) { break; }
         }

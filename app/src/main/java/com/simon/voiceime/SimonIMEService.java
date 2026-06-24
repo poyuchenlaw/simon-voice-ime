@@ -1322,34 +1322,59 @@ public class SimonIMEService extends InputMethodService {
                     // v6.9: 端上確定性校正（簡→繁 + 法律術語 + 標點）——校正引擎就緒時整段留在手機端，
                     //       不再 round-trip 伺服器（省掉使用者感受到的 ~5s）。引擎未就緒/拋例外才退伺服器。
                     if (onDeviceCorrection != null && onDeviceCorrection.isCorrectorReady()) {
-                        String corrected = null;
-                        // 前文：游標前已輸入的文字，給端上 LLM 標點當上下文，讓接縫處標點正確。
+                        // 前文：游標前已輸入的文字，給端上標點當上下文，讓接縫處標點正確。
                         // 在背景執行緒讀 InputConnection 可能回 null，全程容錯。
-                        String precedingContext = "";
+                        String pc = "";
                         try {
                             InputConnection icCtx = getCurrentInputConnection();
                             if (icCtx != null) {
                                 CharSequence before = icCtx.getTextBeforeCursor(60, 0);
-                                if (before != null) precedingContext = before.toString();
+                                if (before != null) pc = before.toString();
                             }
                         } catch (Throwable ignored) {}
-                        try {
-                            long c0 = System.currentTimeMillis();
-                            corrected = onDeviceCorrection.correct(finalText, precedingContext);
-                            long corrMs = System.currentTimeMillis() - c0;
-                            Log.i(TAG, "[OnDeviceAppend] 端上校正耗時 " + corrMs + "ms"
-                                    + (onDeviceCorrection.isSmartPunctuationReady() ? "（智慧標點）"
-                                       : onDeviceCorrection.isPunctuationReady() ? "（標點）" : "（無標點）"));
-                        } catch (Throwable t) {
-                            Log.w(TAG, "[OnDeviceAppend] 端上校正拋例外，退回伺服器", t);
-                            corrected = null;
-                        }
-                        if (corrected != null && !corrected.isEmpty()) {
-                            commitAppendRaw(corrected, "");
-                        } else {
-                            // 端上校正空結果 → 退伺服器（仍只傳文字，音訊不離機）
+                        final String precedingContext = pc;
+                        // ============================================================================
+                        // v6.9.2 HARD TIMEOUT WALL — the GUARANTEE.
+                        //
+                        // 不變式：一旦 on-device APPEND 取得「非空的預覽/辨識文字」（finalText），
+                        // 就「一定」會在 ~2 秒內 commit 出某段文字，絕不靜默卡死。
+                        //
+                        // why：v6.9.1 在實機 Fold6 上，端上校正裡的 LLM 標點 nativeComplete（llama.cpp）
+                        // 在模型下載完成後會「永久卡住」、又沒有 timeout → onDeviceCorrection.correct(...)
+                        // 永遠不返回 → 什麼都沒 commit（狀態凍在「辨識中」）。v6.9.2 已停用 LLM 標點，但
+                        // 這道牆是「與任何模型行為無關」的硬保證：把可能 block 的校正丟到單執行緒 worker，
+                        // future.get(2000ms)；超時就「直接 commit 使用者已經看到的預覽文字」（未校正、但
+                        // 一定有字）並放生 worker（不等它）。因為「直接 commit 預覽文字」永遠可行（🎯
+                        // 模式已證明 commitText 正常），這個保證不依賴校正/模型是否會返回。
+                        // ============================================================================
+                        // 用 sentinel 區分「超時/例外」(=> 直接 commit 預覽) 與「正常空結果」(=> 退伺服器)。
+                        final String TIMEOUT_SENTINEL = " __ODC_TIMEOUT__ ";
+                        long c0 = System.currentTimeMillis();
+                        String walled = com.simon.voiceime.correct.TimeoutWall.runWithBudget(
+                                () -> {
+                                    String r = onDeviceCorrection.correct(finalText, precedingContext);
+                                    // worker 內任何結果都包成非空字串，讓 TimeoutWall 只在「真超時/例外」
+                                    // 才回 fallback(sentinel)；正常空結果用 EMPTY 標記，外層改退伺服器。
+                                    return (r == null || r.isEmpty()) ? " __ODC_EMPTY__ " : r;
+                                },
+                                TIMEOUT_SENTINEL, 2000L);
+                        long corrMs = System.currentTimeMillis() - c0;
+                        if (TIMEOUT_SENTINEL.equals(walled)) {
+                            // 超時（或 worker 例外）→ 硬保證：直接 commit 使用者已看到的預覽文字（未校正）。
+                            // 絕不退伺服器（伺服器慢、且本支線承諾 ~2s 內一定 commit）。worker 已被放生。
+                            Log.w(TAG, "[OnDeviceAppend] 端上校正逾時 " + corrMs
+                                    + "ms（>2000ms）→ 直接 commit 預覽文字（未校正）");
+                            commitAppendRaw(finalText, "（未校正）");
+                        } else if (" __ODC_EMPTY__ ".equals(walled)) {
+                            // 校正在預算內回空結果（罕見，finalText 非空）→ 退伺服器文字路徑（音訊不離機）。
+                            Log.i(TAG, "[OnDeviceAppend] 端上校正空結果（" + corrMs + "ms）→ 退伺服器");
                             mainHandler.post(() -> updateStatus("辨識(" + sttMs + "ms)→校正中…"));
                             sendTextProcessOrCommitRaw(finalText, Mode.APPEND);
+                        } else {
+                            // 正常：預算內取得校正文字 → commit。
+                            Log.i(TAG, "[OnDeviceAppend] 端上校正耗時 " + corrMs + "ms"
+                                    + (onDeviceCorrection.isPunctuationReady() ? "（標點）" : "（無標點）"));
+                            commitAppendRaw(walled, "");
                         }
                     } else {
                         // 校正引擎尚未就緒（資產載入失敗極罕見）→ 伺服器文字路徑兜底。

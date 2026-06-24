@@ -1,4 +1,5 @@
 import com.simon.voiceime.correct.OnDeviceCorrector;
+import com.simon.voiceime.correct.TimeoutWall;
 
 import java.io.BufferedReader;
 import java.io.FileInputStream;
@@ -179,6 +180,73 @@ public class OnDeviceCorrectorSelfTest {
         } else {
             fail++;
             failures.add("empty/null robustness failed");
+        }
+
+        // --- v6.9.2 TIMEOUT WALL tests (the GUARANTEE) ------------------------------------------
+        // Proves: a correction/punctuator that BLOCKS longer than the budget must NOT block the
+        // caller — the wall returns the fallback (the preview text the user already sees) within
+        // the budget. Also covers normal completion, exceptions, and empty results.
+        {
+            final long BUDGET = 300L; // small budget so the test is fast; real path uses 2000ms.
+            final String PREVIEW = "被告應給付原告新台幣一百萬元"; // stand-in for currentAppendPreviewText()
+
+            // (T1) Task HANGS far past budget (simulates the hung LLM nativeComplete) -> wall must
+            //      return the PREVIEW fallback, and must do so WITHIN the budget (not block on hang).
+            total++;
+            long w0 = System.currentTimeMillis();
+            String hung = TimeoutWall.runWithBudget(() -> {
+                Thread.sleep(BUDGET * 20); // 6s — would freeze the keyboard without the wall
+                return "校正後文字（永遠不會回來）";
+            }, PREVIEW, BUDGET);
+            long elapsed = System.currentTimeMillis() - w0;
+            // committed text == preview (uncorrected), and we did NOT wait for the hung worker.
+            if (PREVIEW.equals(hung) && elapsed < BUDGET + 800) {
+                pass++;
+            } else {
+                fail++;
+                failures.add("TIMEOUT-WALL hang: expected fallback=[" + PREVIEW + "] within "
+                        + (BUDGET + 800) + "ms, got=[" + hung + "] in " + elapsed + "ms");
+            }
+
+            // (T2) Task completes WELL within budget with a real corrected string -> return it.
+            total++;
+            String ok = TimeoutWall.runWithBudget(() -> PREVIEW + "。", PREVIEW, BUDGET);
+            if ((PREVIEW + "。").equals(ok)) pass++;
+            else { fail++; failures.add("TIMEOUT-WALL fast-path: expected corrected text, got=[" + ok + "]"); }
+
+            // (T3) Task THROWS -> wall must swallow and return fallback (never propagate).
+            total++;
+            String threw = TimeoutWall.runWithBudget(() -> { throw new RuntimeException("boom"); },
+                    PREVIEW, BUDGET);
+            if (PREVIEW.equals(threw)) pass++;
+            else { fail++; failures.add("TIMEOUT-WALL throw: expected fallback, got=[" + threw + "]"); }
+
+            // (T4) Task returns null/empty -> treated as "produced nothing" -> fallback.
+            total++;
+            String nullRes = TimeoutWall.runWithBudget(() -> null, PREVIEW, BUDGET);
+            String emptyRes = TimeoutWall.runWithBudget(() -> "", PREVIEW, BUDGET);
+            if (PREVIEW.equals(nullRes) && PREVIEW.equals(emptyRes)) pass++;
+            else { fail++; failures.add("TIMEOUT-WALL null/empty: expected fallback, got null=[" + nullRes
+                    + "] empty=[" + emptyRes + "]"); }
+
+            // (T5) END-TO-END: a real OnDeviceCorrector whose injected punctuator HANGS. The whole
+            //      correct(...) call is run under the wall; the guarantee is that SOME non-empty text
+            //      comes back within budget (here the preview), proving no path blocks forever even if
+            //      a punctuator hangs (defense-in-depth for any future LLM re-enable).
+            total++;
+            OnDeviceCorrector.Punctuator hangingPunct = new OnDeviceCorrector.Punctuator() {
+                public String addPunctuation(String t) {
+                    try { Thread.sleep(BUDGET * 20); } catch (InterruptedException ignored) {}
+                    return t + "。";
+                }
+            };
+            long e0 = System.currentTimeMillis();
+            String e2e = TimeoutWall.runWithBudget(
+                    () -> corrector.correct(PREVIEW, null, hangingPunct), PREVIEW, BUDGET);
+            long e2eMs = System.currentTimeMillis() - e0;
+            if (PREVIEW.equals(e2e) && e2eMs < BUDGET + 800) pass++;
+            else { fail++; failures.add("TIMEOUT-WALL e2e-hang: expected fallback within budget, got=["
+                    + e2e + "] in " + e2eMs + "ms"); }
         }
 
         System.out.println("================ OnDeviceCorrector self-test ================");

@@ -32,6 +32,20 @@ public final class OnDeviceCorrectionEngine {
     private static final String TAG = "OnDeviceCorrect";
     private static final String DIR = "correction";
 
+    /**
+     * v6.9.2 KILL-SWITCH: the on-device LLM punctuator is DISABLED.
+     *
+     * <p>Root cause (confirmed on the physical Fold6): once the ~1GB LLM model finished downloading,
+     * {@link LlmPunctuator#nativeComplete} (llama.cpp autoregressive decode) could HANG forever on
+     * this arm64 device, with no timeout → {@link #correct} blocked forever → APPEND committed
+     * NOTHING (status froze at "辨識中"). We keep the {@link LlmPunctuator} class in the tree (it may
+     * be re-enabled later behind a proper watchdog), but we do NOT invoke it: {@code init()} skips
+     * {@code llm.init()} so {@code llm.isReady()} stays false and the chain never calls into the
+     * native LLM. Punctuation now comes ONLY from the CT-Transformer tagger ({@link PunctuationHelper}),
+     * a bounded ONNX forward pass that cannot hang like autoregressive decode.
+     */
+    private static final boolean USE_LLM_PUNCT = false;
+
     private final Context context;
     private final LlmPunctuator llm;             // primary (smart, context-aware)
     private final PunctuationHelper punctuation;  // fallback (CT-Transformer tagger)
@@ -73,11 +87,17 @@ public final class OnDeviceCorrectionEngine {
         } catch (Throwable t) {
             Log.w(TAG, "CT-Transformer 標點初始化失敗（確定性校正仍可用）", t);
         }
-        // Smart primary: on-device LLM (~1GB, one-time download). Errors degrade to the tagger.
-        try {
-            llm.init();
-        } catch (Throwable t) {
-            Log.w(TAG, "LLM 標點初始化失敗（退 CT-Transformer 標點）", t);
+        // v6.9.2: Smart primary on-device LLM is DISABLED (USE_LLM_PUNCT=false). It is the hang
+        // source on the Fold6 (nativeComplete had no timeout). We do NOT call llm.init(), so
+        // llm.isReady() stays false and the punctuation chain never invokes the native LLM.
+        if (USE_LLM_PUNCT) {
+            try {
+                llm.init();
+            } catch (Throwable t) {
+                Log.w(TAG, "LLM 標點初始化失敗（退 CT-Transformer 標點）", t);
+            }
+        } else {
+            Log.i(TAG, "LLM 標點已停用（USE_LLM_PUNCT=false）；標點僅用 CT-Transformer tagger");
         }
     }
 
@@ -90,14 +110,14 @@ public final class OnDeviceCorrectionEngine {
         return correctorReady && corrector != null;
     }
 
-    /** True once any punctuation source (LLM primary or CT-Transformer fallback) is available. */
+    /** True once any punctuation source is available. v6.9.2: LLM disabled, so this is the tagger. */
     public boolean isPunctuationReady() {
-        return llm.isReady() || punctuation.isReady();
+        return (USE_LLM_PUNCT && llm.isReady()) || punctuation.isReady();
     }
 
-    /** True once the smart (LLM) punctuator is loaded. */
+    /** v6.9.2: always false — the smart (LLM) punctuator is disabled (hang source on Fold6). */
     public boolean isSmartPunctuationReady() {
-        return llm.isReady();
+        return USE_LLM_PUNCT && llm.isReady();
     }
 
     public String correct(String senseVoiceText) {
@@ -117,7 +137,9 @@ public final class OnDeviceCorrectionEngine {
         OnDeviceCorrector c = corrector;
         if (c == null) return senseVoiceText;
         // Chain order = primary first. Only include ready punctuators; the chain skips nulls.
-        OnDeviceCorrector.Punctuator primary  = llm.isReady() ? llm : null;
+        // v6.9.2: the LLM primary is hard-disabled (USE_LLM_PUNCT=false) — it never enters the chain,
+        // so no path can invoke the hang-prone nativeComplete. Punctuation = CT-Transformer only.
+        OnDeviceCorrector.Punctuator primary  = (USE_LLM_PUNCT && llm.isReady()) ? llm : null;
         OnDeviceCorrector.Punctuator fallback = punctuation.isReady() ? punctuation : null;
         return c.correct(senseVoiceText, precedingContext, primary, fallback);
     }

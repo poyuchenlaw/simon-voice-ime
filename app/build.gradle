@@ -10,8 +10,8 @@ android {
         applicationId "com.simon.voiceime"
         minSdk 26
         targetSdk 34
-        versionCode 44
-        versionName "6.9.1"
+        versionCode 45
+        versionName "6.9.2"
 
         ndk {
             // v6.9: the LLM native runtime (llama.cpp + KleidiAI int4/int8 kernels) is arm64 only.
