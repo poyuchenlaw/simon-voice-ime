@@ -1,0 +1,105 @@
+[paraformer_legal.txt] DROP  陈柏钰	陈柏谕	# §37 name/proper-noun
+[paraformer_legal.txt] DROP  陈柏宇	陈柏谕	# §37 name/proper-noun
+[paraformer_legal.txt] DROP  陈伯谕	陈柏谕	# §37 name/proper-noun
+[paraformer_legal.txt] DROP  陈柏玉	陈柏谕	# §37 name/proper-noun
+[legal_dict_mishear.txt] DROP  陳柏瑜	陳柏諭	# §37 name/proper-noun
+[legal_dict_mishear.txt] DROP  陳柏愉	陳柏諭	# §37 name/proper-noun
+[legal_dict_mishear.txt] DROP  陳柏于	陳柏諭	# §37 name/proper-noun
+[legal_dict_mishear.txt] DROP  陳博諭	陳柏諭	# §37 name/proper-noun
+[legal_dict_mishear.txt] DROP  陳百諭	陳柏諭	# §37 name/proper-noun
+[legal_dict_mishear.txt] DROP  陳柏涵	陳柏翰	# §37 name/proper-noun
+[legal_dict_mishear.txt] DROP  陳柏含	陳柏翰	# §37 name/proper-noun
+[legal_dict_mishear.txt] DROP  陳柏寒	陳柏翰	# §37 name/proper-noun
+[legal_dict_mishear.txt] DROP  陳伯翰	陳柏翰	# §37 name/proper-noun
+[legal_dict_mishear.txt] DROP  廣鑫	廣信	# §37 name/proper-noun
+[legal_dict_mishear.txt] DROP  廣新	廣信	# §37 name/proper-noun
+[legal_dict_mishear.txt] DROP  廣欣	廣信	# §37 name/proper-noun
+[legal_dict_mishear.txt] DROP  光信	廣信	# §37 name/proper-noun
+[legal_dict_mishear.txt] DROP  千里	謙理	# §37 name/proper-noun
+[legal_dict_mishear.txt] DROP  前里	謙理	# §37 name/proper-noun
+[legal_dict_mishear.txt] DROP  遷理	謙理	# §37 name/proper-noun
+[legal_dict_mishear.txt] DROP  吳德宏	吳得宏	# §37 name/proper-noun
+[legal_dict_mishear.txt] DROP  吳的宏	吳得宏	# §37 name/proper-noun
+[legal_dict_mishear.txt] DROP  柏敏	柏閔	# §37 name/proper-noun
+[legal_dict_mishear.txt] DROP  柏民	柏閔	# §37 name/proper-noun
+[legal_dict_mishear.txt] DROP  百閔	柏閔	# §37 name/proper-noun
+[legal_dict_mishear.txt] DROP  蔡富宏	蔡富紘	# §37 name/proper-noun
+[legal_dict_mishear.txt] DROP  蔡富弘	蔡富紘	# §37 name/proper-noun
+[legal_dict_mishear.txt] DROP  蔡富洪	蔡富紘	# §37 name/proper-noun
+[legal_dict_mishear.txt] DROP  劉永駐	劉泳駐	# §37 name/proper-noun
+[legal_dict_mishear.txt] DROP  劉詠駐	劉泳駐	# §37 name/proper-noun
+[legal_dict_mishear.txt] DROP  劉泳柱	劉泳駐	# §37 name/proper-noun
+[legal_dict_mishear.txt] DROP  陳玫容	陳玫蓉	# §37 name/proper-noun
+[legal_dict_mishear.txt] DROP  陳美蓉	陳玫蓉	# §37 name/proper-noun
+[legal_dict_mishear.txt] DROP  陳梅蓉	陳玫蓉	# §37 name/proper-noun
+[legal_dict_mishear.txt] DROP  劉吉人	劉吉仁	# §37 name/proper-noun
+[legal_dict_mishear.txt] DROP  劉集仁	劉吉仁	# §37 name/proper-noun
+[legal_dict_mishear.txt] DROP  王一甄	王翊甄	# §37 name/proper-noun
+[legal_dict_mishear.txt] DROP  王億甄	王翊甄	# §37 name/proper-noun
+[legal_dict_mishear.txt] DROP  王依甄	王翊甄	# §37 name/proper-noun
+[legal_dict_mishear.txt] DROP  王翼甄	王翊甄	# §37 name/proper-noun
+[legal_dict_mishear.txt] DROP  旭欣科技	旭新科技	# §37 name/proper-noun
+[legal_dict_mishear.txt] DROP  續新科技	旭新科技	# §37 name/proper-noun
+[legal_dict_mishear.txt] DROP  緒新科技	旭新科技	# §37 name/proper-noun
+[legal_dict_mishear.txt] DROP  辣貝貝	辣杯杯	# §37 name/proper-noun
+[legal_dict_mishear.txt] DROP  辣被被	辣杯杯	# §37 name/proper-noun
+[legal_dict_mishear.txt] DROP  拉杯杯	辣杯杯	# §37 name/proper-noun
+[legal_dict_mishear.txt] DROP  旗兆	棨兆	# §37 name/proper-noun
+[legal_dict_mishear.txt] DROP  啟兆	棨兆	# §37 name/proper-noun
+[legal_dict_mishear.txt] DROP  其兆	棨兆	# §37 name/proper-noun
+[legal_dict_mishear.txt] DROP  齊兆	棨兆	# §37 name/proper-noun
+[protected_terms.txt] DROP  陳柏諭	# §37 name/proper-noun
+[protected_terms.txt] DROP  陳柏翰	# §37 name/proper-noun
+[protected_terms.txt] DROP  柏閔	# §37 name/proper-noun
+[protected_terms.txt] DROP  温柏閔	# §37 name/proper-noun
+[protected_terms.txt] DROP  芯宸	# §37 name/proper-noun
+[protected_terms.txt] DROP  吳得宏	# §37 name/proper-noun
+[protected_terms.txt] DROP  趙容	# §37 name/proper-noun
+[protected_terms.txt] DROP  吳勳忠	# §37 name/proper-noun
+[protected_terms.txt] DROP  蔡富紘	# §37 name/proper-noun
+[protected_terms.txt] DROP  劉昆山	# §37 name/proper-noun
+[protected_terms.txt] DROP  劉泳駐	# §37 name/proper-noun
+[protected_terms.txt] DROP  陳玫蓉	# §37 name/proper-noun
+[protected_terms.txt] DROP  劉吉仁	# §37 name/proper-noun
+[protected_terms.txt] DROP  陳鎮	# §37 name/proper-noun
+[protected_terms.txt] DROP  李沛欣	# §37 name/proper-noun
+[protected_terms.txt] DROP  鄭明岳	# §37 name/proper-noun
+[protected_terms.txt] DROP  王翊甄	# §37 name/proper-noun
+[protected_terms.txt] DROP  張政哲	# §37 name/proper-noun
+[protected_terms.txt] DROP  旭新科技	# §37 name/proper-noun
+[protected_terms.txt] DROP  鄭秀娟	# §37 name/proper-noun
+[protected_terms.txt] DROP  陳笛豪	# §37 name/proper-noun
+[protected_terms.txt] DROP  陳小梅	# §37 name/proper-noun
+[protected_terms.txt] DROP  陳明輝	# §37 name/proper-noun
+[protected_terms.txt] DROP  楊凱雯	# §37 name/proper-noun
+[protected_terms.txt] DROP  黃華駿	# §37 name/proper-noun
+[protected_terms.txt] DROP  洪茂松	# §37 name/proper-noun
+[protected_terms.txt] DROP  王浩	# §37 name/proper-noun
+[protected_terms.txt] DROP  劉元好	# §37 name/proper-noun
+[protected_terms.txt] DROP  劉建國	# §37 name/proper-noun
+[protected_terms.txt] DROP  伍芳儀	# §37 name/proper-noun
+[protected_terms.txt] DROP  孫國昌	# §37 name/proper-noun
+[protected_terms.txt] DROP  宋美姬	# §37 name/proper-noun
+[protected_terms.txt] DROP  林冠宇	# §37 name/proper-noun
+[protected_terms.txt] DROP  林志維	# §37 name/proper-noun
+[protected_terms.txt] DROP  林雅婷	# §37 name/proper-noun
+[protected_terms.txt] DROP  許哲維	# §37 name/proper-noun
+[protected_terms.txt] DROP  謝小蓁	# §37 name/proper-noun
+[protected_terms.txt] DROP  趙中勇	# §37 name/proper-noun
+[protected_terms.txt] DROP  邱瑞銘	# §37 name/proper-noun
+[protected_terms.txt] DROP  阮瑞源	# §37 name/proper-noun
+[protected_terms.txt] DROP  盧尚政	# §37 name/proper-noun
+[protected_terms.txt] DROP  陳泰源	# §37 name/proper-noun
+[protected_terms.txt] DROP  陳柏年	# §37 name/proper-noun
+[protected_terms.txt] DROP  王威傑	# §37 name/proper-noun
+[protected_terms.txt] DROP  顏歆時	# §37 name/proper-noun
+[protected_terms.txt] DROP  黃柏雅	# §37 name/proper-noun
+[protected_terms.txt] DROP  黃小兔	# §37 name/proper-noun
+[protected_terms.txt] DROP  蔡岳儒	# §37 name/proper-noun
+[protected_terms.txt] DROP  吳昱鋒	# §37 name/proper-noun
+[protected_terms.txt] DROP  廣信	# §37 name/proper-noun
+[protected_terms.txt] DROP  謙理	# §37 name/proper-noun
+[protected_terms.txt] DROP  辣杯杯	# §37 name/proper-noun
+[protected_terms.txt] DROP  棨兆	# §37 name/proper-noun
+[protected_terms.txt] DROP  東尚	# §37 name/proper-noun
+[protected_terms.txt] DROP  三本	# §37 name/proper-noun

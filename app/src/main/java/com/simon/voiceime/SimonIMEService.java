@@ -102,6 +102,8 @@ public class SimonIMEService extends InputMethodService {
     private LocalSTTHelper localSTT;
     private volatile boolean localSTTReady = false;
     private EnglishMapper englishMapper;
+    // v6.9: 端上 APPEND 確定性校正（簡→繁 + 法律術語 + 標點），省掉伺服器 round-trip。
+    private com.simon.voiceime.correct.OnDeviceCorrectionEngine onDeviceCorrection;
     private StreamingUploadHelper streamingUpload;
     private DataBackupHelper dataBackupHelper;
     private QwenHelper qwenHelper;
@@ -182,6 +184,15 @@ public class SimonIMEService extends InputMethodService {
         clipboardHelper = new ClipboardHelper(this);
         commandsHelper = new CommandsHelper(this);
         englishMapper = new EnglishMapper(this);
+        // v6.9: 端上 APPEND 校正引擎（資產字典即時可用；標點模型背景下載）
+        onDeviceCorrection = new com.simon.voiceime.correct.OnDeviceCorrectionEngine(this);
+        new Thread(() -> {
+            onDeviceCorrection.init();
+            if (onDeviceCorrection.isCorrectorReady()) {
+                mainHandler.post(() -> Log.i(TAG, "端上 APPEND 校正就緒"
+                        + (onDeviceCorrection.isPunctuationReady() ? "（含標點）" : "（標點待下載）")));
+            }
+        }, "OnDeviceCorrectInit").start();
         streamingUpload = new StreamingUploadHelper();
         dataBackupHelper = new DataBackupHelper(this);
         qwenHelper = new QwenHelper(this);
@@ -1272,10 +1283,32 @@ public class SimonIMEService extends InputMethodService {
                 if (spokenText != null && !spokenText.isEmpty()) {
                     spokenText = englishMapper.apply(spokenText);
                     final String finalText = spokenText;
-                    mainHandler.post(() -> updateStatus("辨識(" + sttMs + "ms)→校正中…"));
-                    // 文字（非音訊）走 gated /v1/process-text；該端點失敗時內部已 fallback，
-                    // 但連線層失敗只會更新狀態，故下方提供端上 commit 兜底。
-                    sendTextProcessOrCommitRaw(finalText, Mode.APPEND);
+                    // v6.9: 端上確定性校正（簡→繁 + 法律術語 + 標點）——校正引擎就緒時整段留在手機端，
+                    //       不再 round-trip 伺服器（省掉使用者感受到的 ~5s）。引擎未就緒/拋例外才退伺服器。
+                    if (onDeviceCorrection != null && onDeviceCorrection.isCorrectorReady()) {
+                        String corrected = null;
+                        try {
+                            long c0 = System.currentTimeMillis();
+                            corrected = onDeviceCorrection.correct(finalText);
+                            long corrMs = System.currentTimeMillis() - c0;
+                            Log.i(TAG, "[OnDeviceAppend] 端上校正耗時 " + corrMs + "ms"
+                                    + (onDeviceCorrection.isPunctuationReady() ? "（含標點）" : "（無標點）"));
+                        } catch (Throwable t) {
+                            Log.w(TAG, "[OnDeviceAppend] 端上校正拋例外，退回伺服器", t);
+                            corrected = null;
+                        }
+                        if (corrected != null && !corrected.isEmpty()) {
+                            commitAppendRaw(corrected, "");
+                        } else {
+                            // 端上校正空結果 → 退伺服器（仍只傳文字，音訊不離機）
+                            mainHandler.post(() -> updateStatus("辨識(" + sttMs + "ms)→校正中…"));
+                            sendTextProcessOrCommitRaw(finalText, Mode.APPEND);
+                        }
+                    } else {
+                        // 校正引擎尚未就緒（資產載入失敗極罕見）→ 伺服器文字路徑兜底。
+                        mainHandler.post(() -> updateStatus("辨識(" + sttMs + "ms)→校正中…"));
+                        sendTextProcessOrCommitRaw(finalText, Mode.APPEND);
+                    }
                 } else {
                     // §37: 快速模式（追⚡）的承諾＝音訊全程不離機。手機端辨識空結果時
                     //      「絕不」靜默上傳音訊兜底——改提示使用者重說，並指向唯一允許上傳
@@ -2563,6 +2596,9 @@ public class SimonIMEService extends InputMethodService {
         }
         if (localSTT != null) {
             localSTT.release();
+        }
+        if (onDeviceCorrection != null) {
+            onDeviceCorrection.release();
         }
         super.onDestroy();
     }
