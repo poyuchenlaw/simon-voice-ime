@@ -10,8 +10,8 @@ android {
         applicationId "com.simon.voiceime"
         minSdk 26
         targetSdk 34
-        versionCode 49
-        versionName "6.12-revert"
+        versionCode 50
+        versionName "6.13"
 
         ndk {
             abiFilters 'arm64-v8a', 'armeabi-v7a'
