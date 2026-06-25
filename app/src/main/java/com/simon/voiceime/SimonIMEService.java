@@ -1371,10 +1371,11 @@ public class SimonIMEService extends InputMethodService {
                             mainHandler.post(() -> updateStatus("辨識(" + sttMs + "ms)→校正中…"));
                             sendTextProcessOrCommitRaw(finalText, Mode.APPEND);
                         } else {
-                            // 正常：預算內取得校正文字 → commit。
+                            // v6.10: 端上已做確定性字元校正(walled，離線/逾時 fallback)；線上向伺服器拿語意標點。
                             Log.i(TAG, "[OnDeviceAppend] 端上校正耗時 " + corrMs + "ms"
-                                    + (onDeviceCorrection.isPunctuationReady() ? "（標點）" : "（無標點）"));
-                            commitAppendRaw(walled, "");
+                                    + (onDeviceCorrection.isPunctuationReady() ? "（標點）" : "（無標點）")
+                                    + " → 送智慧標點");
+                            sendSmartPunctuateAndCommit(finalText, walled, corrMs);
                         }
                     } else {
                         // 校正引擎尚未就緒（資產載入失敗極罕見）→ 伺服器文字路徑兜底。
@@ -1968,6 +1969,99 @@ public class SimonIMEService extends InputMethodService {
                 } else {
                     // 空結果/錯誤 → 退回原始文字
                     commitAppendRaw(raw, "（未校正）");
+                }
+            }
+        });
+    }
+
+    /**
+     * v6.10: 端上確定性校正後，向 ime-correct 服務（port 8002）拿語意標點。
+     * 端上文字 walled 為離線/逾時 fallback，保證任何路徑都恰好 commit 一次。
+     *
+     * @param rawForServer 傳給伺服器的原始辨識文字（未做確定性校正，讓服務自己做 dict+punct）
+     * @param fallbackText 端上確定性校正結果（fallback 用）
+     * @param corrMs       端上校正耗時（僅用於 Log）
+     */
+    private void sendSmartPunctuateAndCommit(String rawForServer, String fallbackText, long corrMs) {
+        // 推導 ime-correct URL：取 getServerUrl() 的 scheme+host，把 port 換成 8002。
+        // getServerUrl() 回傳形如 "http://100.84.86.128:8001"（可能有或沒有明確 port）。
+        String baseUrl = getServerUrl();
+        String imeCorrectBaseUrl;
+        // 用 URI 解析，穩健替換 port。
+        try {
+            java.net.URI uri = new java.net.URI(baseUrl);
+            int existingPort = uri.getPort(); // -1 if absent
+            if (existingPort > 0) {
+                // 有明確 port → 替換
+                imeCorrectBaseUrl = baseUrl.replaceFirst(":" + existingPort, ":8002");
+            } else {
+                // 無明確 port → 直接附加 :8002（在路徑之前）
+                String authority = uri.getHost();
+                imeCorrectBaseUrl = uri.getScheme() + "://" + authority + ":8002";
+            }
+        } catch (Exception e) {
+            // URI 解析失敗極罕見 → 直接字串替換最後一個 port 段，或附加
+            Log.w(TAG, "[SmartPunct] URI parse failed, using string fallback", e);
+            imeCorrectBaseUrl = baseUrl.replaceAll(":\\d+$", "") + ":8002";
+        }
+
+        final String targetUrl = imeCorrectBaseUrl + "/v1/ime-correct";
+        final String fb = (fallbackText != null && !fallbackText.isEmpty()) ? fallbackText : rawForServer;
+
+        // 建立帶 1.5s 逾時的 per-call client（不影響全域 httpClient 設定）。
+        OkHttpClient timedClient = httpClient.newBuilder()
+                .connectTimeout(1500, TimeUnit.MILLISECONDS)
+                .readTimeout(1500, TimeUnit.MILLISECONDS)
+                .writeTimeout(1500, TimeUnit.MILLISECONDS)
+                .build();
+
+        // POST {"text": rawForServer} as application/json。
+        String jsonBody = "{\"text\":" + org.json.JSONObject.quote(rawForServer) + "}";
+        RequestBody body = RequestBody.create(
+                jsonBody,
+                MediaType.get("application/json; charset=utf-8"));
+
+        Request.Builder reqBuilder = new Request.Builder()
+                .url(targetUrl)
+                .post(body);
+
+        String auth = getAuthPassword();
+        if (auth != null && !auth.isEmpty()) {
+            reqBuilder.addHeader("Authorization", "Bearer " + auth);
+        }
+
+        Log.i(TAG, "[SmartPunct] POST " + targetUrl + "（端上 " + corrMs + "ms，fallback=" + truncate(fb, 15) + "）");
+
+        timedClient.newCall(reqBuilder.build()).enqueue(new Callback() {
+            @Override
+            public void onFailure(@NonNull Call call, @NonNull IOException e) {
+                // 連線失敗/逾時 → commit 端上 fallback，使用者不卡。
+                Log.w(TAG, "[SmartPunct] 連線失敗，commit fallback: " + e.getMessage());
+                commitAppendRaw(fb, "");
+            }
+
+            @Override
+            public void onResponse(@NonNull Call call, @NonNull Response response) throws IOException {
+                String serverText = null;
+                try {
+                    String responseBody = response.body() != null ? response.body().string() : "";
+                    if (response.isSuccessful()) {
+                        org.json.JSONObject json = new org.json.JSONObject(responseBody);
+                        String t = json.optString("text", "").trim();
+                        if (!t.isEmpty()) serverText = t;
+                        Log.i(TAG, "[SmartPunct] 伺服器回傳 " + response.code()
+                                + "，text=" + truncate(t, 20));
+                    } else {
+                        Log.w(TAG, "[SmartPunct] 伺服器非 200: " + response.code() + "，commit fallback");
+                    }
+                } catch (Exception e) {
+                    Log.w(TAG, "[SmartPunct] 回應解析錯誤，commit fallback", e);
+                }
+                if (serverText != null) {
+                    commitAppendRaw(serverText, "（智慧標點）");
+                } else {
+                    // 非 200 / 空結果 / 解析錯誤 → commit fallback。
+                    commitAppendRaw(fb, "");
                 }
             }
         });
