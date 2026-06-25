@@ -2032,39 +2032,39 @@ public class SimonIMEService extends InputMethodService {
 
         Log.i(TAG, "[SmartPunct] POST " + targetUrl + "（端上 " + corrMs + "ms，fallback=" + truncate(fb, 15) + "）");
 
-        timedClient.newCall(reqBuilder.build()).enqueue(new Callback() {
-            @Override
-            public void onFailure(@NonNull Call call, @NonNull IOException e) {
-                // 連線失敗/逾時 → commit 端上 fallback，使用者不卡。
-                Log.w(TAG, "[SmartPunct] 連線失敗，commit fallback: " + e.getMessage());
-                commitAppendRaw(fb, "");
-            }
-
-            @Override
-            public void onResponse(@NonNull Call call, @NonNull Response response) throws IOException {
-                String serverText = null;
-                try {
-                    String responseBody = response.body() != null ? response.body().string() : "";
-                    if (response.isSuccessful()) {
-                        org.json.JSONObject json = new org.json.JSONObject(responseBody);
-                        String t = json.optString("text", "").trim();
-                        if (!t.isEmpty()) serverText = t;
-                        Log.i(TAG, "[SmartPunct] 伺服器回傳 " + response.code()
-                                + "，text=" + truncate(t, 20));
-                    } else {
-                        Log.w(TAG, "[SmartPunct] 伺服器非 200: " + response.code() + "，commit fallback");
-                    }
-                } catch (Exception e) {
-                    Log.w(TAG, "[SmartPunct] 回應解析錯誤，commit fallback", e);
-                }
-                if (serverText != null) {
-                    commitAppendRaw(serverText, "（智慧標點）");
+        // v6.10.1: 同步執行（此方法已在 OnDeviceAppend 背景執行緒，非 UI 緒，允許阻塞）。
+        // 恢復 v6.9.2 的單次同步 commit 時序，修「預覽列卡住 + 第 2 次輸入空白」bug。
+        String serverText = null;
+        try (Response response = timedClient.newCall(reqBuilder.build()).execute()) {
+            try {
+                String responseBody = response.body() != null ? response.body().string() : "";
+                if (response.isSuccessful()) {
+                    org.json.JSONObject json = new org.json.JSONObject(responseBody);
+                    String t = json.optString("text", "").trim();
+                    if (!t.isEmpty()) serverText = t;
+                    Log.i(TAG, "[SmartPunct] 伺服器回傳 " + response.code()
+                            + "，text=" + truncate(t, 20));
                 } else {
-                    // 非 200 / 空結果 / 解析錯誤 → commit fallback。
-                    commitAppendRaw(fb, "");
+                    Log.w(TAG, "[SmartPunct] 伺服器非 200: " + response.code() + "，commit fallback");
                 }
+            } catch (Exception e) {
+                Log.w(TAG, "[SmartPunct] 回應解析錯誤，commit fallback", e);
             }
-        });
+        } catch (Exception e) {
+            // 連線失敗/逾時 → serverText 維持 null，下方統一走 fallback。
+            Log.w(TAG, "[SmartPunct] 連線失敗，commit fallback: " + e.getMessage());
+        }
+
+        // 統一 commit：只此一次，成功用伺服器文字，失敗用 fallback。
+        final String textToCommit = (serverText != null) ? serverText : fb;
+        final String labelSuffix = (serverText != null) ? "（智慧標點）" : "";
+        commitAppendRaw(textToCommit, labelSuffix);
+
+        // v6.10.1 lifecycle fix: commit 後清預覽列並重置段落累積，下一次口述乾淨起步。
+        mainHandler.post(() -> updatePreviewStrip(""));
+        synchronized (onDeviceAppendPreviewLock) {
+            onDeviceAppendPreviewSegments.clear();
+        }
     }
 
     /** v6.8: 在主執行緒一次性 commit APPEND 結果並更新狀態列。 */
