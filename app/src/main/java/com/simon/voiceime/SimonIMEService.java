@@ -151,9 +151,9 @@ public class SimonIMEService extends InputMethodService {
     private Runnable longPressRunnable;
     private Runnable pendingFinalizeRunnable;  // v5.3: 延遲 finalize
     private static final long LONG_PRESS_THRESHOLD = 500;
-    // v6.2: 收尾 grace（放手後等多久才送 finalize；原 1000ms，Simon 要求縮短加速→400ms）
-    // v6.5 (C2): 400→650ms 捕捉放手瞬間仍在說的尾音（搭配伺服器 ASR_TAIL_PAD 尾端補靜音讓 ASR 吐出最後 token）；非還原 1000ms
-    private static final long FINALIZE_DELAY_MS = 650;
+    // v6.14: APPEND now flushes audio while speaking every ~2s, so the release tail is small.
+    // Keep a short grace for final syllables without adding a full post-stop second.
+    private static final long FINALIZE_DELAY_MS = 400;
 
     // Backspace repeat acceleration
     private boolean backspacePressed = false;
@@ -824,7 +824,7 @@ public class SimonIMEService extends InputMethodService {
             final int SILENCE_MS_TO_SPLIT = 500;
             final int SILENCE_BYTES_TO_SPLIT = SILENCE_MS_TO_SPLIT * BYTES_PER_MS; // 16000 bytes = 500ms
             final int MIN_CHUNK_BYTES = 32000;  // 最小 1 秒才送（避免 Whisper 幻覺）
-            final int MAX_CHUNK_BYTES = 160000; // 最大 5 秒強制送（避免無限累積）
+            final int MAX_CHUNK_BYTES = 48000;  // v6.14: 最大 1.5 秒強制送，讓 GB10 在說話中先解碼
             // v5.4: 跳過前 400ms 音訊（避免按鈕點擊聲干擾 STT）
             final int SKIP_INITIAL_BYTES = 12800; // 400ms @ 16kHz 16-bit mono
             int totalBytesRead = 0;
@@ -867,7 +867,7 @@ public class SimonIMEService extends InputMethodService {
                         }
 
                         int bufSize = pcmBuffer.size();
-                        // 送出條件：(停頓 ≥500ms deterministic 且累積 ≥1s) 或 (累積 ≥5s 強制送)
+                        // 送出條件：(停頓 ≥500ms deterministic 且累積 ≥1s) 或 (累積 ≥1.5s 強制送)
                         boolean pauseDetected = silentBytes >= SILENCE_BYTES_TO_SPLIT && bufSize >= MIN_CHUNK_BYTES;
                         boolean forceFlush = bufSize >= MAX_CHUNK_BYTES;
 
