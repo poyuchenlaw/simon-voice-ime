@@ -122,6 +122,8 @@ public class SimonIMEService extends InputMethodService {
     private volatile boolean onDeviceAppendPreviewEnabled = false;
     private final Object onDeviceAppendPreviewLock = new Object();
     private final List<String> onDeviceAppendPreviewSegments = new ArrayList<>();
+    private final java.util.concurrent.atomic.AtomicBoolean onDeviceAppendInFlight =
+            new java.util.concurrent.atomic.AtomicBoolean(false);
 
     // v6.1: 全程保留整段音訊 → WS 失敗 / final 為空時做一次「乾淨重轉錄」(有標點、走伺服器校正)，
     //       絕不再把無標點的串流預覽倒進輸入框。streamFailed = WS 中途斷線旗標。
@@ -861,6 +863,11 @@ public class SimonIMEService extends InputMethodService {
     // ==================== Recording ====================
 
     private void startRecording() {
+        if (!isRecording && currentMode == Mode.APPEND && onDeviceAppendInFlight.get()) {
+            updateStatus("上一段處理中，請稍候");
+            return;
+        }
+
         if (isRecording) {
             // v5.4.1: tap-toggle 停止也走延遲（和 handleTouchUp 一致）
             // v6.8: 快速模式（無 WS）同樣延遲，避免尾音被切。
@@ -893,6 +900,7 @@ public class SimonIMEService extends InputMethodService {
             return;
         }
 
+        resetOnDeviceAppendState(true);
         pcmBuffer = new ByteArrayOutputStream();
         fullPcmBuffer = new ByteArrayOutputStream();  // v6.1: 整段音訊保留供乾淨 fallback
         streamFailed = false;
@@ -1260,11 +1268,10 @@ public class SimonIMEService extends InputMethodService {
             updateStatus("辨識中...");
         });
 
-        // v6.8: APPEND 快速模式（預設）——音訊全程留在手機端，從不上傳。
-        //       手機端 SenseVoice 辨識整段 → 只傳「文字」到 gated /v1/process-text 做標點+術語校正。
-        //       校正失敗/逾時 → 直接 commit 原始手機端文字（永不阻塞使用者）。
-        //       手機端辨識空結果 → 退回伺服器音訊路徑（離線/品質兜底）。
-        //       此分支放在所有 WS 收尾邏輯之前；快速模式下 audioStreamWs 本就為 null。
+        // v6.11: APPEND 快速模式（預設）——音訊全程留在手機端，從不上傳。
+        //        停止錄音後只做一次完整 PCM 單次辨識，不再讀 VAD preview segments。
+        //        只傳「文字」到 :8002 /v1/ime-correct；伺服器失敗則 commit 原始手機端文字。
+        //        空白/filler/junk 不 commit，並完整清掉預覽、segments、PCM、in-flight 狀態。
         if (currentMode == Mode.APPEND && !shouldUploadAppendAudio() && localSTTReady) {
             // pcmBuffer 在快速模式從未被 mid-stream reset（無 WS chunk），pcmData 即整段音訊。
             final byte[] appendPcm = pcmData;
@@ -1275,123 +1282,11 @@ public class SimonIMEService extends InputMethodService {
                 });
                 return;
             }
-            new Thread(() -> {
-                long t0 = System.currentTimeMillis();
-                // v6.9.1 修復：停止錄音時「不再」對整段音訊重跑單次辨識（單次全段辨識會退化、
-                //   且與 segmentExecutor 上尚未完成的分段辨識在「同一個非執行緒安全的 recognizer」
-                //   上競爭 → 產出「嗯」之類垃圾 → 被 OnDeviceCorrector 當填充詞刪光 → 退伺服器 →
-                //   離線時 commit「嗯（未校正）」）。
-                //   改用「預覽列已顯示、實測正確」的分段累積文字：先 flush VAD 收尾段＋等所有
-                //   pending 分段辨識完成，再取去重串接結果。空（如預覽未啟用/VAD 未就緒）才退單次辨識。
-                String spokenText = null;
-                // 預覽 segments 內的文字「已經」過 englishMapper（在 appendPreviewSegment 內），
-                // 後備單次辨識路徑才需要再 map；用此旗標避免對預覽文字重複映射。
-                boolean spokenFromPreview = false;
-                try {
-                    if (localSTT.isStreamingReady()) {
-                        // 收尾：把 VAD 緩衝區殘留語音刷成最後一段，累積進預覽 segments。
-                        localSTT.flushVad(seg -> appendPreviewSegment(seg));
-                        // 等 segmentExecutor 上所有 SenseVoice 分段辨識完成（最多 5s）。
-                        localSTT.waitForPendingSegments();
-                    }
-                    String preview = currentAppendPreviewText();
-                    if (preview != null && !preview.isEmpty()) {
-                        spokenText = preview;
-                        spokenFromPreview = true;
-                        Log.i(TAG, "[OnDeviceAppend] 用分段累積文字（預覽）: '" + spokenText + "'");
-                    }
-                } catch (Throwable t) {
-                    Log.w(TAG, "[OnDeviceAppend] 取分段累積文字失敗，退單次辨識", t);
-                    spokenText = null;
-                    spokenFromPreview = false;
-                }
-                // 後備：預覽文字為空（預覽未啟用 / VAD 未就緒 / flush 失敗）→ 單次全段辨識。
-                if (spokenText == null || spokenText.isEmpty()) {
-                    spokenText = localSTT.recognize(appendPcm, SAMPLE_RATE);
-                    spokenFromPreview = false;
-                    Log.i(TAG, "[OnDeviceAppend] 後備單次辨識: '" + spokenText + "'");
-                }
-                long sttMs = System.currentTimeMillis() - t0;
-                Log.i(TAG, "[OnDeviceAppend] 辨識耗時 " + sttMs + "ms: '" + spokenText + "'");
-                if (spokenText != null && !spokenText.isEmpty()) {
-                    // 預覽路徑已映射過，不重複；只有後備單次辨識才 map。
-                    if (!spokenFromPreview) {
-                        spokenText = englishMapper.apply(spokenText);
-                    }
-                    final String finalText = spokenText;
-                    // v6.9: 端上確定性校正（簡→繁 + 法律術語 + 標點）——校正引擎就緒時整段留在手機端，
-                    //       不再 round-trip 伺服器（省掉使用者感受到的 ~5s）。引擎未就緒/拋例外才退伺服器。
-                    if (onDeviceCorrection != null && onDeviceCorrection.isCorrectorReady()) {
-                        // 前文：游標前已輸入的文字，給端上標點當上下文，讓接縫處標點正確。
-                        // 在背景執行緒讀 InputConnection 可能回 null，全程容錯。
-                        String pc = "";
-                        try {
-                            InputConnection icCtx = getCurrentInputConnection();
-                            if (icCtx != null) {
-                                CharSequence before = icCtx.getTextBeforeCursor(60, 0);
-                                if (before != null) pc = before.toString();
-                            }
-                        } catch (Throwable ignored) {}
-                        final String precedingContext = pc;
-                        // ============================================================================
-                        // v6.9.2 HARD TIMEOUT WALL — the GUARANTEE.
-                        //
-                        // 不變式：一旦 on-device APPEND 取得「非空的預覽/辨識文字」（finalText），
-                        // 就「一定」會在 ~2 秒內 commit 出某段文字，絕不靜默卡死。
-                        //
-                        // why：v6.9.1 在實機 Fold6 上，端上校正裡的 LLM 標點 nativeComplete（llama.cpp）
-                        // 在模型下載完成後會「永久卡住」、又沒有 timeout → onDeviceCorrection.correct(...)
-                        // 永遠不返回 → 什麼都沒 commit（狀態凍在「辨識中」）。v6.9.2 已停用 LLM 標點，但
-                        // 這道牆是「與任何模型行為無關」的硬保證：把可能 block 的校正丟到單執行緒 worker，
-                        // future.get(2000ms)；超時就「直接 commit 使用者已經看到的預覽文字」（未校正、但
-                        // 一定有字）並放生 worker（不等它）。因為「直接 commit 預覽文字」永遠可行（🎯
-                        // 模式已證明 commitText 正常），這個保證不依賴校正/模型是否會返回。
-                        // ============================================================================
-                        // 用 sentinel 區分「超時/例外」(=> 直接 commit 預覽) 與「正常空結果」(=> 退伺服器)。
-                        final String TIMEOUT_SENTINEL = " __ODC_TIMEOUT__ ";
-                        long c0 = System.currentTimeMillis();
-                        String walled = com.simon.voiceime.correct.TimeoutWall.runWithBudget(
-                                () -> {
-                                    String r = onDeviceCorrection.correct(finalText, precedingContext);
-                                    // worker 內任何結果都包成非空字串，讓 TimeoutWall 只在「真超時/例外」
-                                    // 才回 fallback(sentinel)；正常空結果用 EMPTY 標記，外層改退伺服器。
-                                    return (r == null || r.isEmpty()) ? " __ODC_EMPTY__ " : r;
-                                },
-                                TIMEOUT_SENTINEL, 2000L);
-                        long corrMs = System.currentTimeMillis() - c0;
-                        if (TIMEOUT_SENTINEL.equals(walled)) {
-                            // 超時（或 worker 例外）→ 硬保證：直接 commit 使用者已看到的預覽文字（未校正）。
-                            // 絕不退伺服器（伺服器慢、且本支線承諾 ~2s 內一定 commit）。worker 已被放生。
-                            Log.w(TAG, "[OnDeviceAppend] 端上校正逾時 " + corrMs
-                                    + "ms（>2000ms）→ 直接 commit 預覽文字（未校正）");
-                            commitAppendRaw(finalText, "（未校正）");
-                        } else if (" __ODC_EMPTY__ ".equals(walled)) {
-                            // 校正在預算內回空結果（罕見，finalText 非空）→ 退伺服器文字路徑（音訊不離機）。
-                            Log.i(TAG, "[OnDeviceAppend] 端上校正空結果（" + corrMs + "ms）→ 退伺服器");
-                            mainHandler.post(() -> updateStatus("辨識(" + sttMs + "ms)→校正中…"));
-                            sendTextProcessOrCommitRaw(finalText, Mode.APPEND);
-                        } else {
-                            // v6.10: 端上已做確定性字元校正(walled，離線/逾時 fallback)；線上向伺服器拿語意標點。
-                            Log.i(TAG, "[OnDeviceAppend] 端上校正耗時 " + corrMs + "ms"
-                                    + (onDeviceCorrection.isPunctuationReady() ? "（標點）" : "（無標點）")
-                                    + " → 送智慧標點");
-                            sendSmartPunctuateAndCommit(finalText, walled, corrMs);
-                        }
-                    } else {
-                        // 校正引擎尚未就緒（資產載入失敗極罕見）→ 伺服器文字路徑兜底。
-                        mainHandler.post(() -> updateStatus("辨識(" + sttMs + "ms)→校正中…"));
-                        sendTextProcessOrCommitRaw(finalText, Mode.APPEND);
-                    }
-                } else {
-                    // §37: 快速模式（追⚡）的承諾＝音訊全程不離機。手機端辨識空結果時
-                    //      「絕不」靜默上傳音訊兜底——改提示使用者重說，並指向唯一允許上傳
-                    //      音訊的逃生口：長按模式鍵切到 🎯 高精確（會走伺服器）。
-                    mainHandler.post(() -> {
-                        updatePreviewStrip("");
-                        updateStatus("🤔 沒聽清楚，再說一次（長按模式鍵可切 🎯 高精確，會用伺服器）");
-                    });
-                }
-            }, "OnDeviceAppend").start();
+            if (!onDeviceAppendInFlight.compareAndSet(false, true)) {
+                mainHandler.post(() -> updateStatus("上一段處理中，請稍候"));
+                return;
+            }
+            new Thread(() -> processOnDeviceAppendSingleShot(appendPcm), "OnDeviceAppend-v611").start();
             return;
         }
 
@@ -1543,21 +1438,51 @@ public class SimonIMEService extends InputMethodService {
     }
 
     /**
-     * v6.4: 啟用 APPEND 手機端即時預覽。只影響 previewText，不參與 final/commit。
+     * v6.11: APPEND fast path is intentionally single-source:
+     * stop recording -> one synchronized SenseVoice decode over the full PCM -> optional 8002 text
+     * correction -> one commit -> full cleanup. Local VAD preview/segments are not part of this path.
+     */
+    private void processOnDeviceAppendSingleShot(byte[] appendPcm) {
+        long t0 = System.currentTimeMillis();
+        try {
+            if (localSTT != null && localSTT.isStreamingReady()) {
+                localSTT.waitForPendingSegments(1200);
+            }
+            resetOnDeviceAppendState(true);
+            String spokenText = localSTT.recognize(appendPcm, SAMPLE_RATE);
+            long sttMs = System.currentTimeMillis() - t0;
+            Log.i(TAG, "[OnDeviceAppend-v6.11] single-shot STT " + sttMs + "ms: '"
+                    + spokenText + "'");
+
+            if (spokenText != null && !spokenText.isEmpty()) {
+                spokenText = englishMapper.apply(spokenText);
+            }
+
+            if (isAppendJunkText(spokenText)) {
+                Log.i(TAG, "[OnDeviceAppend-v6.11] empty/filler result suppressed: '"
+                        + spokenText + "'");
+                finishOnDeviceAppendWithoutCommit("🤔 沒聽清楚，再說一次");
+                return;
+            }
+
+            final String finalText = spokenText.trim();
+            mainHandler.post(() -> updateStatus("辨識(" + sttMs + "ms)→校正中…"));
+            sendSmartPunctuateAndCommit(finalText, finalText, sttMs);
+        } catch (Throwable t) {
+            Log.e(TAG, "[OnDeviceAppend-v6.11] failed", t);
+            finishOnDeviceAppendWithoutCommit("辨識失敗，請再試一次");
+        }
+    }
+
+    /**
+     * v6.11: fast APPEND no longer feeds LocalSTT VAD preview. Preview segments were a second
+     * mutable STT path sharing the same native recognizer and were the source of cross-utterance
+     * lifecycle bugs. High-accuracy APPEND still has server WebSocket chunk preview.
      */
     private void prepareOnDeviceAppendPreview() {
-        synchronized (onDeviceAppendPreviewLock) {
-            onDeviceAppendPreviewSegments.clear();
-        }
-        onDeviceAppendPreviewEnabled = currentMode == Mode.APPEND
-                && localSTTReady
-                && localSTT != null
-                && localSTT.isStreamingReady();
-        if (onDeviceAppendPreviewEnabled) {
-            localSTT.resetStreamingState();
-            Log.i(TAG, "[OnDevicePreview] enabled for APPEND");
-        } else if (currentMode == Mode.APPEND) {
-            Log.i(TAG, "[OnDevicePreview] unavailable; WS chunk preview remains fallback");
+        resetOnDeviceAppendState(true);
+        if (currentMode == Mode.APPEND) {
+            Log.i(TAG, "[OnDevicePreview] disabled by v6.11 single-shot APPEND flow");
         }
     }
 
@@ -2055,30 +1980,73 @@ public class SimonIMEService extends InputMethodService {
             Log.w(TAG, "[SmartPunct] 連線失敗，commit fallback: " + e.getMessage());
         }
 
-        // 統一 commit：只此一次，成功用伺服器文字，失敗用 fallback。
+        // 統一 commit：成功用伺服器文字，失敗用 fallback；若兩者只剩 filler/空白則不 commit。
         final String textToCommit = (serverText != null) ? serverText : fb;
+        if (isAppendJunkText(textToCommit)) {
+            Log.i(TAG, "[SmartPunct] server/fallback produced empty filler; suppress commit");
+            finishOnDeviceAppendWithoutCommit("🤔 沒聽清楚，再說一次");
+            return;
+        }
         final String labelSuffix = (serverText != null) ? "（智慧標點）" : "";
         commitAppendRaw(textToCommit, labelSuffix);
-
-        // v6.10.1 lifecycle fix: commit 後清預覽列並重置段落累積，下一次口述乾淨起步。
-        mainHandler.post(() -> updatePreviewStrip(""));
-        synchronized (onDeviceAppendPreviewLock) {
-            onDeviceAppendPreviewSegments.clear();
-        }
     }
 
     /** v6.8: 在主執行緒一次性 commit APPEND 結果並更新狀態列。 */
     private void commitAppendRaw(String text, String suffix) {
-        if (text == null || text.isEmpty()) return;
+        if (text == null || text.isEmpty()) {
+            finishOnDeviceAppendWithoutCommit("未辨識到文字");
+            return;
+        }
         mainHandler.post(() -> {
-            InputConnection ic = getCurrentInputConnection();
-            if (ic != null) {
-                ic.commitText(text, 1);
-                updateStatus(truncate(text, 20) + suffix);
-            } else {
-                updateStatus("未辨識到文字");
+            try {
+                InputConnection ic = getCurrentInputConnection();
+                if (ic != null) {
+                    ic.commitText(text, 1);
+                    updateStatus(truncate(text, 20) + suffix);
+                } else {
+                    updateStatus("未辨識到文字");
+                }
+            } finally {
+                resetOnDeviceAppendState(false);
+                onDeviceAppendInFlight.set(false);
             }
         });
+    }
+
+    private void finishOnDeviceAppendWithoutCommit(String status) {
+        mainHandler.post(() -> {
+            resetOnDeviceAppendState(false);
+            onDeviceAppendInFlight.set(false);
+            updateStatus(status);
+        });
+    }
+
+    private void resetOnDeviceAppendState(boolean resetVad) {
+        onDeviceAppendPreviewEnabled = false;
+        synchronized (onDeviceAppendPreviewLock) {
+            onDeviceAppendPreviewSegments.clear();
+        }
+        streamedChunks.clear();
+        synchronized (streamChunkTexts) {
+            streamChunkTexts.clear();
+        }
+        updatePreviewStrip("");
+        if (resetVad && localSTT != null && localSTT.isStreamingReady()) {
+            localSTT.resetStreamingState();
+        }
+        if (!isRecording) {
+            pcmBuffer = null;
+            fullPcmBuffer = null;
+        }
+    }
+
+    private static boolean isAppendJunkText(String text) {
+        if (text == null) return true;
+        String compact = text.trim().replaceAll("[\\s，。？！；、,.!?;:「」『』（）()【】\\[\\]…—\\-]+", "");
+        if (compact.isEmpty()) return true;
+        return compact.matches("(嗯|呃|痾|啊|欸|誒|喔|哦)+")
+                || "字的字".equals(compact)
+                || "的字".equals(compact);
     }
 
     private void sendTextReplace(String spokenText, String beforeCursor, String afterCursor) {
