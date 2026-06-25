@@ -84,14 +84,6 @@ public class LocalSTTHelper {
     private OfflineRecognizer offlineRecognizer;
     private Vad vad;
 
-    // v6.9.1: the AAR's OfflineRecognizer.decode() is NOT synchronized (verified by
-    // javap on sherpa-onnx-1.12.28.aar: it calls native decode(JJ)V on the shared ptr
-    // with no lock). Segment recognitions run on segmentExecutor while a single-shot
-    // recognize() may fire from the stop thread → two threads decode on the ONE shared
-    // recognizer concurrently. Guard every createStream/decode/getResult with this lock
-    // so they never overlap on the shared native recognizer (defense-in-depth).
-    private final Object recognizerLock = new Object();
-
     // State
     private volatile boolean offlineReady = false;
     private volatile boolean vadReady = false;
@@ -506,20 +498,11 @@ public class LocalSTTHelper {
     }
 
     /**
-     * 等待所有 pending SenseVoice 段落處理完成。
-     *
-     * <p>v6.9.2: 預設上限自 5s 降到 1.2s，避免停止錄音時的等待主宰整段 stop-time pipeline。
-     * 使用者在錄音過程中「已經」看到預覽列即時累積這些分段文字，所以即使少數尾段尚未 decode 完，
-     * commit 已顯示的預覽文字也不會丟字；真正的硬保證在 SimonIMEService 的 ~2s 整體 timeout wall。
+     * 等待所有 pending SenseVoice 段落處理完成（最多 5 秒）。
      */
     public void waitForPendingSegments() {
-        waitForPendingSegments(1200);
-    }
-
-    /** 等待所有 pending SenseVoice 段落完成，最多 {@code maxWaitMs} 毫秒。 */
-    public void waitForPendingSegments(long maxWaitMs) {
         if (pendingSegments.get() == 0) return;
-        long deadline = System.currentTimeMillis() + Math.max(0, maxWaitMs);
+        long deadline = System.currentTimeMillis() + 5000;
         while (pendingSegments.get() > 0 && System.currentTimeMillis() < deadline) {
             try { Thread.sleep(50); } catch (InterruptedException ignored) { break; }
         }
@@ -549,23 +532,17 @@ public class LocalSTTHelper {
 
     private String recognizeOffline(float[] samples, int sampleRate) {
         if (!offlineReady || offlineRecognizer == null) return "";
-        // v6.9.1: serialize createStream/decode/getResult on the shared recognizer.
-        // The native OfflineRecognizer is not thread-safe; without this, a stop-time
-        // single-shot can race still-pending segment decodes on segmentExecutor.
-        synchronized (recognizerLock) {
-            if (!offlineReady || offlineRecognizer == null) return "";
-            try {
-                OfflineStream stream = offlineRecognizer.createStream();
-                stream.acceptWaveform(samples, sampleRate);
-                offlineRecognizer.decode(stream);
-                OfflineRecognizerResult result = offlineRecognizer.getResult(stream);
-                String text = result != null ? result.getText() : "";
-                if (text != null) text = text.trim();
-                return text != null ? text : "";
-            } catch (Exception e) {
-                Log.e(TAG, "SenseVoice decode failed", e);
-                return "";
-            }
+        try {
+            OfflineStream stream = offlineRecognizer.createStream();
+            stream.acceptWaveform(samples, sampleRate);
+            offlineRecognizer.decode(stream);
+            OfflineRecognizerResult result = offlineRecognizer.getResult(stream);
+            String text = result != null ? result.getText() : "";
+            if (text != null) text = text.trim();
+            return text != null ? text : "";
+        } catch (Exception e) {
+            Log.e(TAG, "SenseVoice decode failed", e);
+            return "";
         }
     }
 

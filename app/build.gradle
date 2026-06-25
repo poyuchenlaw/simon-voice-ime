@@ -10,30 +10,11 @@ android {
         applicationId "com.simon.voiceime"
         minSdk 26
         targetSdk 34
-        versionCode 48
-        versionName "6.11"
+        versionCode 49
+        versionName "6.12-revert"
 
         ndk {
-            // v6.9: the LLM native runtime (llama.cpp + KleidiAI int4/int8 kernels) is arm64 only.
-            // Dropped armeabi-v7a — every modern device (incl. the target Fold6) is arm64-v8a and
-            // Google Play already requires 64-bit; building llama.cpp for v7a would add large build
-            // cost for zero real-world coverage.
-            abiFilters 'arm64-v8a'
-        }
-
-        externalNativeBuild {
-            cmake {
-                // NOTE: do NOT pass -fno-rtti — llama.cpp uses dynamic_cast and requires RTTI.
-                arguments '-DANDROID_STL=c++_static'
-                cppFlags '-std=c++17', '-O3'
-            }
-        }
-    }
-
-    externalNativeBuild {
-        cmake {
-            path 'src/main/cpp/CMakeLists.txt'
-            version '3.31.5'
+            abiFilters 'arm64-v8a', 'armeabi-v7a'
         }
     }
 
