@@ -10,6 +10,7 @@ import android.os.Handler;
 import android.os.Looper;
 import android.os.PowerManager;
 import android.util.Log;
+import android.view.Gravity;
 import android.view.LayoutInflater;
 import android.view.MotionEvent;
 import android.view.View;
@@ -19,12 +20,15 @@ import android.view.inputmethod.InputConnection;
 import android.view.inputmethod.InputMethodManager;
 import android.widget.Button;
 import android.widget.FrameLayout;
+import android.widget.GridLayout;
 import android.widget.LinearLayout;
+import android.widget.PopupWindow;
 import android.widget.TextView;
 
 import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.Paint;
+import android.graphics.drawable.ColorDrawable;
 
 import androidx.annotation.NonNull;
 import androidx.recyclerview.widget.ItemTouchHelper;
@@ -132,6 +136,7 @@ public class SimonIMEService extends InputMethodService {
     private View btnMic;
     private TextView btnMode;
     private FrameLayout panelContainer;
+    private PopupWindow symbolPopup;
 
     // Keyboard switching
     private View voiceKeyboard;
@@ -159,6 +164,17 @@ public class SimonIMEService extends InputMethodService {
     private boolean backspacePressed = false;
     private int backspaceRepeatCount = 0;
     private Runnable backspaceRepeatRunnable;
+
+    private static final String ORIGINAL_COMMA = "，";
+    private static final String ORIGINAL_PERIOD = "。";
+    private static final String[] FULL_WIDTH_SYMBOLS = {
+            "，", "。", "、", "？", "！", "：", "；", "「", "」", "『", "』", "（", "）",
+            "《", "》", "〈", "〉", "─", "…", "～", "％", "＃", "＠", "＆", "＊"
+    };
+    private static final String[] HALF_WIDTH_SYMBOLS = {
+            ",", ".", "?", "!", ":", ";", "'", "\"", "(", ")", "[", "]", "{", "}", "/",
+            "\\", "-", "_", "~", "@", "#", "%", "&", "*", "+", "=", "<", ">"
+    };
 
     @Override
     public void onCreate() {
@@ -251,17 +267,11 @@ public class SimonIMEService extends InputMethodService {
 
         // --- 逗號 ---
         View btnComma = rootView.findViewById(R.id.btnComma);
-        btnComma.setOnClickListener(v -> {
-            InputConnection ic = getCurrentInputConnection();
-            if (ic != null) ic.commitText("，", 1);
-        });
+        setupSymbolLauncher(btnComma, FULL_WIDTH_SYMBOLS, 5, ORIGINAL_COMMA);
 
         // --- 句號 ---
         View btnPeriod = rootView.findViewById(R.id.btnPeriod);
-        btnPeriod.setOnClickListener(v -> {
-            InputConnection ic = getCurrentInputConnection();
-            if (ic != null) ic.commitText("。", 1);
-        });
+        setupSymbolLauncher(btnPeriod, HALF_WIDTH_SYMBOLS, 6, ORIGINAL_PERIOD);
 
         // --- 退格（長按加速連刪） ---
         btnBackspace.setOnTouchListener((v, event) -> {
@@ -271,7 +281,9 @@ public class SimonIMEService extends InputMethodService {
                     backspaceRepeatCount = 0;
                     // 先刪一個字
                     InputConnection ic0 = getCurrentInputConnection();
-                    if (ic0 != null) ic0.deleteSurroundingText(1, 0);
+                    if (ic0 != null) {
+                        if (!deleteSelectionIfAny(ic0)) ic0.deleteSurroundingText(1, 0);
+                    }
                     // 啟動連刪
                     backspaceRepeatRunnable = new Runnable() {
                         @Override
@@ -353,6 +365,143 @@ public class SimonIMEService extends InputMethodService {
 
         updateModeUI();
         return rootView;
+    }
+
+    // ==================== Symbol Launchers ====================
+
+    private void setupSymbolLauncher(View key, String[] symbols, int columns, String fallbackText) {
+        if (key == null) return;
+        key.setOnClickListener(v -> showSymbolPopupOrFallback(v, symbols, columns, fallbackText));
+        key.setOnLongClickListener(v -> {
+            dismissSymbolPopup();
+            commitTextSafely(fallbackText);
+            return true;
+        });
+    }
+
+    private void showSymbolPopupOrFallback(View anchor, String[] symbols, int columns, String fallbackText) {
+        try {
+            dismissSymbolPopup();
+            if (activePanel != Panel.NONE) {
+                closePanel();
+            }
+
+            View content = buildSymbolPopupContent(symbols, columns, fallbackText);
+            content.measure(
+                    View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED),
+                    View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED));
+
+            int popupWidth = content.getMeasuredWidth();
+            int popupHeight = content.getMeasuredHeight();
+            if (popupWidth <= 0 || popupHeight <= 0) {
+                throw new IllegalStateException("symbol popup measured empty");
+            }
+
+            symbolPopup = new PopupWindow(content, popupWidth, popupHeight, false);
+            symbolPopup.setBackgroundDrawable(new ColorDrawable(Color.TRANSPARENT));
+            symbolPopup.setOutsideTouchable(true);
+            symbolPopup.setClippingEnabled(false);
+            symbolPopup.setElevation(dp(8));
+
+            int xOffset = calculateSymbolPopupXOffset(anchor, popupWidth);
+            int yOffset = -(popupHeight + anchor.getHeight() + dp(6));
+            symbolPopup.showAsDropDown(anchor, xOffset, yOffset);
+        } catch (Exception e) {
+            Log.w(TAG, "Symbol popup failed; committing fallback punctuation", e);
+            dismissSymbolPopup();
+            commitTextSafely(fallbackText);
+        }
+    }
+
+    private View buildSymbolPopupContent(String[] symbols, int columns, String fallbackText) {
+        LinearLayout panel = new LinearLayout(this);
+        panel.setOrientation(LinearLayout.VERTICAL);
+        panel.setPadding(dp(6), dp(6), dp(6), dp(6));
+        panel.setBackgroundColor(0xFF1A1A2E);
+
+        GridLayout grid = new GridLayout(this);
+        grid.setColumnCount(columns);
+        grid.setRowCount((int) Math.ceil(symbols.length / (double) columns));
+
+        for (String symbol : symbols) {
+            TextView button = new TextView(this);
+            button.setText(symbol);
+            button.setTextColor(0xFFE0E0E0);
+            button.setTextSize(18);
+            button.setGravity(Gravity.CENTER);
+            button.setBackgroundColor(0xFF16213E);
+            button.setClickable(true);
+            button.setFocusable(true);
+            button.setOnClickListener(v -> {
+                commitSymbolFromPopup(symbol, fallbackText);
+                dismissSymbolPopup();
+            });
+
+            GridLayout.LayoutParams lp = new GridLayout.LayoutParams();
+            lp.width = dp(40);
+            lp.height = dp(38);
+            lp.setMargins(dp(2), dp(2), dp(2), dp(2));
+            grid.addView(button, lp);
+        }
+
+        panel.addView(grid);
+        return panel;
+    }
+
+    private int calculateSymbolPopupXOffset(View anchor, int popupWidth) {
+        if (rootView == null || rootView.getWidth() <= 0) {
+            return -Math.max(0, popupWidth - anchor.getWidth()) / 2;
+        }
+
+        int[] anchorLocation = new int[2];
+        int[] rootLocation = new int[2];
+        anchor.getLocationOnScreen(anchorLocation);
+        rootView.getLocationOnScreen(rootLocation);
+
+        int margin = dp(4);
+        int anchorLeft = anchorLocation[0] - rootLocation[0];
+        int desiredLeft = anchorLeft + anchor.getWidth() / 2 - popupWidth / 2;
+        int maxLeft = Math.max(margin, rootView.getWidth() - popupWidth - margin);
+        int clampedLeft = Math.max(margin, Math.min(desiredLeft, maxLeft));
+        return clampedLeft - anchorLeft;
+    }
+
+    private void commitSymbolFromPopup(String symbol, String fallbackText) {
+        try {
+            InputConnection ic = getCurrentInputConnection();
+            if (ic != null) {
+                ic.commitText(symbol, 1);
+            }
+        } catch (Exception e) {
+            Log.w(TAG, "Symbol commit failed; committing fallback punctuation", e);
+            commitTextSafely(fallbackText);
+        }
+    }
+
+    private boolean commitTextSafely(String text) {
+        try {
+            InputConnection ic = getCurrentInputConnection();
+            return ic != null && ic.commitText(text, 1);
+        } catch (Exception e) {
+            Log.w(TAG, "Fallback punctuation commit failed", e);
+            return false;
+        }
+    }
+
+    private void dismissSymbolPopup() {
+        try {
+            if (symbolPopup != null && symbolPopup.isShowing()) {
+                symbolPopup.dismiss();
+            }
+        } catch (Exception e) {
+            Log.w(TAG, "Symbol popup dismiss failed", e);
+        } finally {
+            symbolPopup = null;
+        }
+    }
+
+    private int dp(int value) {
+        return Math.round(value * getResources().getDisplayMetrics().density);
     }
 
     // ==================== Panel Management ====================
@@ -1724,6 +1873,7 @@ public class SimonIMEService extends InputMethodService {
     // ==================== Keyboard Switching ====================
 
     private void switchKeyboard(KeyboardMode mode) {
+        dismissSymbolPopup();
         currentKeyboardMode = mode;
         voiceKeyboard.setVisibility(mode == KeyboardMode.VOICE ? View.VISIBLE : View.GONE);
         englishKeyboard.setVisibility(mode == KeyboardMode.ENGLISH ? View.VISIBLE : View.GONE);
@@ -1792,6 +1942,16 @@ public class SimonIMEService extends InputMethodService {
                 }
                 break;
         }
+    }
+
+    private boolean deleteSelectionIfAny(InputConnection ic) {
+        if (ic == null) return false;
+        CharSequence selectedText = ic.getSelectedText(0);
+        if (selectedText != null && selectedText.length() > 0) {
+            ic.commitText("", 1);
+            return true;
+        }
+        return false;
     }
 
     private void toggleShift() {
@@ -1874,7 +2034,9 @@ public class SimonIMEService extends InputMethodService {
                     backspacePressed = true;
                     backspaceRepeatCount = 0;
                     InputConnection ic0 = getCurrentInputConnection();
-                    if (ic0 != null) ic0.deleteSurroundingText(1, 0);
+                    if (ic0 != null) {
+                        if (!deleteSelectionIfAny(ic0)) ic0.deleteSurroundingText(1, 0);
+                    }
                     backspaceRepeatRunnable = new Runnable() {
                         @Override
                         public void run() {
@@ -2165,6 +2327,7 @@ public class SimonIMEService extends InputMethodService {
 
     @Override
     public void onFinishInputView(boolean finishingInput) {
+        dismissSymbolPopup();
         // v6.1: 鍵盤收起 → 釋放螢幕常亮，避免非錄音時殘留 keepScreenOn 拖電
         if (rootView != null) rootView.setKeepScreenOn(false);
         super.onFinishInputView(finishingInput);
@@ -2172,6 +2335,7 @@ public class SimonIMEService extends InputMethodService {
 
     @Override
     public void onDestroy() {
+        dismissSymbolPopup();
         if (isRecording) {
             isRecording = false;
             streamingMode = false;
