@@ -14,8 +14,4 @@
     <!-- External file backups -->
     <include domain="external" path="backup/" />
 
-    <!-- Exclude large model files -->
-    <exclude domain="file" path="sherpa-onnx-models/" />
-    <exclude domain="file" path="sherpa-onnx-sensevoice/" />
-    <exclude domain="file" path="sherpa-onnx-streaming/" />
 </full-backup-content>

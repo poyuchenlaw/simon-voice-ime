@@ -1,5 +1,8 @@
 package com.simon.voiceime;
 
+import android.content.ClipData;
+import android.content.ClipboardManager;
+import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
 import android.inputmethodservice.InputMethodService;
@@ -10,6 +13,7 @@ import android.os.Handler;
 import android.os.Looper;
 import android.os.PowerManager;
 import android.util.Log;
+import android.view.Gravity;
 import android.view.LayoutInflater;
 import android.view.MotionEvent;
 import android.view.View;
@@ -18,14 +22,16 @@ import android.view.inputmethod.EditorInfo;
 import android.view.inputmethod.InputConnection;
 import android.view.inputmethod.InputMethodManager;
 import android.widget.Button;
-import android.widget.CheckBox;
 import android.widget.FrameLayout;
+import android.widget.GridLayout;
 import android.widget.LinearLayout;
+import android.widget.PopupWindow;
 import android.widget.TextView;
 
 import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.Paint;
+import android.graphics.drawable.ColorDrawable;
 
 import androidx.annotation.NonNull;
 import androidx.recyclerview.widget.ItemTouchHelper;
@@ -80,11 +86,6 @@ public class SimonIMEService extends InputMethodService {
     enum KeyboardMode { VOICE, ENGLISH, NUMBERS }
 
     private static final String PREF_MODE_KEY = "last_mode";
-    // v6.8: APPEND 高精確切換。預設 false = 手機端 SenseVoice 辨識（音訊不離機，§37 完美）+
-    //       文字走 gated /v1/process-text 校正（~500ms）。true = 原本伺服器 MiMo 音訊上傳路徑
-    //       （法律/術語關鍵口述用，較慢但 ASR 品質高）。長按模式鍵切換、持久化於 simon_ime prefs。
-    private static final String PREF_APPEND_HIGH_ACCURACY_KEY = "append_high_accuracy";
-    private volatile boolean appendHighAccuracy = false;
     private Mode currentMode = Mode.APPEND;
     private KeyboardMode currentKeyboardMode = KeyboardMode.VOICE;
     private boolean isRecording = false;
@@ -137,8 +138,8 @@ public class SimonIMEService extends InputMethodService {
     private TextView previewText;
     private View btnMic;
     private TextView btnMode;
-    private TextView btnClipboard;  // 勾選式上下文 armed 指示器掛在這顆按鈕（面板關閉後仍可見）
     private FrameLayout panelContainer;
+    private PopupWindow symbolPopup;
 
     // Keyboard switching
     private View voiceKeyboard;
@@ -151,10 +152,6 @@ public class SimonIMEService extends InputMethodService {
     private enum Panel { NONE, CLIPBOARD, COMMANDS }
     private Panel activePanel = Panel.NONE;
 
-    // 勾選式 AI 回覆：把勾選的剪貼組成上下文，REPLACE(換) 模式講指令 → /v1/ai-command 插入回應
-    private String aiContextText = "";   // assembled clipboard context, "" = not armed
-    private int aiContextCount = 0;
-
     // Long press / double tap
     private long lastTapTime = 0;
     private static final long DOUBLE_TAP_THRESHOLD = 400;
@@ -162,14 +159,25 @@ public class SimonIMEService extends InputMethodService {
     private Runnable longPressRunnable;
     private Runnable pendingFinalizeRunnable;  // v5.3: 延遲 finalize
     private static final long LONG_PRESS_THRESHOLD = 500;
-    // v6.2: 收尾 grace（放手後等多久才送 finalize；原 1000ms，Simon 要求縮短加速→400ms）
-    // v6.5 (C2): 400→650ms 捕捉放手瞬間仍在說的尾音（搭配伺服器 ASR_TAIL_PAD 尾端補靜音讓 ASR 吐出最後 token）；非還原 1000ms
-    private static final long FINALIZE_DELAY_MS = 650;
+    // v6.14: APPEND now flushes audio while speaking every ~2s, so the release tail is small.
+    // Keep a short grace for final syllables without adding a full post-stop second.
+    private static final long FINALIZE_DELAY_MS = 400;
 
     // Backspace repeat acceleration
     private boolean backspacePressed = false;
     private int backspaceRepeatCount = 0;
     private Runnable backspaceRepeatRunnable;
+
+    private static final String ORIGINAL_COMMA = "，";
+    private static final String ORIGINAL_PERIOD = "。";
+    private static final String[] FULL_WIDTH_SYMBOLS = {
+            "，", "。", "、", "？", "！", "：", "；", "「", "」", "『", "』", "（", "）",
+            "《", "》", "〈", "〉", "─", "…", "～", "％", "＃", "＠", "＆", "＊"
+    };
+    private static final String[] HALF_WIDTH_SYMBOLS = {
+            ",", ".", "?", "!", ":", ";", "'", "\"", "(", ")", "[", "]", "{", "}", "/",
+            "\\", "-", "_", "~", "@", "#", "%", "&", "*", "+", "=", "<", ">"
+    };
 
     @Override
     public void onCreate() {
@@ -221,20 +229,6 @@ public class SimonIMEService extends InputMethodService {
     }
 
     @Override
-    public void onStartInput(EditorInfo info, boolean restarting) {
-        super.onStartInput(info, restarting);
-        // 跨欄位防呆：restarting==false 代表換到了真正的新編輯框 → 已 armed 的勾選上下文必須清掉，
-        // 否則在任意欄位長按麥克風就會誤觸 AI 指令（cross-field footgun）。
-        // restarting==true（同一欄位 restart）保留上下文；面板設定後在同一欄位講指令不會有 onStartInput，
-        // 故同欄位多輪追問仍然存活。
-        if (!restarting && !aiContextText.isEmpty()) {
-            aiContextText = "";
-            aiContextCount = 0;
-            updateArmedIndicator();
-        }
-    }
-
-    @Override
     public View onCreateInputView() {
         rootView = LayoutInflater.from(this).inflate(R.layout.keyboard_view, null);
 
@@ -247,7 +241,7 @@ public class SimonIMEService extends InputMethodService {
         View btnBackspace = rootView.findViewById(R.id.btnBackspace);
         View btnEnter = rootView.findViewById(R.id.btnEnter);
         View btnSettings = rootView.findViewById(R.id.btnSettings);
-        btnClipboard = rootView.findViewById(R.id.btnClipboard);
+        View btnClipboard = rootView.findViewById(R.id.btnClipboard);
         View btnCommands = rootView.findViewById(R.id.btnCommands);
         View btnSwitchIME = rootView.findViewById(R.id.btnSwitchIME);
 
@@ -265,12 +259,8 @@ public class SimonIMEService extends InputMethodService {
             return false;
         });
 
-        // --- 模式切換（短按循環四模式；長按切換追加模式的 快速/高精確）---
+        // --- 模式切換 ---
         btnMode.setOnClickListener(v -> cycleMode());
-        btnMode.setOnLongClickListener(v -> {
-            toggleAppendHighAccuracy();
-            return true;
-        });
 
         // --- 空格 ---
         btnSpace.setOnClickListener(v -> {
@@ -280,17 +270,11 @@ public class SimonIMEService extends InputMethodService {
 
         // --- 逗號 ---
         View btnComma = rootView.findViewById(R.id.btnComma);
-        btnComma.setOnClickListener(v -> {
-            InputConnection ic = getCurrentInputConnection();
-            if (ic != null) ic.commitText("，", 1);
-        });
+        setupSymbolLauncher(btnComma, FULL_WIDTH_SYMBOLS, 5, ORIGINAL_COMMA);
 
         // --- 句號 ---
         View btnPeriod = rootView.findViewById(R.id.btnPeriod);
-        btnPeriod.setOnClickListener(v -> {
-            InputConnection ic = getCurrentInputConnection();
-            if (ic != null) ic.commitText("。", 1);
-        });
+        setupSymbolLauncher(btnPeriod, HALF_WIDTH_SYMBOLS, 6, ORIGINAL_PERIOD);
 
         // --- 退格（長按加速連刪） ---
         btnBackspace.setOnTouchListener((v, event) -> {
@@ -300,7 +284,9 @@ public class SimonIMEService extends InputMethodService {
                     backspaceRepeatCount = 0;
                     // 先刪一個字
                     InputConnection ic0 = getCurrentInputConnection();
-                    if (ic0 != null) ic0.deleteSurroundingText(1, 0);
+                    if (ic0 != null) {
+                        if (!deleteSelectionIfAny(ic0)) ic0.deleteSurroundingText(1, 0);
+                    }
                     // 啟動連刪
                     backspaceRepeatRunnable = new Runnable() {
                         @Override
@@ -381,8 +367,200 @@ public class SimonIMEService extends InputMethodService {
         setupTypingKeyboard(numbersKeyboard);
 
         updateModeUI();
-        updateArmedIndicator();
         return rootView;
+    }
+
+    // ==================== Symbol Launchers ====================
+
+    private void setupSymbolLauncher(View key, String[] symbols, int columns, String fallbackText) {
+        if (key == null) return;
+        key.setOnClickListener(v -> showSymbolPopupOrFallback(v, symbols, columns, fallbackText));
+        key.setOnLongClickListener(v -> {
+            dismissSymbolPopup();
+            commitTextSafely(fallbackText);
+            return true;
+        });
+    }
+
+    private void showSymbolPopupOrFallback(View anchor, String[] symbols, int columns, String fallbackText) {
+        try {
+            dismissSymbolPopup();
+            if (activePanel != Panel.NONE) {
+                closePanel();
+            }
+
+            View content = buildSymbolPopupContent(symbols, columns, fallbackText);
+            content.measure(
+                    View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED),
+                    View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED));
+
+            int popupWidth = content.getMeasuredWidth();
+            int popupHeight = content.getMeasuredHeight();
+            if (popupWidth <= 0 || popupHeight <= 0) {
+                throw new IllegalStateException("symbol popup measured empty");
+            }
+
+            symbolPopup = new PopupWindow(content, popupWidth, popupHeight, false);
+            symbolPopup.setBackgroundDrawable(new ColorDrawable(Color.TRANSPARENT));
+            symbolPopup.setOutsideTouchable(true);
+            symbolPopup.setClippingEnabled(false);
+            symbolPopup.setElevation(dp(8));
+
+            int xOffset = calculateSymbolPopupXOffset(anchor, popupWidth);
+            int yOffset = -(popupHeight + anchor.getHeight() + dp(6));
+            symbolPopup.showAsDropDown(anchor, xOffset, yOffset);
+        } catch (Exception e) {
+            Log.w(TAG, "Symbol popup failed; committing fallback punctuation", e);
+            dismissSymbolPopup();
+            commitTextSafely(fallbackText);
+        }
+    }
+
+    private View buildSymbolPopupContent(String[] symbols, int columns, String fallbackText) {
+        LinearLayout panel = new LinearLayout(this);
+        panel.setOrientation(LinearLayout.VERTICAL);
+        panel.setPadding(dp(6), dp(6), dp(6), dp(6));
+        panel.setBackgroundColor(0xFF1A1A2E);
+
+        GridLayout grid = new GridLayout(this);
+        grid.setColumnCount(columns);
+        grid.setRowCount((int) Math.ceil(symbols.length / (double) columns));
+
+        for (String symbol : symbols) {
+            TextView button = new TextView(this);
+            button.setText(symbol);
+            button.setTextColor(0xFFE0E0E0);
+            button.setTextSize(18);
+            button.setGravity(Gravity.CENTER);
+            button.setBackgroundColor(0xFF16213E);
+            button.setClickable(true);
+            button.setFocusable(true);
+            button.setOnClickListener(v -> {
+                commitSymbolFromPopup(symbol, fallbackText);
+                dismissSymbolPopup();
+            });
+
+            GridLayout.LayoutParams lp = new GridLayout.LayoutParams();
+            lp.width = dp(40);
+            lp.height = dp(38);
+            lp.setMargins(dp(2), dp(2), dp(2), dp(2));
+            grid.addView(button, lp);
+        }
+
+        panel.addView(grid);
+        return panel;
+    }
+
+    private int calculateSymbolPopupXOffset(View anchor, int popupWidth) {
+        if (rootView == null || rootView.getWidth() <= 0) {
+            return -Math.max(0, popupWidth - anchor.getWidth()) / 2;
+        }
+
+        int[] anchorLocation = new int[2];
+        int[] rootLocation = new int[2];
+        anchor.getLocationOnScreen(anchorLocation);
+        rootView.getLocationOnScreen(rootLocation);
+
+        int margin = dp(4);
+        int anchorLeft = anchorLocation[0] - rootLocation[0];
+        int desiredLeft = anchorLeft + anchor.getWidth() / 2 - popupWidth / 2;
+        int maxLeft = Math.max(margin, rootView.getWidth() - popupWidth - margin);
+        int clampedLeft = Math.max(margin, Math.min(desiredLeft, maxLeft));
+        return clampedLeft - anchorLeft;
+    }
+
+    private void commitSymbolFromPopup(String symbol, String fallbackText) {
+        try {
+            InputConnection ic = getCurrentInputConnection();
+            if (ic != null) {
+                ic.commitText(symbol, 1);
+            }
+        } catch (Exception e) {
+            Log.w(TAG, "Symbol commit failed; committing fallback punctuation", e);
+            commitTextSafely(fallbackText);
+        }
+    }
+
+    private boolean commitTextSafely(String text) {
+        try {
+            InputConnection ic = getCurrentInputConnection();
+            return ic != null && ic.commitText(text, 1);
+        } catch (Exception e) {
+            Log.w(TAG, "Fallback punctuation commit failed", e);
+            return false;
+        }
+    }
+
+    /**
+     * v6.17: Commit full transcription text with clipboard-fallback safety net.
+     * Always copies text to clipboard first (never-lose guarantee), then:
+     *   - Normal apps: ic.commitText; if that returns false -> paste fallback.
+     *   - Problematic apps (Termux, Gemini): skip commitText, go straight to paste.
+     *   - ic == null: text already on clipboard, show hint.
+     * Small single-char / punctuation / space commits should NOT use this method.
+     */
+    private void commitFinalText(String text) {
+        try {
+            if (text == null || text.isEmpty()) return;
+
+            // Step 1: Always copy to clipboard first as safety net.
+            try {
+                ClipboardManager cm = (ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
+                if (cm != null) {
+                    cm.setPrimaryClip(ClipData.newPlainText("simon-ime", text));
+                }
+            } catch (Exception ex) {
+                Log.w(TAG, "commitFinalText: clipboard copy failed", ex);
+            }
+
+            // Step 2: Detect problematic apps that reject commitText.
+            EditorInfo ei = getCurrentInputEditorInfo();
+            String packageName = (ei != null) ? ei.packageName : null;
+            boolean problematic = packageName != null
+                    && (packageName.startsWith("com.termux")
+                    || packageName.contains("bard")
+                    || packageName.contains("gemini")
+                    || packageName.equals("com.google.android.apps.bard"));
+
+            // Step 3: Get input connection.
+            InputConnection ic = getCurrentInputConnection();
+            if (ic == null) {
+                Log.w(TAG, "commitFinalText: ic == null, text on clipboard");
+                updateStatus("已複製，可長按貼上");
+                return;
+            }
+
+            // Step 4: Normal path.
+            if (!problematic) {
+                boolean ok = ic.commitText(text, 1);
+                if (ok) return;
+                Log.w(TAG, "commitFinalText: commitText returned false for pkg=" + packageName + ", falling back to paste");
+            }
+
+            // Step 5: Paste fallback (text already on clipboard).
+            ic.performContextMenuAction(android.R.id.paste);
+            updateStatus("已複製，可長按貼上");
+
+        } catch (Exception e) {
+            Log.e(TAG, "commitFinalText: unexpected exception, text should be on clipboard", e);
+            updateStatus("已複製，可長按貼上");
+        }
+    }
+
+    private void dismissSymbolPopup() {
+        try {
+            if (symbolPopup != null && symbolPopup.isShowing()) {
+                symbolPopup.dismiss();
+            }
+        } catch (Exception e) {
+            Log.w(TAG, "Symbol popup dismiss failed", e);
+        } finally {
+            symbolPopup = null;
+        }
+    }
+
+    private int dp(int value) {
+        return Math.round(value * getResources().getDisplayMetrics().density);
     }
 
     // ==================== Panel Management ====================
@@ -437,43 +615,6 @@ public class SimonIMEService extends InputMethodService {
             }
         });
         recycler.setAdapter(adapter);
-
-        // 勾選式 AI 回覆 footer
-        final TextView ctxCount = view.findViewById(R.id.clipCtxCount);
-        adapter.setSelectionListener(count -> mainHandler.post(() ->
-                ctxCount.setText(count > 0 ? ("已勾選 " + count + " 則") : "")));
-        // 載入時若已 armed，顯示目前上下文狀態
-        if (aiContextCount > 0) {
-            ctxCount.setText("📎 目前上下文 " + aiContextCount + " 則");
-        }
-
-        Button btnSetCtx = view.findViewById(R.id.btnClipSetContext);
-        btnSetCtx.setOnClickListener(v -> {
-            java.util.List<String> sel = adapter.getSelectedTexts();
-            if (sel.isEmpty()) {
-                updateStatus("先勾選要當上下文的剪貼");
-                return;
-            }
-            StringBuilder sb = new StringBuilder();
-            for (int i = 0; i < sel.size(); i++) {
-                if (i > 0) sb.append("\n\n");
-                sb.append(sel.get(i));
-            }
-            aiContextText = sb.toString();
-            aiContextCount = sel.size();
-            updateArmedIndicator();
-            updateStatus("📎 已設定 " + aiContextCount + " 則為上下文 · 切到換模式講指令");
-            closePanel();
-        });
-
-        Button btnClearCtx = view.findViewById(R.id.btnClipClearContext);
-        btnClearCtx.setOnClickListener(v -> {
-            aiContextText = "";
-            aiContextCount = 0;
-            updateArmedIndicator();
-            updateStatus("已清除上下文");
-            showPanel(Panel.CLIPBOARD);
-        });
 
         // 右滑 → 加入常用指令
         new ItemTouchHelper(new ItemTouchHelper.SimpleCallback(0, ItemTouchHelper.RIGHT) {
@@ -627,23 +768,12 @@ public class SimonIMEService extends InputMethodService {
     private static class ClipAdapter extends RecyclerView.Adapter<ClipAdapter.VH> {
         private final List<String> items;
         private final OnItemClick listener;
-        // 勾選式多選：記錄被勾的 position（panel 開啟期間 items 不變動，position 穩定）
-        // 不變式：selection 以 RecyclerView position 為 key，僅因為剪貼清單在 panel 生命週期內不可變
-        //         （每次 showClipboardPanel 都 new 一個 adapter，期間絕無 insert/remove/move）。
-        //         未來若加入 notifyItemRemoved/Moved，必須改以「內容」重新 key，否則勾選會錯位。
-        private final java.util.Set<Integer> selected = new java.util.HashSet<>();
-        private OnSelectionChanged selectionListener;
 
         interface OnItemClick { void onClick(int position); }
-        interface OnSelectionChanged { void changed(int count); }
 
         ClipAdapter(List<String> items, OnItemClick listener) {
             this.items = items;
             this.listener = listener;
-        }
-
-        void setSelectionListener(OnSelectionChanged l) {
-            this.selectionListener = l;
         }
 
         @Override public VH onCreateViewHolder(android.view.ViewGroup parent, int viewType) {
@@ -653,40 +783,16 @@ public class SimonIMEService extends InputMethodService {
 
         @Override public void onBindViewHolder(VH holder, int position) {
             holder.text.setText(items.get(position));
-            // 點文字 = 貼上（維持原行為）
-            holder.text.setOnClickListener(v -> listener.onClick(position));
-            // 勾選 = 加入/移除上下文；先清回呼避免 recycle 誤觸
-            holder.check.setOnCheckedChangeListener(null);
-            holder.check.setChecked(selected.contains(position));
-            holder.check.setOnClickListener(v -> {
-                if (holder.check.isChecked()) selected.add(position);
-                else selected.remove(position);
-                if (selectionListener != null) selectionListener.changed(selected.size());
-            });
+            holder.itemView.setOnClickListener(v -> listener.onClick(position));
         }
 
         @Override public int getItemCount() { return items.size(); }
 
-        /** 已勾選的剪貼文字，依 index 升序回傳 */
-        java.util.List<String> getSelectedTexts() {
-            java.util.List<Integer> idx = new java.util.ArrayList<>(selected);
-            java.util.Collections.sort(idx);
-            java.util.List<String> out = new java.util.ArrayList<>();
-            for (int i : idx) {
-                if (i >= 0 && i < items.size()) out.add(items.get(i));
-            }
-            return out;
-        }
-
-        int getSelectedCount() { return selected.size(); }
-
         static class VH extends RecyclerView.ViewHolder {
             TextView text;
-            CheckBox check;
             VH(View v) {
                 super(v);
                 text = v.findViewById(R.id.clipText);
-                check = v.findViewById(R.id.clipCheck);
             }
         }
     }
@@ -832,9 +938,9 @@ public class SimonIMEService extends InputMethodService {
         mainHandler.removeCallbacks(longPressRunnable);
 
         if (isRecording) {
-            // v5.4.1: APPEND 模式一律延遲 finalize（含短句），否則尾巴幾個字會被切掉。
-            // v6.8: 快速模式（無 WS）同樣延遲，讓放手瞬間的尾音被手機端 VAD/全段 buffer 收進來。
-            if (currentMode == Mode.APPEND) {
+            // v5.4.1: APPEND 模式一律延遲 1s finalize（含短句）
+            // 修正：短句 streamChunkTotal==0 時也要延遲，否則尾巴幾個字會被切掉
+            if (currentMode == Mode.APPEND && audioStreamWs != null) {
                 mainHandler.post(() -> updateStatus("收尾中..."));
                 pendingFinalizeRunnable = () -> stopRecordingAndSend();
                 mainHandler.postDelayed(pendingFinalizeRunnable, FINALIZE_DELAY_MS);
@@ -852,8 +958,7 @@ public class SimonIMEService extends InputMethodService {
     private void startRecording() {
         if (isRecording) {
             // v5.4.1: tap-toggle 停止也走延遲（和 handleTouchUp 一致）
-            // v6.8: 快速模式（無 WS）同樣延遲，避免尾音被切。
-            if (currentMode == Mode.APPEND) {
+            if (currentMode == Mode.APPEND && audioStreamWs != null) {
                 mainHandler.post(() -> updateStatus("收尾中..."));
                 pendingFinalizeRunnable = () -> stopRecordingAndSend();
                 mainHandler.postDelayed(pendingFinalizeRunnable, FINALIZE_DELAY_MS);
@@ -910,17 +1015,12 @@ public class SimonIMEService extends InputMethodService {
         streamingMode = false;
         prepareOnDeviceAppendPreview();
 
-        // v6.8: APPEND 預設走「手機端 SenseVoice 辨識 → 文字 gated 校正」，音訊不離機（§37 完美）。
-        //       僅在「高精確切換開啟」或「手機端辨識未就緒」時才開啟 WS 音訊串流上傳（伺服器 MiMo）。
-        if (currentMode == Mode.APPEND && shouldUploadAppendAudio()) {
+        // v4.2: 音訊串流 WebSocket（已修復文字消失 + 亂序 bug）
+        if (currentMode == Mode.APPEND) {
             startAudioStreamWs();
         }
 
         updateStatus("🔴 錄音中...");
-        // 勾選式上下文已 armed，但目前不是換模式 → 這段語音不會套用 AI 指令，提醒避免靜默落空
-        if (!aiContextText.isEmpty() && currentMode != Mode.REPLACE) {
-            updateStatus("📎 已勾選上下文，長按麥克風切到換模式才會套用");
-        }
         btnMic.setBackgroundColor(getResources().getColor(R.color.mic_active, null));
         if (btnMic instanceof Button) ((Button) btnMic).setText("⏹");
 
@@ -932,7 +1032,7 @@ public class SimonIMEService extends InputMethodService {
             final int SILENCE_MS_TO_SPLIT = 500;
             final int SILENCE_BYTES_TO_SPLIT = SILENCE_MS_TO_SPLIT * BYTES_PER_MS; // 16000 bytes = 500ms
             final int MIN_CHUNK_BYTES = 32000;  // 最小 1 秒才送（避免 Whisper 幻覺）
-            final int MAX_CHUNK_BYTES = 160000; // 最大 5 秒強制送（避免無限累積）
+            final int MAX_CHUNK_BYTES = 48000;  // v6.14: 最大 1.5 秒強制送，讓 GB10 在說話中先解碼
             // v5.4: 跳過前 400ms 音訊（避免按鈕點擊聲干擾 STT）
             final int SKIP_INITIAL_BYTES = 12800; // 400ms @ 16kHz 16-bit mono
             int totalBytesRead = 0;
@@ -975,7 +1075,7 @@ public class SimonIMEService extends InputMethodService {
                         }
 
                         int bufSize = pcmBuffer.size();
-                        // 送出條件：(停頓 ≥500ms deterministic 且累積 ≥1s) 或 (累積 ≥5s 強制送)
+                        // 送出條件：(停頓 ≥500ms deterministic 且累積 ≥1s) 或 (累積 ≥1.5s 強制送)
                         boolean pauseDetected = silentBytes >= SILENCE_BYTES_TO_SPLIT && bufSize >= MIN_CHUNK_BYTES;
                         boolean forceFlush = bufSize >= MAX_CHUNK_BYTES;
 
@@ -1097,12 +1197,12 @@ public class SimonIMEService extends InputMethodService {
                         updatePreviewStrip("");
 
                         mainHandler.post(() -> {
-                            InputConnection ic = getCurrentInputConnection();
                             if (!finalText.isEmpty()) {
                                 // v6.1: 一次性提交最終（雲端已拼接＋校正）結果。全程未動 composing text，故直接 commitText。
                                 //       utteranceFinished 守衛：晚到的 onFailure fallback 會被擋，不會重複提交。
+                                // v6.17: 走 commitFinalText 以支援不接受 commitText 的 app（Termux/Gemini）。
                                 if (utteranceFinished.compareAndSet(false, true)) {
-                                    if (ic != null) ic.commitText(finalText, 1);
+                                    commitFinalText(finalText);
                                     updateStatus("完成: " + truncate(finalText, 20));
                                 }
                             } else {
@@ -1249,46 +1349,6 @@ public class SimonIMEService extends InputMethodService {
             updateStatus("辨識中...");
         });
 
-        // v6.8: APPEND 快速模式（預設）——音訊全程留在手機端，從不上傳。
-        //       手機端 SenseVoice 辨識整段 → 只傳「文字」到 gated /v1/process-text 做標點+術語校正。
-        //       校正失敗/逾時 → 直接 commit 原始手機端文字（永不阻塞使用者）。
-        //       手機端辨識空結果 → 退回伺服器音訊路徑（離線/品質兜底）。
-        //       此分支放在所有 WS 收尾邏輯之前；快速模式下 audioStreamWs 本就為 null。
-        if (currentMode == Mode.APPEND && !shouldUploadAppendAudio() && localSTTReady) {
-            // pcmBuffer 在快速模式從未被 mid-stream reset（無 WS chunk），pcmData 即整段音訊。
-            final byte[] appendPcm = pcmData;
-            if (appendPcm.length < 3200) {
-                mainHandler.post(() -> {
-                    updatePreviewStrip("");
-                    updateStatus("錄音太短，請再試一次");
-                });
-                return;
-            }
-            new Thread(() -> {
-                long t0 = System.currentTimeMillis();
-                String spokenText = localSTT.recognize(appendPcm, SAMPLE_RATE);
-                long sttMs = System.currentTimeMillis() - t0;
-                Log.i(TAG, "[OnDeviceAppend] 辨識耗時 " + sttMs + "ms: '" + spokenText + "'");
-                if (spokenText != null && !spokenText.isEmpty()) {
-                    spokenText = englishMapper.apply(spokenText);
-                    final String finalText = spokenText;
-                    mainHandler.post(() -> updateStatus("辨識(" + sttMs + "ms)→校正中…"));
-                    // 文字（非音訊）走 gated /v1/process-text；該端點失敗時內部已 fallback，
-                    // 但連線層失敗只會更新狀態，故下方提供端上 commit 兜底。
-                    sendTextProcessOrCommitRaw(finalText, Mode.APPEND);
-                } else {
-                    // §37: 快速模式（追⚡）的承諾＝音訊全程不離機。手機端辨識空結果時
-                    //      「絕不」靜默上傳音訊兜底——改提示使用者重說，並指向唯一允許上傳
-                    //      音訊的逃生口：長按模式鍵切到 🎯 高精確（會走伺服器）。
-                    mainHandler.post(() -> {
-                        updatePreviewStrip("");
-                        updateStatus("🤔 沒聽清楚，再說一次（長按模式鍵可切 🎯 高精確，會用伺服器）");
-                    });
-                }
-            }, "OnDeviceAppend").start();
-            return;
-        }
-
         // v6.1: 串流中途斷線（streamFailed）→ audioStreamWs 已 null。用整段保留音訊走乾淨 HTTP
         //       （有標點、走伺服器校正），而非 pcmData 殘片（只剩斷線後那段）。
         if (currentMode == Mode.APPEND && streamFailed) {
@@ -1378,9 +1438,6 @@ public class SimonIMEService extends InputMethodService {
             final String bc = beforeCursor;
             final String ac = afterCursor;
             final Mode modeNow = currentMode;
-            // 勾選式 AI 回覆：REPLACE(換) 模式且已 armed 上下文 → 走 /v1/ai-command（插入，不刪除）
-            final boolean armed = !aiContextText.isEmpty();
-            final String ctxNow = aiContextText;
 
             new Thread(() -> {
                 long t0 = System.currentTimeMillis();
@@ -1394,9 +1451,7 @@ public class SimonIMEService extends InputMethodService {
 
                     final String finalText = spokenText;
                     mainHandler.post(() -> updateStatus("辨識(" + sttMs + "ms): " + truncate(finalText, 15)));
-                    if (modeNow == Mode.REPLACE && armed) {
-                        sendAiCommand(finalText, ctxNow);
-                    } else if (modeNow == Mode.REPLACE) {
+                    if (modeNow == Mode.REPLACE) {
                         sendTextReplace(finalText, bc, ac);
                     } else {
                         sendTextProcess(finalText, modeNow);
@@ -1405,35 +1460,15 @@ public class SimonIMEService extends InputMethodService {
                     // 本機 STT 失敗 → fallback 上傳音訊
                     mainHandler.post(() -> updateStatus("本機辨識無結果，上傳中..."));
                     byte[] wavData = pcmToWav(pcmData, SAMPLE_RATE, 1, 16);
-                    if (modeNow == Mode.REPLACE && armed) {
-                        // armed AI 回覆：交伺服器轉錄 + 套上下文（插入，不刪除）
-                        sendAiCommandAudio(wavData, ctxNow);
-                    } else {
-                        sendToWTI(wavData, modeNow, false);
-                    }
+                    sendToWTI(wavData, modeNow, false);
                 }
             }, "LocalSTT-Recognize").start();
             return;
         }
 
         // fallback: 本機 STT 未就緒 → 上傳音訊（舊流程）
-        // 勾選式 AI 回覆：REPLACE(換) 模式且已 armed → 交伺服器轉錄 + 套上下文（插入）
-        if (currentMode == Mode.REPLACE && !aiContextText.isEmpty()) {
-            byte[] aiWav = pcmToWav(pcmData, SAMPLE_RATE, 1, 16);
-            sendAiCommandAudio(aiWav, aiContextText);
-            return;
-        }
         byte[] wavData = pcmToWav(pcmData, SAMPLE_RATE, 1, 16);
         sendToWTI(wavData, currentMode);
-    }
-
-    /**
-     * v6.8: APPEND 是否需要把音訊上傳伺服器辨識（MiMo）。
-     * 預設 false → 走手機端 SenseVoice（音訊不離機）。
-     * 高精確切換開啟，或手機端辨識引擎尚未就緒（如模型仍在下載）時 → true，退回伺服器音訊路徑。
-     */
-    private boolean shouldUploadAppendAudio() {
-        return appendHighAccuracy || !localSTTReady;
     }
 
     /**
@@ -1553,9 +1588,9 @@ public class SimonIMEService extends InputMethodService {
                     Log.i(TAG, "Stream finalize success: '" + finalText + "'");
                     streamingUpload.endSession();
                     mainHandler.post(() -> {
-                        InputConnection ic = getCurrentInputConnection();
-                        if (ic != null && !finalText.isEmpty()) {
-                            ic.commitText(finalText, 1);
+                        if (!finalText.isEmpty()) {
+                            // v6.17: 走 commitFinalText 以支援 Termux/Gemini 等不接受 commitText 的 app。
+                            commitFinalText(finalText);
                             updateStatus("✅ " + truncate(finalText, 20));
                         } else {
                             updateStatus("未辨識到文字");
@@ -1783,77 +1818,6 @@ public class SimonIMEService extends InputMethodService {
         });
     }
 
-    /**
-     * v6.8: 手機端 APPEND 文字 → gated /v1/process-text 校正（標點/術語/§37 隱私閘）。
-     * 與 sendTextProcess 的差別：任何「連線失敗 / 伺服器錯誤 / 空結果 / 解析錯誤」都直接
-     * commit 原始手機端文字（rawText），絕不讓使用者的口述憑空消失（永不阻塞）。
-     */
-    private void sendTextProcessOrCommitRaw(String rawText, Mode mode) {
-        if (rawText == null || rawText.isEmpty()) return;
-        final String raw = rawText;
-        String serverUrl = getServerUrl();
-
-        MultipartBody.Builder bodyBuilder = new MultipartBody.Builder()
-                .setType(MultipartBody.FORM)
-                .addFormDataPart("text", raw)
-                .addFormDataPart("mode", "append");
-
-        Request.Builder reqBuilder = new Request.Builder()
-                .url(serverUrl + "/v1/process-text")
-                .post(bodyBuilder.build());
-
-        String auth = getAuthPassword();
-        if (auth != null && !auth.isEmpty()) {
-            reqBuilder.addHeader("Authorization", "Bearer " + auth);
-        }
-
-        httpClient.newCall(reqBuilder.build()).enqueue(new Callback() {
-            @Override
-            public void onFailure(@NonNull Call call, @NonNull IOException e) {
-                // 校正連線失敗 → commit 原始手機端文字
-                Log.w(TAG, "[OnDeviceAppend] 校正連線失敗，commit 原始文字", e);
-                commitAppendRaw(raw, "（未校正）");
-            }
-
-            @Override
-            public void onResponse(@NonNull Call call, @NonNull Response response) throws IOException {
-                String corrected = null;
-                try {
-                    String responseBody = response.body() != null ? response.body().string() : "";
-                    if (response.isSuccessful()) {
-                        JSONObject json = new JSONObject(responseBody);
-                        String t = json.optString("text", "").trim();
-                        if (!t.isEmpty()) corrected = t;
-                    } else {
-                        Log.w(TAG, "[OnDeviceAppend] 校正伺服器錯誤 " + response.code() + "，commit 原始文字");
-                    }
-                } catch (Exception e) {
-                    Log.w(TAG, "[OnDeviceAppend] 校正回應解析錯誤，commit 原始文字", e);
-                }
-                if (corrected != null) {
-                    commitAppendRaw(corrected, "");
-                } else {
-                    // 空結果/錯誤 → 退回原始文字
-                    commitAppendRaw(raw, "（未校正）");
-                }
-            }
-        });
-    }
-
-    /** v6.8: 在主執行緒一次性 commit APPEND 結果並更新狀態列。 */
-    private void commitAppendRaw(String text, String suffix) {
-        if (text == null || text.isEmpty()) return;
-        mainHandler.post(() -> {
-            InputConnection ic = getCurrentInputConnection();
-            if (ic != null) {
-                ic.commitText(text, 1);
-                updateStatus(truncate(text, 20) + suffix);
-            } else {
-                updateStatus("未辨識到文字");
-            }
-        });
-    }
-
     private void sendTextReplace(String spokenText, String beforeCursor, String afterCursor) {
         String serverUrl = getServerUrl();
 
@@ -1898,109 +1862,20 @@ public class SimonIMEService extends InputMethodService {
         });
     }
 
-    /**
-     * 勾選式 AI 回覆（本機 STT 路徑）：instruction = 語音指令、context = 勾選的剪貼。
-     * 伺服器回 {"text": apply(instruction, context)}，在游標處 commitText 插入（不刪除前後文）。
-     */
-    private void sendAiCommand(String instruction, String context) {
-        String serverUrl = getServerUrl();
-
-        MultipartBody body = new MultipartBody.Builder()
-                .setType(MultipartBody.FORM)
-                .addFormDataPart("instruction", instruction)
-                .addFormDataPart("context", context)
-                .addFormDataPart("language", "zh")
-                .build();
-
-        Request.Builder reqBuilder = new Request.Builder()
-                .url(serverUrl + "/v1/ai-command")
-                .post(body);
-
-        String auth = getAuthPassword();
-        if (auth != null && !auth.isEmpty()) {
-            reqBuilder.addHeader("Authorization", "Bearer " + auth);
-        }
-
-        httpClient.newCall(reqBuilder.build()).enqueue(new AiCommandCallback());
-    }
-
-    /**
-     * 勾選式 AI 回覆（fallback 音訊路徑）：本機 STT 未就緒/無結果時，
-     * 連同音訊上傳由伺服器轉錄為 instruction，再套上下文。回應同樣 commitText 插入。
-     */
-    private void sendAiCommandAudio(byte[] wavData, String context) {
-        String serverUrl = getServerUrl();
-
-        MultipartBody body = new MultipartBody.Builder()
-                .setType(MultipartBody.FORM)
-                .addFormDataPart("instruction", "")
-                .addFormDataPart("context", context)
-                .addFormDataPart("language", "zh")
-                .addFormDataPart("file", "audio.wav",
-                        RequestBody.create(wavData, MediaType.parse("audio/wav")))
-                .build();
-
-        Request.Builder reqBuilder = new Request.Builder()
-                .url(serverUrl + "/v1/ai-command")
-                .post(body);
-
-        String auth = getAuthPassword();
-        if (auth != null && !auth.isEmpty()) {
-            reqBuilder.addHeader("Authorization", "Bearer " + auth);
-        }
-
-        httpClient.newCall(reqBuilder.build()).enqueue(new AiCommandCallback());
-    }
-
-    /** /v1/ai-command 回應處理：插入 text 於游標（commitText），絕不刪除前後文。 */
-    private class AiCommandCallback implements Callback {
-        @Override
-        public void onFailure(@NonNull Call call, @NonNull IOException e) {
-            Log.e(TAG, "AI command request failed", e);
-            mainHandler.post(() -> updateStatus("連線失敗: " + e.getMessage()));
-        }
-
-        @Override
-        public void onResponse(@NonNull Call call, @NonNull Response response) throws IOException {
-            try {
-                String responseBody = response.body() != null ? response.body().string() : "";
-                if (!response.isSuccessful()) {
-                    mainHandler.post(() -> updateStatus("伺服器錯誤: " + response.code()));
-                    return;
-                }
-                JSONObject json = new JSONObject(responseBody);
-                final String text = json.optString("text", "").trim();
-                mainHandler.post(() -> {
-                    InputConnection ic = getCurrentInputConnection();
-                    if (ic != null && !text.isEmpty()) {
-                        ic.commitText(text, 1);
-                        updateStatus("🤖 " + truncate(text, 20));
-                    } else {
-                        updateStatus("AI 無回應");
-                    }
-                });
-            } catch (Exception e) {
-                Log.e(TAG, "Error parsing ai-command response", e);
-                mainHandler.post(() -> updateStatus("解析錯誤"));
-            }
-        }
-    }
-
     private void handleWTIResponse(JSONObject json, Mode mode) {
         mainHandler.post(() -> {
             try {
+                // v6.17: ic null-guard moved into each case.
+                // REPLACE still needs ic for deleteSurroundingText; others use commitFinalText which handles null ic internally.
                 InputConnection ic = getCurrentInputConnection();
-                if (ic == null) {
-                    updateStatus("無法取得輸入連線");
-                    return;
-                }
 
                 switch (mode) {
                     case APPEND: {
                         String text = json.optString("text", "").trim();
                         if (!text.isEmpty()) {
                             if (utteranceFinished.compareAndSet(false, true)) {
-                                ic.commitText(text, 1);
+                                // v6.17: commitFinalText 支援 Termux/Gemini 備援。
+                                commitFinalText(text);
                                 updateStatus("✅ " + truncate(text, 20));
                             }
                         } else {
@@ -2009,6 +1884,10 @@ public class SimonIMEService extends InputMethodService {
                         break;
                     }
                     case REPLACE: {
+                        if (ic == null) {
+                            updateStatus("無法取得輸入連線");
+                            return;
+                        }
                         String text = json.optString("text", "").trim();
                         int deleteBefore = json.optInt("delete_before", 0);
                         int deleteAfter = json.optInt("delete_after", 0);
@@ -2018,7 +1897,8 @@ public class SimonIMEService extends InputMethodService {
                             ic.deleteSurroundingText(deleteBefore, deleteAfter);
                         }
                         if (!insert.isEmpty()) {
-                            ic.commitText(insert, 1);
+                            // v6.17: commitFinalText 支援 Termux/Gemini 備援。
+                            commitFinalText(insert);
                             updateStatus("🔄 替換: " + truncate(insert, 20));
                         } else {
                             updateStatus("未找到可替換的文字");
@@ -2028,7 +1908,8 @@ public class SimonIMEService extends InputMethodService {
                     case SPELL: {
                         String text = json.optString("text", "").trim();
                         if (!text.isEmpty()) {
-                            ic.commitText(text, 1);
+                            // v6.17: commitFinalText 支援 Termux/Gemini 備援。
+                            commitFinalText(text);
                             updateStatus("✏️ 拼字: " + text);
                         } else {
                             updateStatus("拼字失敗");
@@ -2038,7 +1919,8 @@ public class SimonIMEService extends InputMethodService {
                     case TRANSLATE: {
                         String text = json.optString("text", "").trim();
                         if (!text.isEmpty()) {
-                            ic.commitText(text, 1);
+                            // v6.17: commitFinalText 支援 Termux/Gemini 備援。
+                            commitFinalText(text);
                             updateStatus("🌐 翻譯: " + truncate(text, 25));
                         } else {
                             updateStatus("翻譯失敗");
@@ -2056,6 +1938,7 @@ public class SimonIMEService extends InputMethodService {
     // ==================== Keyboard Switching ====================
 
     private void switchKeyboard(KeyboardMode mode) {
+        dismissSymbolPopup();
         currentKeyboardMode = mode;
         voiceKeyboard.setVisibility(mode == KeyboardMode.VOICE ? View.VISIBLE : View.GONE);
         englishKeyboard.setVisibility(mode == KeyboardMode.ENGLISH ? View.VISIBLE : View.GONE);
@@ -2124,6 +2007,16 @@ public class SimonIMEService extends InputMethodService {
                 }
                 break;
         }
+    }
+
+    private boolean deleteSelectionIfAny(InputConnection ic) {
+        if (ic == null) return false;
+        CharSequence selectedText = ic.getSelectedText(0);
+        if (selectedText != null && selectedText.length() > 0) {
+            ic.commitText("", 1);
+            return true;
+        }
+        return false;
     }
 
     private void toggleShift() {
@@ -2206,7 +2099,9 @@ public class SimonIMEService extends InputMethodService {
                     backspacePressed = true;
                     backspaceRepeatCount = 0;
                     InputConnection ic0 = getCurrentInputConnection();
-                    if (ic0 != null) ic0.deleteSurroundingText(1, 0);
+                    if (ic0 != null) {
+                        if (!deleteSelectionIfAny(ic0)) ic0.deleteSurroundingText(1, 0);
+                    }
                     backspaceRepeatRunnable = new Runnable() {
                         @Override
                         public void run() {
@@ -2259,28 +2154,12 @@ public class SimonIMEService extends InputMethodService {
     }
 
     private void loadSavedMode() {
-        SharedPreferences prefs = getSharedPreferences("simon_ime", MODE_PRIVATE);
-        String saved = prefs.getString(PREF_MODE_KEY, Mode.APPEND.name());
+        String saved = getSharedPreferences("simon_ime", MODE_PRIVATE)
+                .getString(PREF_MODE_KEY, Mode.APPEND.name());
         try {
             currentMode = Mode.valueOf(saved);
         } catch (Exception e) {
             currentMode = Mode.APPEND;
-        }
-        appendHighAccuracy = prefs.getBoolean(PREF_APPEND_HIGH_ACCURACY_KEY, false);
-    }
-
-    /** v6.8: 切換 APPEND 高精確（伺服器 MiMo 音訊）/ 快速（手機端 SenseVoice）模式並持久化。 */
-    private void toggleAppendHighAccuracy() {
-        appendHighAccuracy = !appendHighAccuracy;
-        getSharedPreferences("simon_ime", MODE_PRIVATE)
-                .edit()
-                .putBoolean(PREF_APPEND_HIGH_ACCURACY_KEY, appendHighAccuracy)
-                .apply();
-        updateModeUI();
-        if (appendHighAccuracy) {
-            updateStatus("🎯 追加=高精確（伺服器辨識，較慢較準）");
-        } else {
-            updateStatus("⚡ 追加=快速（手機端辨識，音訊不離機）");
         }
     }
 
@@ -2288,8 +2167,7 @@ public class SimonIMEService extends InputMethodService {
         if (btnMode == null) return;
         switch (currentMode) {
             case APPEND:
-                // v6.8: APPEND 顯示當前辨識路徑指示器（⚡快=手機端 / 🎯準=伺服器 MiMo）
-                btnMode.setText(appendHighAccuracy ? "追🎯" : "追⚡");
+                btnMode.setText("追");
                 btnMode.setTextColor(getResources().getColor(R.color.mode_append, null));
                 break;
             case REPLACE:
@@ -2305,15 +2183,6 @@ public class SimonIMEService extends InputMethodService {
                 btnMode.setTextColor(0xFF6bc5f0);
                 break;
         }
-    }
-
-    /**
-     * 勾選式上下文 armed 指示器：在剪貼簿按鈕（📋）上加掛 📎，面板關閉後仍長駐可見。
-     * aiContextText 任何變動處都要呼叫（set/clear/onStartInput 自動清/鍵盤重建）。
-     */
-    private void updateArmedIndicator() {
-        if (btnClipboard == null) return;
-        btnClipboard.setText(aiContextCount > 0 ? "📋📎" : "📋");
     }
 
     // ==================== Helpers ====================
@@ -2438,8 +2307,8 @@ public class SimonIMEService extends InputMethodService {
     }
 
     /**
-     * v6.3: 最後防線。只在 APPEND 伺服器路徑確定失敗後呼叫；成功時一次性 commitText，
-     * 不使用 composing text，不貼錯誤訊息。
+     * v6.12-revert: 最後防線只允許本機 STT 產生候選文字，再送回 server correction。
+     * 不直接 commit SenseVoice 原文，避免簡體/無標點漏出。
      */
     private void runOfflineFullAudioFallback(String reason, boolean utteranceAlreadyReserved, byte[] pcm) {
         if (!utteranceAlreadyReserved && !utteranceFinished.compareAndSet(false, true)) return;
@@ -2465,16 +2334,10 @@ public class SimonIMEService extends InputMethodService {
             if (text != null && !text.isEmpty()) {
                 final String finalText = text;
                 Log.i(TAG, "[OfflineFallback] SenseVoice success after " + reason
-                        + " (" + sttMs + "ms): '" + truncate(finalText, 50) + "'");
-                mainHandler.post(() -> {
-                    InputConnection ic = getCurrentInputConnection();
-                    if (ic != null) {
-                        ic.commitText(finalText, 1);
-                        updateStatus("離線辨識: " + truncate(finalText, 20));
-                    } else {
-                        updateStatus("無法取得輸入連線");
-                    }
-                });
+                        + " (" + sttMs + "ms), routing to server correction: '"
+                        + truncate(finalText, 50) + "'");
+                mainHandler.post(() -> updateStatus("伺服器校正中…"));
+                sendTextProcess(finalText, Mode.APPEND);
             } else {
                 Log.e(TAG, "[OfflineFallback] SenseVoice returned empty after server failure: " + reason);
                 mainHandler.post(() -> updateStatus("離線辨識無結果"));
@@ -2529,6 +2392,7 @@ public class SimonIMEService extends InputMethodService {
 
     @Override
     public void onFinishInputView(boolean finishingInput) {
+        dismissSymbolPopup();
         // v6.1: 鍵盤收起 → 釋放螢幕常亮，避免非錄音時殘留 keepScreenOn 拖電
         if (rootView != null) rootView.setKeepScreenOn(false);
         super.onFinishInputView(finishingInput);
@@ -2536,6 +2400,7 @@ public class SimonIMEService extends InputMethodService {
 
     @Override
     public void onDestroy() {
+        dismissSymbolPopup();
         if (isRecording) {
             isRecording = false;
             streamingMode = false;
