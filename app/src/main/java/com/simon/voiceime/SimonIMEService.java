@@ -1,5 +1,8 @@
 package com.simon.voiceime;
 
+import android.content.ClipData;
+import android.content.ClipboardManager;
+import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
 import android.inputmethodservice.InputMethodService;
@@ -485,6 +488,62 @@ public class SimonIMEService extends InputMethodService {
         } catch (Exception e) {
             Log.w(TAG, "Fallback punctuation commit failed", e);
             return false;
+        }
+    }
+
+    /**
+     * v6.17: Commit full transcription text with clipboard-fallback safety net.
+     * Always copies text to clipboard first (never-lose guarantee), then:
+     *   - Normal apps: ic.commitText; if that returns false -> paste fallback.
+     *   - Problematic apps (Termux, Gemini): skip commitText, go straight to paste.
+     *   - ic == null: text already on clipboard, show hint.
+     * Small single-char / punctuation / space commits should NOT use this method.
+     */
+    private void commitFinalText(String text) {
+        try {
+            if (text == null || text.isEmpty()) return;
+
+            // Step 1: Always copy to clipboard first as safety net.
+            try {
+                ClipboardManager cm = (ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
+                if (cm != null) {
+                    cm.setPrimaryClip(ClipData.newPlainText("simon-ime", text));
+                }
+            } catch (Exception ex) {
+                Log.w(TAG, "commitFinalText: clipboard copy failed", ex);
+            }
+
+            // Step 2: Detect problematic apps that reject commitText.
+            EditorInfo ei = getCurrentInputEditorInfo();
+            String packageName = (ei != null) ? ei.packageName : null;
+            boolean problematic = packageName != null
+                    && (packageName.startsWith("com.termux")
+                    || packageName.contains("bard")
+                    || packageName.contains("gemini")
+                    || packageName.equals("com.google.android.apps.bard"));
+
+            // Step 3: Get input connection.
+            InputConnection ic = getCurrentInputConnection();
+            if (ic == null) {
+                Log.w(TAG, "commitFinalText: ic == null, text on clipboard");
+                updateStatus("已複製，可長按貼上");
+                return;
+            }
+
+            // Step 4: Normal path.
+            if (!problematic) {
+                boolean ok = ic.commitText(text, 1);
+                if (ok) return;
+                Log.w(TAG, "commitFinalText: commitText returned false for pkg=" + packageName + ", falling back to paste");
+            }
+
+            // Step 5: Paste fallback (text already on clipboard).
+            ic.performContextMenuAction(android.R.id.paste);
+            updateStatus("已複製，可長按貼上");
+
+        } catch (Exception e) {
+            Log.e(TAG, "commitFinalText: unexpected exception, text should be on clipboard", e);
+            updateStatus("已複製，可長按貼上");
         }
     }
 
@@ -1138,12 +1197,12 @@ public class SimonIMEService extends InputMethodService {
                         updatePreviewStrip("");
 
                         mainHandler.post(() -> {
-                            InputConnection ic = getCurrentInputConnection();
                             if (!finalText.isEmpty()) {
                                 // v6.1: 一次性提交最終（雲端已拼接＋校正）結果。全程未動 composing text，故直接 commitText。
                                 //       utteranceFinished 守衛：晚到的 onFailure fallback 會被擋，不會重複提交。
+                                // v6.17: 走 commitFinalText 以支援不接受 commitText 的 app（Termux/Gemini）。
                                 if (utteranceFinished.compareAndSet(false, true)) {
-                                    if (ic != null) ic.commitText(finalText, 1);
+                                    commitFinalText(finalText);
                                     updateStatus("完成: " + truncate(finalText, 20));
                                 }
                             } else {
@@ -1529,9 +1588,9 @@ public class SimonIMEService extends InputMethodService {
                     Log.i(TAG, "Stream finalize success: '" + finalText + "'");
                     streamingUpload.endSession();
                     mainHandler.post(() -> {
-                        InputConnection ic = getCurrentInputConnection();
-                        if (ic != null && !finalText.isEmpty()) {
-                            ic.commitText(finalText, 1);
+                        if (!finalText.isEmpty()) {
+                            // v6.17: 走 commitFinalText 以支援 Termux/Gemini 等不接受 commitText 的 app。
+                            commitFinalText(finalText);
                             updateStatus("✅ " + truncate(finalText, 20));
                         } else {
                             updateStatus("未辨識到文字");
@@ -1806,18 +1865,17 @@ public class SimonIMEService extends InputMethodService {
     private void handleWTIResponse(JSONObject json, Mode mode) {
         mainHandler.post(() -> {
             try {
+                // v6.17: ic null-guard moved into each case.
+                // REPLACE still needs ic for deleteSurroundingText; others use commitFinalText which handles null ic internally.
                 InputConnection ic = getCurrentInputConnection();
-                if (ic == null) {
-                    updateStatus("無法取得輸入連線");
-                    return;
-                }
 
                 switch (mode) {
                     case APPEND: {
                         String text = json.optString("text", "").trim();
                         if (!text.isEmpty()) {
                             if (utteranceFinished.compareAndSet(false, true)) {
-                                ic.commitText(text, 1);
+                                // v6.17: commitFinalText 支援 Termux/Gemini 備援。
+                                commitFinalText(text);
                                 updateStatus("✅ " + truncate(text, 20));
                             }
                         } else {
@@ -1826,6 +1884,10 @@ public class SimonIMEService extends InputMethodService {
                         break;
                     }
                     case REPLACE: {
+                        if (ic == null) {
+                            updateStatus("無法取得輸入連線");
+                            return;
+                        }
                         String text = json.optString("text", "").trim();
                         int deleteBefore = json.optInt("delete_before", 0);
                         int deleteAfter = json.optInt("delete_after", 0);
@@ -1835,7 +1897,8 @@ public class SimonIMEService extends InputMethodService {
                             ic.deleteSurroundingText(deleteBefore, deleteAfter);
                         }
                         if (!insert.isEmpty()) {
-                            ic.commitText(insert, 1);
+                            // v6.17: commitFinalText 支援 Termux/Gemini 備援。
+                            commitFinalText(insert);
                             updateStatus("🔄 替換: " + truncate(insert, 20));
                         } else {
                             updateStatus("未找到可替換的文字");
@@ -1845,7 +1908,8 @@ public class SimonIMEService extends InputMethodService {
                     case SPELL: {
                         String text = json.optString("text", "").trim();
                         if (!text.isEmpty()) {
-                            ic.commitText(text, 1);
+                            // v6.17: commitFinalText 支援 Termux/Gemini 備援。
+                            commitFinalText(text);
                             updateStatus("✏️ 拼字: " + text);
                         } else {
                             updateStatus("拼字失敗");
@@ -1855,7 +1919,8 @@ public class SimonIMEService extends InputMethodService {
                     case TRANSLATE: {
                         String text = json.optString("text", "").trim();
                         if (!text.isEmpty()) {
-                            ic.commitText(text, 1);
+                            // v6.17: commitFinalText 支援 Termux/Gemini 備援。
+                            commitFinalText(text);
                             updateStatus("🌐 翻譯: " + truncate(text, 25));
                         } else {
                             updateStatus("翻譯失敗");
