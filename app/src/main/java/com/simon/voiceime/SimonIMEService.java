@@ -97,6 +97,19 @@ public class SimonIMEService extends InputMethodService {
     private OkHttpClient httpClient;
     private Handler mainHandler;
 
+    private static final long CORRECTION_CAPTURE_WINDOW_MS = 15_000;
+    private static final long CORRECTION_CAPTURE_DEBOUNCE_MS = 1_500;
+    private volatile boolean mIgnoreNextUpdateSelection = false;
+    private String mLastVoiceCommittedText = null;
+    private long mLastVoiceCommittedTs = 0L;
+    private int mLastVoiceCommitStart = -1;
+    private int mLastVoiceCommitEnd = -1;
+    private int mLastVoiceCommitFieldLength = -1;
+    private boolean mPendingCorrectionCapture = false;
+    private long mPendingCorrectionCommitTs = 0L;
+    private long mCapturePostedCommitTs = 0L;
+    private final Runnable mPendingCorrectionCaptureRunnable = this::flushPendingCorrectionCapture;
+
     // Helpers
     private ClipboardHelper clipboardHelper;
     private CommandsHelper commandsHelper;
@@ -265,7 +278,7 @@ public class SimonIMEService extends InputMethodService {
         // --- 空格 ---
         btnSpace.setOnClickListener(v -> {
             InputConnection ic = getCurrentInputConnection();
-            if (ic != null) ic.commitText(" ", 1);
+            if (ic != null) commitTextProgrammatically(ic, " ");
         });
 
         // --- 逗號 ---
@@ -285,7 +298,7 @@ public class SimonIMEService extends InputMethodService {
                     // 先刪一個字
                     InputConnection ic0 = getCurrentInputConnection();
                     if (ic0 != null) {
-                        if (!deleteSelectionIfAny(ic0)) ic0.deleteSurroundingText(1, 0);
+                        if (!deleteSelectionIfAny(ic0)) deleteSurroundingTextProgrammatically(ic0, 1, 0);
                     }
                     // 啟動連刪
                     backspaceRepeatRunnable = new Runnable() {
@@ -298,7 +311,7 @@ public class SimonIMEService extends InputMethodService {
                                 // 加速：前5次刪1字，5-15次刪2字，15次以上刪5字
                                 int deleteCount = backspaceRepeatCount < 5 ? 1
                                         : backspaceRepeatCount < 15 ? 2 : 5;
-                                ic.deleteSurroundingText(deleteCount, 0);
+                                deleteSurroundingTextProgrammatically(ic, deleteCount, 0);
                             }
                             // 加速間隔：初始 120ms → 最低 30ms
                             long delay = Math.max(30, 120 - backspaceRepeatCount * 6);
@@ -327,9 +340,10 @@ public class SimonIMEService extends InputMethodService {
                 EditorInfo ei = getCurrentInputEditorInfo();
                 if (ei != null && (ei.imeOptions & EditorInfo.IME_FLAG_NO_ENTER_ACTION) == 0
                         && (ei.imeOptions & EditorInfo.IME_MASK_ACTION) != EditorInfo.IME_ACTION_NONE) {
+                    markProgrammaticTextChange();
                     ic.performEditorAction(ei.imeOptions & EditorInfo.IME_MASK_ACTION);
                 } else {
-                    ic.commitText("\n", 1);
+                    commitTextProgrammatically(ic, "\n");
                 }
             }
         });
@@ -473,7 +487,7 @@ public class SimonIMEService extends InputMethodService {
         try {
             InputConnection ic = getCurrentInputConnection();
             if (ic != null) {
-                ic.commitText(symbol, 1);
+                commitTextProgrammatically(ic, symbol);
             }
         } catch (Exception e) {
             Log.w(TAG, "Symbol commit failed; committing fallback punctuation", e);
@@ -484,7 +498,7 @@ public class SimonIMEService extends InputMethodService {
     private boolean commitTextSafely(String text) {
         try {
             InputConnection ic = getCurrentInputConnection();
-            return ic != null && ic.commitText(text, 1);
+            return ic != null && commitTextProgrammatically(ic, text);
         } catch (Exception e) {
             Log.w(TAG, "Fallback punctuation commit failed", e);
             return false;
@@ -502,6 +516,8 @@ public class SimonIMEService extends InputMethodService {
     private void commitFinalText(String text) {
         try {
             if (text == null || text.isEmpty()) return;
+            settlePendingCorrectionCapture();
+            TextSnapshot beforeSnapshot = getCurrentTextSnapshotSafely();
 
             // Step 1: Always copy to clipboard first as safety net.
             try {
@@ -532,19 +548,267 @@ public class SimonIMEService extends InputMethodService {
 
             // Step 4: Normal path.
             if (!problematic) {
+                markProgrammaticTextChange();
                 boolean ok = ic.commitText(text, 1);
-                if (ok) return;
+                if (ok) {
+                    recordVoiceCommit(text, beforeSnapshot);
+                    return;
+                }
                 Log.w(TAG, "commitFinalText: commitText returned false for pkg=" + packageName + ", falling back to paste");
             }
 
             // Step 5: Paste fallback (text already on clipboard).
+            markProgrammaticTextChange();
             ic.performContextMenuAction(android.R.id.paste);
+            recordVoiceCommit(text, beforeSnapshot);
             updateStatus("已複製，可長按貼上");
 
         } catch (Exception e) {
             Log.e(TAG, "commitFinalText: unexpected exception, text should be on clipboard", e);
             updateStatus("已複製，可長按貼上");
         }
+    }
+
+    private static class TextSnapshot {
+        final String text;
+        final int selectionStart;
+        final int selectionEnd;
+
+        TextSnapshot(String text, int selectionStart, int selectionEnd) {
+            this.text = text != null ? text : "";
+            this.selectionStart = selectionStart;
+            this.selectionEnd = selectionEnd;
+        }
+    }
+
+    private void markProgrammaticTextChange() {
+        try {
+            mIgnoreNextUpdateSelection = true;
+        } catch (Exception ignored) {
+        }
+    }
+
+    private boolean commitTextProgrammatically(InputConnection ic, String text) {
+        try {
+            if (ic == null) return false;
+            markProgrammaticTextChange();
+            return ic.commitText(text, 1);
+        } catch (Exception e) {
+            Log.w(TAG, "Programmatic commitText failed", e);
+            return false;
+        }
+    }
+
+    private boolean deleteSurroundingTextProgrammatically(InputConnection ic, int beforeLength, int afterLength) {
+        try {
+            if (ic == null) return false;
+            markProgrammaticTextChange();
+            return ic.deleteSurroundingText(beforeLength, afterLength);
+        } catch (Exception e) {
+            Log.w(TAG, "Programmatic deleteSurroundingText failed", e);
+            return false;
+        }
+    }
+
+    private TextSnapshot getCurrentTextSnapshotSafely() {
+        try {
+            InputConnection ic = getCurrentInputConnection();
+            if (ic == null) return null;
+
+            android.view.inputmethod.ExtractedTextRequest req =
+                    new android.view.inputmethod.ExtractedTextRequest();
+            req.hintMaxChars = 20_000;
+            req.hintMaxLines = 1_000;
+            android.view.inputmethod.ExtractedText extracted = ic.getExtractedText(req, 0);
+            if (extracted != null && extracted.text != null) {
+                return new TextSnapshot(extracted.text.toString(),
+                        extracted.selectionStart, extracted.selectionEnd);
+            }
+
+            CharSequence before = ic.getTextBeforeCursor(4_000, 0);
+            CharSequence after = ic.getTextAfterCursor(4_000, 0);
+            String beforeText = before != null ? before.toString() : "";
+            String afterText = after != null ? after.toString() : "";
+            int cursor = beforeText.length();
+            return new TextSnapshot(beforeText + afterText, cursor, cursor);
+        } catch (Exception e) {
+            Log.w(TAG, "Correction capture snapshot failed", e);
+            return null;
+        }
+    }
+
+    private void recordVoiceCommit(String text, TextSnapshot beforeSnapshot) {
+        try {
+            if (text == null || text.isEmpty()) return;
+            mLastVoiceCommittedText = text;
+            mLastVoiceCommittedTs = System.currentTimeMillis();
+            mPendingCorrectionCapture = false;
+            mPendingCorrectionCommitTs = 0L;
+            mCapturePostedCommitTs = 0L;
+            if (mainHandler != null) {
+                mainHandler.removeCallbacks(mPendingCorrectionCaptureRunnable);
+            }
+
+            mLastVoiceCommitStart = -1;
+            mLastVoiceCommitEnd = -1;
+            mLastVoiceCommitFieldLength = -1;
+            if (beforeSnapshot != null && beforeSnapshot.selectionStart >= 0 && beforeSnapshot.selectionEnd >= 0) {
+                int start = Math.min(beforeSnapshot.selectionStart, beforeSnapshot.selectionEnd);
+                int end = Math.max(beforeSnapshot.selectionStart, beforeSnapshot.selectionEnd);
+                int replacedLength = Math.max(0, end - start);
+                mLastVoiceCommitStart = start;
+                mLastVoiceCommitEnd = start + text.length();
+                mLastVoiceCommitFieldLength =
+                        beforeSnapshot.text.length() - replacedLength + text.length();
+            }
+        } catch (Exception e) {
+            Log.w(TAG, "Correction capture recordVoiceCommit failed", e);
+        }
+    }
+
+    private void settlePendingCorrectionCapture() {
+        try {
+            if (mainHandler != null) {
+                mainHandler.removeCallbacks(mPendingCorrectionCaptureRunnable);
+            }
+            flushPendingCorrectionCapture();
+        } catch (Exception e) {
+            Log.w(TAG, "Correction capture settle failed", e);
+        }
+    }
+
+    private void maybeScheduleCorrectionCapture(int newSelStart, int newSelEnd) {
+        try {
+            if (mLastVoiceCommittedText == null || mLastVoiceCommittedText.isEmpty()) return;
+            if (mLastVoiceCommitStart < 0 || mLastVoiceCommitEnd < mLastVoiceCommitStart) return;
+            long now = System.currentTimeMillis();
+            if (now - mLastVoiceCommittedTs > CORRECTION_CAPTURE_WINDOW_MS) return;
+            if (mCapturePostedCommitTs == mLastVoiceCommittedTs) return;
+
+            TextSnapshot snapshot = getCurrentTextSnapshotSafely();
+            String afterText = buildEditedVoiceText(snapshot, newSelStart, newSelEnd);
+            if (afterText == null || afterText.isEmpty()) return;
+            if (afterText.equals(mLastVoiceCommittedText)) return;
+
+            mPendingCorrectionCapture = true;
+            mPendingCorrectionCommitTs = mLastVoiceCommittedTs;
+            if (mainHandler != null) {
+                mainHandler.removeCallbacks(mPendingCorrectionCaptureRunnable);
+                mainHandler.postDelayed(mPendingCorrectionCaptureRunnable, CORRECTION_CAPTURE_DEBOUNCE_MS);
+            }
+        } catch (Exception e) {
+            Log.w(TAG, "Correction capture schedule failed", e);
+        }
+    }
+
+    private String buildEditedVoiceText(TextSnapshot snapshot, int selStart, int selEnd) {
+        try {
+            if (snapshot == null || snapshot.text == null) return null;
+            int textLength = snapshot.text.length();
+            if (mLastVoiceCommitFieldLength < 0 || mLastVoiceCommitStart > textLength) return null;
+
+            int lengthDelta = textLength - mLastVoiceCommitFieldLength;
+            int adjustedEnd = mLastVoiceCommitEnd + lengthDelta;
+            int start = clamp(mLastVoiceCommitStart, 0, textLength);
+            int end = clamp(adjustedEnd, start, textLength);
+
+            int cursorStart = selStart >= 0 ? selStart : snapshot.selectionStart;
+            int cursorEnd = selEnd >= 0 ? selEnd : snapshot.selectionEnd;
+            if (cursorStart >= 0 || cursorEnd >= 0) {
+                int cursorMin = Math.min(cursorStart >= 0 ? cursorStart : cursorEnd,
+                        cursorEnd >= 0 ? cursorEnd : cursorStart);
+                int cursorMax = Math.max(cursorStart >= 0 ? cursorStart : cursorEnd,
+                        cursorEnd >= 0 ? cursorEnd : cursorStart);
+                int guardStart = Math.max(0, start - 2);
+                int guardEnd = Math.min(textLength, Math.max(end, mLastVoiceCommitEnd) + 2);
+                if (cursorMax < guardStart || cursorMin > guardEnd) return null;
+                end = clamp(Math.max(end, cursorMax), start, textLength);
+            }
+
+            String edited = snapshot.text.substring(start, end).trim();
+            if (edited.isEmpty()) return null;
+            return edited;
+        } catch (Exception e) {
+            Log.w(TAG, "Correction capture build edited text failed", e);
+            return null;
+        }
+    }
+
+    private void flushPendingCorrectionCapture() {
+        try {
+            if (!mPendingCorrectionCapture) return;
+            if (mPendingCorrectionCommitTs != mLastVoiceCommittedTs) {
+                mPendingCorrectionCapture = false;
+                return;
+            }
+            if (mCapturePostedCommitTs == mLastVoiceCommittedTs) {
+                mPendingCorrectionCapture = false;
+                return;
+            }
+
+            TextSnapshot snapshot = getCurrentTextSnapshotSafely();
+            String afterText = buildEditedVoiceText(snapshot,
+                    snapshot != null ? snapshot.selectionStart : -1,
+                    snapshot != null ? snapshot.selectionEnd : -1);
+            if (afterText == null || afterText.isEmpty()
+                    || afterText.equals(mLastVoiceCommittedText)) {
+                mPendingCorrectionCapture = false;
+                return;
+            }
+
+            long committedTs = mLastVoiceCommittedTs;
+            String beforeText = mLastVoiceCommittedText;
+            mPendingCorrectionCapture = false;
+            mCapturePostedCommitTs = committedTs;
+            postCorrectionCapture(beforeText, afterText, committedTs, System.currentTimeMillis());
+        } catch (Exception e) {
+            mPendingCorrectionCapture = false;
+            Log.w(TAG, "Correction capture flush failed", e);
+        }
+    }
+
+    private void postCorrectionCapture(String beforeText, String afterText, long committedTs, long editTs) {
+        try {
+            if (beforeText == null || afterText == null) return;
+            if (beforeText.isEmpty() || afterText.isEmpty() || beforeText.equals(afterText)) return;
+
+            JSONObject payload = new JSONObject();
+            payload.put("before_text", beforeText);
+            payload.put("after_text", afterText);
+            payload.put("committed_ts", committedTs);
+            payload.put("edit_ts", editTs);
+            payload.put("source", "ime_edit");
+            payload.put("app_version", BuildConfig.VERSION_NAME);
+
+            RequestBody body = RequestBody.create(payload.toString(),
+                    MediaType.parse("application/json; charset=utf-8"));
+            Request.Builder reqBuilder = new Request.Builder()
+                    .url(getServerUrl() + "/v1/capture-correction")
+                    .post(body);
+
+            String auth = getAuthPassword();
+            if (auth != null && !auth.isEmpty()) {
+                reqBuilder.addHeader("Authorization", "Bearer " + auth);
+            }
+
+            httpClient.newCall(reqBuilder.build()).enqueue(new Callback() {
+                @Override
+                public void onFailure(@NonNull Call call, @NonNull IOException e) {
+                    Log.w(TAG, "Correction capture request failed");
+                }
+
+                @Override
+                public void onResponse(@NonNull Call call, @NonNull Response response) {
+                    response.close();
+                }
+            });
+        } catch (Exception e) {
+            Log.w(TAG, "Correction capture post failed", e);
+        }
+    }
+
+    private static int clamp(int value, int min, int max) {
+        return Math.max(min, Math.min(value, max));
     }
 
     private void dismissSymbolPopup() {
@@ -609,7 +873,7 @@ public class SimonIMEService extends InputMethodService {
         ClipAdapter adapter = new ClipAdapter(items, position -> {
             InputConnection ic = getCurrentInputConnection();
             if (ic != null && position < items.size()) {
-                ic.commitText(items.get(position), 1);
+                commitTextProgrammatically(ic, items.get(position));
                 updateStatus("📋 已貼上");
                 closePanel();
             }
@@ -855,7 +1119,7 @@ public class SimonIMEService extends InputMethodService {
                 if (ic != null && position < cmds.size()) {
                     String text = cmds.get(position).text;
                     if (!text.isEmpty()) {
-                        ic.commitText(text, 1);
+                        commitTextProgrammatically(ic, text);
                         updateStatus("⚡ " + cmds.get(position).label);
                         closePanel();
                     }
@@ -1798,7 +2062,11 @@ public class SimonIMEService extends InputMethodService {
                     mainHandler.post(() -> {
                         InputConnection ic = getCurrentInputConnection();
                         if (ic != null && !text.isEmpty()) {
-                            ic.commitText(text, 1);
+                            settlePendingCorrectionCapture();
+                            TextSnapshot beforeSnapshot = getCurrentTextSnapshotSafely();
+                            if (commitTextProgrammatically(ic, text)) {
+                                recordVoiceCommit(text, beforeSnapshot);
+                            }
                             String prefix;
                             switch (mode) {
                                 case SPELL: prefix = "拼字: "; break;
@@ -1894,7 +2162,7 @@ public class SimonIMEService extends InputMethodService {
                         String insert = json.optString("insert", text);
 
                         if (deleteBefore > 0 || deleteAfter > 0) {
-                            ic.deleteSurroundingText(deleteBefore, deleteAfter);
+                            deleteSurroundingTextProgrammatically(ic, deleteBefore, deleteAfter);
                         }
                         if (!insert.isEmpty()) {
                             // v6.17: commitFinalText 支援 Termux/Gemini 備援。
@@ -1979,7 +2247,7 @@ public class SimonIMEService extends InputMethodService {
                 toggleShift();
                 break;
             case "space":
-                ic.commitText(" ", 1);
+                commitTextProgrammatically(ic, " ");
                 break;
             case "enter":
                 handleEnterKey();
@@ -1999,7 +2267,7 @@ public class SimonIMEService extends InputMethodService {
                 if (shiftActive && key.length() == 1 && Character.isLetter(key.charAt(0))) {
                     ch = key.toUpperCase();
                 }
-                ic.commitText(ch, 1);
+                commitTextProgrammatically(ic, ch);
                 // Auto-unshift after one character (unless caps lock)
                 if (shiftActive && !capsLock) {
                     shiftActive = false;
@@ -2013,7 +2281,7 @@ public class SimonIMEService extends InputMethodService {
         if (ic == null) return false;
         CharSequence selectedText = ic.getSelectedText(0);
         if (selectedText != null && selectedText.length() > 0) {
-            ic.commitText("", 1);
+            commitTextProgrammatically(ic, "");
             return true;
         }
         return false;
@@ -2082,9 +2350,10 @@ public class SimonIMEService extends InputMethodService {
             EditorInfo ei = getCurrentInputEditorInfo();
             if (ei != null && (ei.imeOptions & EditorInfo.IME_FLAG_NO_ENTER_ACTION) == 0
                     && (ei.imeOptions & EditorInfo.IME_MASK_ACTION) != EditorInfo.IME_ACTION_NONE) {
+                markProgrammaticTextChange();
                 ic.performEditorAction(ei.imeOptions & EditorInfo.IME_MASK_ACTION);
             } else {
-                ic.commitText("\n", 1);
+                commitTextProgrammatically(ic, "\n");
             }
         }
     }
@@ -2100,7 +2369,7 @@ public class SimonIMEService extends InputMethodService {
                     backspaceRepeatCount = 0;
                     InputConnection ic0 = getCurrentInputConnection();
                     if (ic0 != null) {
-                        if (!deleteSelectionIfAny(ic0)) ic0.deleteSurroundingText(1, 0);
+                        if (!deleteSelectionIfAny(ic0)) deleteSurroundingTextProgrammatically(ic0, 1, 0);
                     }
                     backspaceRepeatRunnable = new Runnable() {
                         @Override
@@ -2111,7 +2380,7 @@ public class SimonIMEService extends InputMethodService {
                                 backspaceRepeatCount++;
                                 int deleteCount = backspaceRepeatCount < 5 ? 1
                                         : backspaceRepeatCount < 15 ? 2 : 5;
-                                ic.deleteSurroundingText(deleteCount, 0);
+                                deleteSurroundingTextProgrammatically(ic, deleteCount, 0);
                             }
                             long delay = Math.max(30, 120 - backspaceRepeatCount * 6);
                             mainHandler.postDelayed(this, delay);
@@ -2287,7 +2556,11 @@ public class SimonIMEService extends InputMethodService {
                     mainHandler.post(() -> {
                         InputConnection ic = getCurrentInputConnection();
                         if (ic != null) {
-                            ic.commitText(text, 1);
+                            settlePendingCorrectionCapture();
+                            TextSnapshot beforeSnapshot = getCurrentTextSnapshotSafely();
+                            if (commitTextProgrammatically(ic, text)) {
+                                recordVoiceCommit(text, beforeSnapshot);
+                            }
                             updateStatus("✅ " + truncate(text, 20));
                         } else {
                             updateStatus("無法取得輸入連線");
@@ -2391,7 +2664,28 @@ public class SimonIMEService extends InputMethodService {
     }
 
     @Override
+    public void onUpdateSelection(int oldSelStart, int oldSelEnd, int newSelStart, int newSelEnd,
+                                  int candidatesStart, int candidatesEnd) {
+        try {
+            if (mIgnoreNextUpdateSelection) {
+                mIgnoreNextUpdateSelection = false;
+                return;
+            }
+            maybeScheduleCorrectionCapture(newSelStart, newSelEnd);
+        } catch (Exception e) {
+            Log.w(TAG, "Correction capture onUpdateSelection failed", e);
+        }
+
+        try {
+            super.onUpdateSelection(oldSelStart, oldSelEnd, newSelStart, newSelEnd,
+                    candidatesStart, candidatesEnd);
+        } catch (Exception ignored) {
+        }
+    }
+
+    @Override
     public void onFinishInputView(boolean finishingInput) {
+        settlePendingCorrectionCapture();
         dismissSymbolPopup();
         // v6.1: 鍵盤收起 → 釋放螢幕常亮，避免非錄音時殘留 keepScreenOn 拖電
         if (rootView != null) rootView.setKeepScreenOn(false);
@@ -2425,6 +2719,9 @@ public class SimonIMEService extends InputMethodService {
             audioStreamWs.cancel();
             audioStreamWs = null;
             audioStreamActive = false;
+        }
+        if (mainHandler != null) {
+            mainHandler.removeCallbacks(mPendingCorrectionCaptureRunnable);
         }
         if (localSTT != null) {
             localSTT.release();
