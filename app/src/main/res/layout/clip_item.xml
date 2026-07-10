@@ -1,17 +1,23 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!-- v6.22: 只有「整列(root)」是可點擊目標 → 點任何地方都貼上；子 view 一律 clickable=false，
+     杜絕 v6.20/6.21 clipText 吞觸擊導致點字沒反應。等同 v6.19 可用結構（可點的就是整列）。 -->
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
+    android:minHeight="44dp"
     android:orientation="horizontal"
     android:background="#1a1a2e"
     android:layout_marginBottom="2dp"
-    android:gravity="center_vertical">
+    android:gravity="center_vertical"
+    android:clickable="true"
+    android:focusable="true">
 
     <!-- 紫色標記條（標記時顯示） -->
     <View
         android:id="@+id/clipAccent"
         android:layout_width="4dp"
         android:layout_height="match_parent"
+        android:minHeight="44dp"
         android:background="#7B2FBE"
         android:visibility="gone" />
 
@@ -36,7 +42,8 @@
         android:padding="8dp"
         android:maxLines="2"
         android:ellipsize="end"
-        android:clickable="true"
-        android:focusable="true" />
+        android:clickable="false"
+        android:focusable="false"
+        android:duplicateParentState="true" />
 
 </LinearLayout>

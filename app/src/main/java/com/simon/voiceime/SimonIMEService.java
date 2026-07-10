@@ -902,6 +902,39 @@ public class SimonIMEService extends InputMethodService {
         activePanel = Panel.NONE;
     }
 
+    /**
+     * v6.22: 剪貼簿點字貼上。commitText 為主（v6.19 一直用這條，多數 app 正常），
+     * 失敗才走系統貼上兜底（Termux/Gemini 類拒收 commitText 的 app）。
+     * 狀態訊息可遠端診斷：點了「完全沒訊息」＝觸擊沒進來(版面問題)；
+     * 「無輸入連線」＝ic null；「📋 已貼上」＝commit 成功。
+     */
+    private boolean pasteClipboardText(String text) {
+        if (text == null || text.isEmpty()) return false;
+        InputConnection ic = getCurrentInputConnection();
+        if (ic == null) {
+            copyToSystemClipboard(text);
+            updateStatus("已複製，長按輸入框貼上（無輸入連線）");
+            return true;
+        }
+        markProgrammaticTextChange();
+        boolean ok = ic.commitText(text, 1);
+        if (!ok) {
+            // 部分 app 拒收 commitText → 用系統剪貼簿 + 貼上動作兜底
+            copyToSystemClipboard(text);
+            markProgrammaticTextChange();
+            ic.performContextMenuAction(android.R.id.paste);
+        }
+        updateStatus("📋 已貼上");
+        return true;
+    }
+
+    private void copyToSystemClipboard(String text) {
+        try {
+            ClipboardManager cm = (ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
+            if (cm != null) cm.setPrimaryClip(ClipData.newPlainText("simon-ime", text));
+        } catch (Exception ignored) {}
+    }
+
     // ==================== Clipboard Panel ====================
 
     private void showClipboardPanel() {
@@ -943,11 +976,8 @@ public class SimonIMEService extends InputMethodService {
 
         List<String> items = clipboardHelper.getHistory();
         ClipAdapter adapter = new ClipAdapter(items, position -> {
-            InputConnection ic = getCurrentInputConnection();
-            if (ic != null && position >= 0 && position < items.size()) {
-                commitTextProgrammatically(ic, items.get(position));
-                updateStatus("📋 已貼上");
-                closePanel();
+            if (position >= 0 && position < items.size()) {
+                if (pasteClipboardText(items.get(position))) closePanel();
             }
         });
         recycler.setAdapter(adapter);
@@ -1169,14 +1199,13 @@ public class SimonIMEService extends InputMethodService {
             holder.accent.setVisibility(marked ? View.VISIBLE : View.GONE);
             holder.checkBox.setVisibility(marked ? View.VISIBLE : View.GONE);
             holder.checkBox.setChecked(marked);
-            // v6.21 fix: clipText 在版面裡是 clickable，會吞掉觸擊，itemView 的 onClick 收不到
-            // → 貼上監聽必須綁在 clipText 本身（主要點擊區），色條/邊緣區則交給 itemView 兜底。
-            View.OnClickListener pasteClick = v -> {
+            // v6.22 fix: 只綁 itemView（整列）。clipText/checkBox 已在版面設 clickable=false，
+            // 觸擊會冒泡到整列 → 點任何地方都貼上。切勿再對 clipText setOnClickListener
+            // （那會把 clipText 重新變成 clickable，又回到 v6.20/6.21 吞觸擊的 bug）。
+            holder.itemView.setOnClickListener(v -> {
                 int p = holder.getBindingAdapterPosition();
                 if (p != RecyclerView.NO_POSITION) listener.onClick(p);
-            };
-            holder.text.setOnClickListener(pasteClick);
-            holder.itemView.setOnClickListener(pasteClick);
+            });
         }
 
         @Override public int getItemCount() { return items.size(); }
