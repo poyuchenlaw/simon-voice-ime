@@ -115,6 +115,16 @@
             android:textSize="13sp"
             android:layout_marginBottom="20dp" />
 
+        <!-- v6.20: 複製自動記詞開關 -->
+        <CheckBox
+            android:id="@+id/checkAutoVocab"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="複製自動記詞（短中文詞自動加入語音詞庫）"
+            android:textColor="#e0e0e0"
+            android:textSize="14sp"
+            android:layout_marginBottom="20dp" />
+
         <!-- ===== 使用說明 ===== -->
         <View
             android:layout_width="match_parent"

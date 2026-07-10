@@ -17,10 +17,22 @@
             android:layout_width="0dp"
             android:layout_height="wrap_content"
             android:layout_weight="1"
-            android:text="⚡ 常用指令"
+            android:text="⚡ 常用詞彙"
             android:textColor="#e0e0e0"
             android:textSize="14sp"
             android:paddingStart="8dp" />
+
+        <!-- ＋ 在鍵盤內新增資料夾（語音命名） -->
+        <Button
+            android:id="@+id/btnCmdAddGroup"
+            android:layout_width="wrap_content"
+            android:layout_height="30dp"
+            android:text="＋ 資料夾"
+            android:textColor="#4ECCA3"
+            android:textSize="12sp"
+            android:background="@android:color/transparent"
+            android:paddingStart="10dp"
+            android:paddingEnd="10dp" />
 
         <Button
             android:id="@+id/btnCmdClose"

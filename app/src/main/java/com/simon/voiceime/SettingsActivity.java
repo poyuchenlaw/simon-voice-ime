@@ -6,6 +6,7 @@ import android.content.Intent;
 import android.content.SharedPreferences;
 import android.os.Bundle;
 import android.widget.Button;
+import android.widget.CheckBox;
 import android.widget.EditText;
 import android.widget.TextView;
 import android.widget.Toast;
@@ -72,6 +73,14 @@ public class SettingsActivity extends Activity {
         SharedPreferences prefs = getSharedPreferences("simon_ime_prefs", MODE_PRIVATE);
         editServerUrl.setText(prefs.getString("server_url", "http://100.84.86.128:8001"));
         editAuthPassword.setText(prefs.getString("auth_password", "guangxin_voice_2026"));
+
+        // v6.20: 複製自動記詞開關（預設開；即時持久化）
+        CheckBox checkAutoVocab = findViewById(R.id.checkAutoVocab);
+        if (checkAutoVocab != null) {
+            checkAutoVocab.setChecked(prefs.getBoolean("auto_vocab_enabled", true));
+            checkAutoVocab.setOnCheckedChangeListener((btn, isChecked) ->
+                    prefs.edit().putBoolean("auto_vocab_enabled", isChecked).apply());
+        }
 
         // Save
         btnSave.setOnClickListener(v -> {

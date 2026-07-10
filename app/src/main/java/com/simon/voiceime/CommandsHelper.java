@@ -211,6 +211,16 @@ public class CommandsHelper {
         save();
     }
 
+    /** v6.20: 產生不重複的預設資料夾名稱 */
+    public String uniqueGroupName() {
+        List<String> names = getGroupNames();
+        String base = "新資料夾";
+        if (!names.contains(base)) return base;
+        int i = 2;
+        while (names.contains(base + i)) i++;
+        return base + i;
+    }
+
     /** Import commands from JSON string (for settings sync) */
     public boolean importFromJson(String json) {
         try {

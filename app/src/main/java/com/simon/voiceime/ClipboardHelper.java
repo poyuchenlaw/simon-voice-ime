@@ -22,6 +22,17 @@ import java.util.List;
  */
 public class ClipboardHelper {
 
+    /** v6.20: 剪貼簿新增時回呼，供詞彙自動登錄 */
+    public interface ClipVocabListener {
+        void onNewClip(String text, String label);
+    }
+
+    private ClipVocabListener vocabListener;
+
+    public void setVocabListener(ClipVocabListener listener) {
+        this.vocabListener = listener;
+    }
+
     private static final String TAG = "ClipboardHelper";
     private static final String PREFS_NAME = "simon_ime_clipboard";
     private static final String KEY_HISTORY = "history";
@@ -54,6 +65,11 @@ public class ClipboardHelper {
                     CharSequence text = clip.getItemAt(0).getText();
                     if (text != null && text.length() > 0) {
                         addToHistory(text.toString());
+                        if (vocabListener != null) {
+                            CharSequence lbl = clip.getDescription().getLabel();
+                            vocabListener.onNewClip(text.toString(),
+                                    lbl != null ? lbl.toString() : "");
+                        }
                     }
                 }
             });
@@ -85,6 +101,11 @@ public class ClipboardHelper {
 
     public void clear() {
         history.clear();
+        saveHistory();
+    }
+
+    public void removeByContent(String text) {
+        history.remove(text);
         saveHistory();
     }
 

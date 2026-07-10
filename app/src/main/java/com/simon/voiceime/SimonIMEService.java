@@ -22,6 +22,7 @@ import android.view.inputmethod.EditorInfo;
 import android.view.inputmethod.InputConnection;
 import android.view.inputmethod.InputMethodManager;
 import android.widget.Button;
+import android.widget.CheckBox;
 import android.widget.FrameLayout;
 import android.widget.GridLayout;
 import android.widget.LinearLayout;
@@ -45,8 +46,12 @@ import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collections;
+import java.util.HashSet;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Set;
 import java.util.concurrent.TimeUnit;
 
 import okhttp3.Call;
@@ -119,6 +124,7 @@ public class SimonIMEService extends InputMethodService {
     private StreamingUploadHelper streamingUpload;
     private DataBackupHelper dataBackupHelper;
     private QwenHelper qwenHelper;
+    private VocabHelper vocabHelper;
 
     // Streaming state (APPEND mode with VAD)
     private volatile boolean streamingMode = false;
@@ -145,14 +151,31 @@ public class SimonIMEService extends InputMethodService {
     // v6.1: fullPcmBuffer 封頂 ~10 分鐘（19.2MB）防無界成長
     private static final int MAX_FULL_PCM_BYTES = SAMPLE_RATE * 2 * 600;
 
+    // v6.20 fields
+    private final Set<String> markedClips = new LinkedHashSet<>();
+    private String aiContextText = null;
+    private int aiContextCount = 0;
+    private int fieldGeneration = 0;
+    private boolean autoVocabEnabled = true;
+    private Set<String> enrolledVocab = new HashSet<>();
+    private long lastEnrollTimeMs = 0;
+    private int enrollCountThisMinute = 0;
+    private long enrollMinuteStartMs = 0;
+    private int enrollCountToday = 0;
+    private long enrollDayStartMs = 0;
+    private boolean folderNamingMode = false;
+
     // UI elements
     private View rootView;
     private TextView statusText;
     private TextView previewText;
     private View btnMic;
     private TextView btnMode;
+    private TextView btnClipboard;   // v6.20: promoted to field (was local in onCreateInputView)
     private FrameLayout panelContainer;
     private PopupWindow symbolPopup;
+    private View clipMarkFooter;
+    private TextView clipMarkCount;
 
     // Keyboard switching
     private View voiceKeyboard;
@@ -206,6 +229,11 @@ public class SimonIMEService extends InputMethodService {
         streamingUpload = new StreamingUploadHelper();
         dataBackupHelper = new DataBackupHelper(this);
         qwenHelper = new QwenHelper(this);
+        vocabHelper = new VocabHelper(this);
+        SharedPreferences v620prefs = getSharedPreferences("simon_ime_prefs", MODE_PRIVATE);
+        autoVocabEnabled = v620prefs.getBoolean("auto_vocab_enabled", true);
+        loadEnrolledVocab();
+        clipboardHelper.setVocabListener((t, l) -> maybeAutoEnrollVocab(t, l));
 
         // 載入上次使用的模式
         loadSavedMode();
@@ -242,6 +270,21 @@ public class SimonIMEService extends InputMethodService {
     }
 
     @Override
+    public void onStartInput(EditorInfo attribute, boolean restarting) {
+        super.onStartInput(attribute, restarting);
+        // v6.20: only treat a genuinely new field (not an internal restart) as a field switch.
+        // On a real switch, bump the generation guard and disarm any pending AI material so it
+        // never leaks into an unrelated field. Keep state on restarting==true.
+        if (!restarting) {
+            fieldGeneration++;
+            aiContextText = null;
+            aiContextCount = 0;
+            markedClips.clear();
+            updateArmedIndicator();
+        }
+    }
+
+    @Override
     public View onCreateInputView() {
         rootView = LayoutInflater.from(this).inflate(R.layout.keyboard_view, null);
 
@@ -254,7 +297,7 @@ public class SimonIMEService extends InputMethodService {
         View btnBackspace = rootView.findViewById(R.id.btnBackspace);
         View btnEnter = rootView.findViewById(R.id.btnEnter);
         View btnSettings = rootView.findViewById(R.id.btnSettings);
-        View btnClipboard = rootView.findViewById(R.id.btnClipboard);
+        btnClipboard = (TextView) rootView.findViewById(R.id.btnClipboard);
         View btnCommands = rootView.findViewById(R.id.btnCommands);
         View btnSwitchIME = rootView.findViewById(R.id.btnSwitchIME);
 
@@ -381,6 +424,7 @@ public class SimonIMEService extends InputMethodService {
         setupTypingKeyboard(numbersKeyboard);
 
         updateModeUI();
+        updateArmedIndicator();
         return rootView;
     }
 
@@ -863,16 +907,44 @@ public class SimonIMEService extends InputMethodService {
     private void showClipboardPanel() {
         View view = LayoutInflater.from(this).inflate(R.layout.clipboard_panel, panelContainer, true);
 
+        // --- 標題列按鈕 ---
         Button btnClose = view.findViewById(R.id.btnClipClose);
         btnClose.setOnClickListener(v -> closePanel());
 
+        Button btnVocabList = view.findViewById(R.id.btnClipVocabList);
+        btnVocabList.setOnClickListener(v -> showVocabListInline());
+
+        // --- 標記底欄 ---
+        clipMarkFooter = view.findViewById(R.id.clipMarkFooter);
+        clipMarkCount = view.findViewById(R.id.clipMarkCount);
+
+        Button btnSetAiContext = view.findViewById(R.id.btnClipSetAiContext);
+        btnSetAiContext.setOnClickListener(v -> armAiContext());
+
+        Button btnAddVocab = view.findViewById(R.id.btnClipAddVocab);
+        btnAddVocab.setOnClickListener(v -> {
+            if (!markedClips.isEmpty()) {
+                showBatchAddToCommandsInline(new ArrayList<>(markedClips));
+            } else {
+                updateStatus("請先標記剪貼內容");
+            }
+        });
+
+        Button btnClearMark = view.findViewById(R.id.btnClipClearMark);
+        btnClearMark.setOnClickListener(v -> {
+            markedClips.clear();
+            updateArmedIndicator();
+            showPanel(Panel.CLIPBOARD);
+        });
+
+        // --- 列表 ---
         RecyclerView recycler = view.findViewById(R.id.clipRecycler);
         recycler.setLayoutManager(new LinearLayoutManager(this));
 
         List<String> items = clipboardHelper.getHistory();
         ClipAdapter adapter = new ClipAdapter(items, position -> {
             InputConnection ic = getCurrentInputConnection();
-            if (ic != null && position < items.size()) {
+            if (ic != null && position >= 0 && position < items.size()) {
                 commitTextProgrammatically(ic, items.get(position));
                 updateStatus("📋 已貼上");
                 closePanel();
@@ -880,8 +952,11 @@ public class SimonIMEService extends InputMethodService {
         });
         recycler.setAdapter(adapter);
 
-        // 右滑 → 加入常用指令
-        new ItemTouchHelper(new ItemTouchHelper.SimpleCallback(0, ItemTouchHelper.RIGHT) {
+        updateClipMarkFooter();
+
+        // 右滑 → 加入常用指令；左滑 → 標記/取消標記
+        new ItemTouchHelper(new ItemTouchHelper.SimpleCallback(0,
+                ItemTouchHelper.RIGHT | ItemTouchHelper.LEFT) {
             @Override
             public boolean onMove(@NonNull RecyclerView rv, @NonNull RecyclerView.ViewHolder from,
                                   @NonNull RecyclerView.ViewHolder to) {
@@ -890,13 +965,24 @@ public class SimonIMEService extends InputMethodService {
 
             @Override
             public void onSwiped(@NonNull RecyclerView.ViewHolder vh, int direction) {
-                int pos = vh.getAdapterPosition();
-                if (pos < 0 || pos >= items.size()) return;
+                int pos = vh.getBindingAdapterPosition();
+                if (pos == RecyclerView.NO_POSITION || pos < 0 || pos >= items.size()) return;
                 String clipText = items.get(pos);
                 // 恢復 item（不真的移除）
                 adapter.notifyItemChanged(pos);
-                // 顯示內嵌加入面板
-                showAddToCommandsInline(clipText);
+                if (direction == ItemTouchHelper.RIGHT) {
+                    showAddToCommandsInline(clipText);
+                } else {
+                    // 左滑：切換標記
+                    if (markedClips.contains(clipText)) {
+                        markedClips.remove(clipText);
+                    } else {
+                        markedClips.add(clipText);
+                    }
+                    updateArmedIndicator();
+                    updateClipMarkFooter();
+                    adapter.notifyItemChanged(pos);
+                }
             }
 
             @Override
@@ -904,17 +990,28 @@ public class SimonIMEService extends InputMethodService {
                                     @NonNull RecyclerView.ViewHolder vh, float dX, float dY,
                                     int actionState, boolean isActive) {
                 if (dX > 0) {
-                    // 綠色背景
+                    // 右滑：綠色背景 ⚡+
                     Paint paint = new Paint();
                     paint.setColor(0xFF2d6a4f);
                     c.drawRect(vh.itemView.getLeft(), vh.itemView.getTop(),
                             vh.itemView.getLeft() + dX, vh.itemView.getBottom(), paint);
-                    // ⚡+ 文字
                     Paint textPaint = new Paint();
                     textPaint.setColor(Color.WHITE);
                     textPaint.setTextSize(36f);
                     textPaint.setAntiAlias(true);
                     c.drawText("⚡+", vh.itemView.getLeft() + 24,
+                            (vh.itemView.getTop() + vh.itemView.getBottom()) / 2f + 12, textPaint);
+                } else if (dX < 0) {
+                    // 左滑：紫色背景 ✓
+                    Paint paint = new Paint();
+                    paint.setColor(0xFF4a1060);
+                    c.drawRect(vh.itemView.getRight() + dX, vh.itemView.getTop(),
+                            vh.itemView.getRight(), vh.itemView.getBottom(), paint);
+                    Paint textPaint = new Paint();
+                    textPaint.setColor(Color.WHITE);
+                    textPaint.setTextSize(36f);
+                    textPaint.setAntiAlias(true);
+                    c.drawText("✓", vh.itemView.getRight() + dX + 16,
                             (vh.itemView.getTop() + vh.itemView.getBottom()) / 2f + 12, textPaint);
                 }
                 super.onChildDraw(c, rv, vh, dX, dY, actionState, isActive);
@@ -997,6 +1094,25 @@ public class SimonIMEService extends InputMethodService {
             });
             groupRow.addView(btn);
         }
+        // ＋ 新資料夾（語音命名）
+        Button btnNewFolder = new Button(this);
+        btnNewFolder.setText("＋ 新資料夾");
+        btnNewFolder.setTextColor(0xFF4ECCA3);
+        btnNewFolder.setTextSize(12);
+        btnNewFolder.setAllCaps(false);
+        LinearLayout.LayoutParams newFolderLp = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT, 72);
+        newFolderLp.setMarginEnd(8);
+        btnNewFolder.setLayoutParams(newFolderLp);
+        btnNewFolder.setBackgroundColor(0xFF0a1020);
+        btnNewFolder.setOnClickListener(v -> {
+            folderNamingMode = true;
+            closePanel();
+            startRecording();
+            updateStatus("🎙 說出資料夾名稱…");
+        });
+        groupRow.addView(btnNewFolder);
+
         panel.addView(groupRow);
 
         // 確認 / 取消
@@ -1028,35 +1144,48 @@ public class SimonIMEService extends InputMethodService {
         panelContainer.addView(panel);
     }
 
-    // Simple RecyclerView Adapter for clipboard
-    private static class ClipAdapter extends RecyclerView.Adapter<ClipAdapter.VH> {
+    /** v6.20: 列表點擊回呼介面（提升至 Service 層級，供 ClipAdapter 與 CmdAdapter 共用） */
+    interface OnItemClick { void onClick(int position); }
+
+    // v6.20: ClipAdapter 改為非靜態內部類別，以便存取外層 markedClips
+    private class ClipAdapter extends RecyclerView.Adapter<ClipAdapter.VH> {
         private final List<String> items;
         private final OnItemClick listener;
-
-        interface OnItemClick { void onClick(int position); }
 
         ClipAdapter(List<String> items, OnItemClick listener) {
             this.items = items;
             this.listener = listener;
         }
 
-        @Override public VH onCreateViewHolder(android.view.ViewGroup parent, int viewType) {
+        @Override public VH onCreateViewHolder(@NonNull android.view.ViewGroup parent, int viewType) {
             View v = LayoutInflater.from(parent.getContext()).inflate(R.layout.clip_item, parent, false);
             return new VH(v);
         }
 
-        @Override public void onBindViewHolder(VH holder, int position) {
-            holder.text.setText(items.get(position));
-            holder.itemView.setOnClickListener(v -> listener.onClick(position));
+        @Override public void onBindViewHolder(@NonNull VH holder, int position) {
+            String text = items.get(position);
+            holder.text.setText(text);
+            boolean marked = markedClips.contains(text);
+            holder.accent.setVisibility(marked ? View.VISIBLE : View.GONE);
+            holder.checkBox.setVisibility(marked ? View.VISIBLE : View.GONE);
+            holder.checkBox.setChecked(marked);
+            holder.itemView.setOnClickListener(v -> {
+                int p = holder.getBindingAdapterPosition();
+                if (p != RecyclerView.NO_POSITION) listener.onClick(p);
+            });
         }
 
         @Override public int getItemCount() { return items.size(); }
 
-        static class VH extends RecyclerView.ViewHolder {
+        class VH extends RecyclerView.ViewHolder {
             TextView text;
+            View accent;
+            CheckBox checkBox;
             VH(View v) {
                 super(v);
                 text = v.findViewById(R.id.clipText);
+                accent = v.findViewById(R.id.clipAccent);
+                checkBox = v.findViewById(R.id.clipCheck);
             }
         }
     }
@@ -1070,6 +1199,15 @@ public class SimonIMEService extends InputMethodService {
 
         Button btnClose = view.findViewById(R.id.btnCmdClose);
         btnClose.setOnClickListener(v -> closePanel());
+
+        // v6.20: ＋ 資料夾（語音命名模式）
+        Button btnCmdAddGroup = view.findViewById(R.id.btnCmdAddGroup);
+        btnCmdAddGroup.setOnClickListener(v -> {
+            folderNamingMode = true;
+            closePanel();
+            startRecording();
+            updateStatus("🎙 說出資料夾名稱…");
+        });
 
         LinearLayout tabContainer = view.findViewById(R.id.cmdGroupTabs);
         RecyclerView recycler = view.findViewById(R.id.cmdRecycler);
@@ -1108,6 +1246,17 @@ public class SimonIMEService extends InputMethodService {
                 currentCmdGroup = name;
                 showPanel(Panel.COMMANDS); // Refresh
             });
+            // v6.20: 長壓 tab → 刪除該資料夾
+            tab.setOnLongClickListener(v -> {
+                commandsHelper.removeGroup(name);
+                if (name.equals(currentCmdGroup)) {
+                    List<String> remaining = commandsHelper.getGroupNames();
+                    currentCmdGroup = remaining.isEmpty() ? null : remaining.get(0);
+                }
+                showPanel(Panel.COMMANDS);
+                updateStatus("已刪除「" + name + "」");
+                return true;
+            });
             tabContainer.addView(tab);
         }
 
@@ -1131,9 +1280,9 @@ public class SimonIMEService extends InputMethodService {
     // Simple RecyclerView Adapter for commands
     private static class CmdAdapter extends RecyclerView.Adapter<CmdAdapter.VH> {
         private final List<CommandsHelper.Command> items;
-        private final ClipAdapter.OnItemClick listener;
+        private final OnItemClick listener;
 
-        CmdAdapter(List<CommandsHelper.Command> items, ClipAdapter.OnItemClick listener) {
+        CmdAdapter(List<CommandsHelper.Command> items, OnItemClick listener) {
             this.items = items;
             this.listener = listener;
         }
@@ -1613,6 +1762,37 @@ public class SimonIMEService extends InputMethodService {
             updateStatus("辨識中...");
         });
 
+        // v6.20: 資料夾語音命名攔截
+        if (folderNamingMode) {
+            folderNamingMode = false;
+            final byte[] namePcm = pcmData;
+            final int gen = fieldGeneration;
+            if (namePcm.length >= 3200 && localSTTReady && localSTT != null) {
+                new Thread(() -> {
+                    String name = localSTT.recognize(namePcm, SAMPLE_RATE);
+                    if (name != null) name = name.trim();
+                    if (name == null || name.isEmpty()) name = commandsHelper.uniqueGroupName();
+                    final String folderName = name;
+                    mainHandler.post(() -> {
+                        if (gen != fieldGeneration) return;
+                        commandsHelper.addGroup(folderName);
+                        currentCmdGroup = folderName;
+                        showPanel(Panel.COMMANDS);
+                        updateStatus("已建立「" + folderName + "」");
+                    });
+                }, "FolderName-STT").start();
+            } else {
+                String folderName = commandsHelper.uniqueGroupName();
+                commandsHelper.addGroup(folderName);
+                currentCmdGroup = folderName;
+                mainHandler.post(() -> {
+                    showPanel(Panel.COMMANDS);
+                    updateStatus("已建立「" + folderName + "」");
+                });
+            }
+            return;
+        }
+
         // v6.1: 串流中途斷線（streamFailed）→ audioStreamWs 已 null。用整段保留音訊走乾淨 HTTP
         //       （有標點、走伺服器校正），而非 pcmData 殘片（只剩斷線後那段）。
         if (currentMode == Mode.APPEND && streamFailed) {
@@ -1716,7 +1896,12 @@ public class SimonIMEService extends InputMethodService {
                     final String finalText = spokenText;
                     mainHandler.post(() -> updateStatus("辨識(" + sttMs + "ms): " + truncate(finalText, 15)));
                     if (modeNow == Mode.REPLACE) {
-                        sendTextReplace(finalText, bc, ac);
+                        // v6.20 R2: AI 素材已備 → 走 /v1/ai-command 並「插入」答案（絕不刪除游標周圍）
+                        if (aiContextText != null) {
+                            sendAiCommand(finalText, aiContextText);
+                        } else {
+                            sendTextReplace(finalText, bc, ac);
+                        }
                     } else {
                         sendTextProcess(finalText, modeNow);
                     }
@@ -1724,7 +1909,11 @@ public class SimonIMEService extends InputMethodService {
                     // 本機 STT 失敗 → fallback 上傳音訊
                     mainHandler.post(() -> updateStatus("本機辨識無結果，上傳中..."));
                     byte[] wavData = pcmToWav(pcmData, SAMPLE_RATE, 1, 16);
-                    sendToWTI(wavData, modeNow, false);
+                    if (modeNow == Mode.REPLACE && aiContextText != null) {
+                        sendAiCommandAudio(wavData, aiContextText);
+                    } else {
+                        sendToWTI(wavData, modeNow, false);
+                    }
                 }
             }, "LocalSTT-Recognize").start();
             return;
@@ -1732,7 +1921,11 @@ public class SimonIMEService extends InputMethodService {
 
         // fallback: 本機 STT 未就緒 → 上傳音訊（舊流程）
         byte[] wavData = pcmToWav(pcmData, SAMPLE_RATE, 1, 16);
-        sendToWTI(wavData, currentMode);
+        if (currentMode == Mode.REPLACE && aiContextText != null) {
+            sendAiCommandAudio(wavData, aiContextText);
+        } else {
+            sendToWTI(wavData, currentMode);
+        }
     }
 
     /**
@@ -1920,6 +2113,18 @@ public class SimonIMEService extends InputMethodService {
     }
 
     private void sendToWTI(byte[] wavData, Mode mode, boolean allowOfflineAppendFallback) {
+        // v6.20: guard against null/empty audio
+        if (wavData == null || wavData.length == 0) {
+            mainHandler.post(() -> updateStatus("沒有可用的音訊，請再試一次"));
+            return;
+        }
+
+        // v6.20 R2: any REPLACE audio path while AI material is armed → /v1/ai-command (insert, never delete)
+        if (mode == Mode.REPLACE && aiContextText != null) {
+            sendAiCommandAudio(wavData, aiContextText);
+            return;
+        }
+
         String serverUrl = getServerUrl();
 
         String endpoint;
@@ -2616,6 +2821,546 @@ public class SimonIMEService extends InputMethodService {
                 mainHandler.post(() -> updateStatus("離線辨識無結果"));
             }
         }, "OfflineFallback-SenseVoice").start();
+    }
+
+    // ==================== v6.20 新增方法 ====================
+
+    /** 更新剪貼簿鍵的標記計數徽章 */
+    private void updateArmedIndicator() {
+        if (btnClipboard == null) return;
+        try {
+            if (aiContextText != null) {
+                btnClipboard.setText("🤖");
+            } else if (!markedClips.isEmpty()) {
+                btnClipboard.setText("📋" + markedClips.size());
+            } else {
+                btnClipboard.setText("📋");
+            }
+        } catch (Exception e) {
+            Log.w(TAG, "updateArmedIndicator failed", e);
+        }
+    }
+
+    /**
+     * v6.20 R2: 將已標記剪貼組成 AI 素材、武裝待命。
+     * 以 "\n---\n" 串接；超過 6000 字則丟棄「最舊」標記。
+     */
+    private void armAiContext() {
+        if (markedClips.isEmpty()) {
+            updateStatus("請先標記剪貼內容");
+            return;
+        }
+        List<String> marks = new ArrayList<>(markedClips); // 插入序：最舊在前
+        StringBuilder sb = new StringBuilder();
+        // 由最新往回累加，總長 ≤6000；不足者代表最舊被丟棄
+        for (int i = marks.size() - 1; i >= 0; i--) {
+            String piece = marks.get(i);
+            int added = piece.length() + (sb.length() > 0 ? 5 : 0); // "\n---\n" = 5
+            if (sb.length() + added > 6000) break;
+            if (sb.length() > 0) sb.insert(0, "\n---\n");
+            sb.insert(0, piece);
+        }
+        aiContextText = sb.toString();
+        aiContextCount = markedClips.size();
+        updateArmedIndicator();
+        updateStatus("🤖 AI素材已備 " + aiContextCount + "則 · 長按🎤說出指令");
+        closePanel();
+    }
+
+    /** v6.20 R2: 單次用後解除 AI 武裝狀態 */
+    private void clearAiState() {
+        aiContextText = null;
+        aiContextCount = 0;
+        markedClips.clear();
+        updateArmedIndicator();
+    }
+
+    /**
+     * v6.20 R2: 文字指令 → POST /v1/ai-command，回傳答案「插入」游標處（絕不刪除周圍）。
+     * 空回應 → 保留武裝供重試；欄位已切換（fieldGeneration 變動）→ 丟棄不插入。
+     */
+    private void sendAiCommand(String instruction, String context) {
+        if (instruction == null || instruction.trim().isEmpty()) {
+            updateStatus("未辨識到指令");
+            return;
+        }
+        final int capturedGeneration = fieldGeneration;
+        okhttp3.FormBody body = new okhttp3.FormBody.Builder()
+                .add("instruction", instruction.trim())
+                .add("context", context != null ? context : "")
+                .add("language", "zh-TW")
+                .build();
+        Request.Builder rb = new Request.Builder()
+                .url(getServerUrl() + "/v1/ai-command")
+                .post(body);
+        String auth = getAuthPassword();
+        if (auth != null && !auth.isEmpty()) rb.addHeader("Authorization", "Bearer " + auth);
+        httpClient.newCall(rb.build()).enqueue(new Callback() {
+            @Override public void onFailure(@NonNull Call call, @NonNull IOException e) {
+                mainHandler.post(() -> updateStatus("AI 指令失敗，素材保留可重試"));
+            }
+            @Override public void onResponse(@NonNull Call call, @NonNull Response response) throws IOException {
+                handleAiCommandResponse(response, capturedGeneration);
+            }
+        });
+    }
+
+    /**
+     * v6.20 R2: 音訊指令（本機 STT 未取得文字時）→ POST /v1/ai-command（file 由伺服器轉錄為指令）。
+     */
+    private void sendAiCommandAudio(byte[] wavData, String context) {
+        if (wavData == null || wavData.length == 0) {
+            updateStatus("沒有可用的音訊，素材保留可重試");
+            return;
+        }
+        final int capturedGeneration = fieldGeneration;
+        MultipartBody body = new MultipartBody.Builder()
+                .setType(MultipartBody.FORM)
+                .addFormDataPart("file", "recording.wav",
+                        RequestBody.create(wavData, MediaType.parse("audio/wav")))
+                .addFormDataPart("context", context != null ? context : "")
+                .addFormDataPart("language", "zh-TW")
+                .build();
+        Request.Builder rb = new Request.Builder()
+                .url(getServerUrl() + "/v1/ai-command")
+                .post(body);
+        String auth = getAuthPassword();
+        if (auth != null && !auth.isEmpty()) rb.addHeader("Authorization", "Bearer " + auth);
+        httpClient.newCall(rb.build()).enqueue(new Callback() {
+            @Override public void onFailure(@NonNull Call call, @NonNull IOException e) {
+                mainHandler.post(() -> updateStatus("AI 指令失敗，素材保留可重試"));
+            }
+            @Override public void onResponse(@NonNull Call call, @NonNull Response response) throws IOException {
+                handleAiCommandResponse(response, capturedGeneration);
+            }
+        });
+    }
+
+    /** v6.20 R2: 共用 /v1/ai-command 回應處理（marshal 回主緒後 insert）。 */
+    private void handleAiCommandResponse(Response response, int capturedGeneration) {
+        String bodyStr;
+        boolean ok;
+        int code;
+        try (Response r = response) {
+            code = r.code();
+            ok = r.isSuccessful();
+            bodyStr = r.body() != null ? r.body().string() : "";
+        } catch (Exception e) {
+            mainHandler.post(() -> updateStatus("AI 指令失敗，素材保留可重試"));
+            return;
+        }
+        final boolean fok = ok;
+        final int fcode = code;
+        final String fbody = bodyStr;
+        mainHandler.post(() -> {
+            if (!fok) {
+                updateStatus("AI 伺服器錯誤 " + fcode + "，素材保留");
+                return; // keep armed
+            }
+            String text = "";
+            try {
+                text = new JSONObject(fbody).optString("text", "").trim();
+            } catch (Exception ignore) {}
+            if (text.isEmpty()) {
+                updateStatus("AI 無回應，素材保留可重試"); // keep armed
+                return;
+            }
+            if (capturedGeneration != fieldGeneration) {
+                Log.w(TAG, "AI response discarded: field switched");
+                return;
+            }
+            commitFinalText(text);       // pure insert at cursor (no deleteSurroundingText)
+            updateStatus("🤖 " + truncate(text, 20));
+            clearAiState();              // single-use disarm
+        });
+    }
+
+    /**
+     * v6.20 R1/R3: 批次把已標記剪貼加入選定的常用詞彙資料夾。
+     */
+    private void showBatchAddToCommandsInline(List<String> clips) {
+        if (clips == null || clips.isEmpty()) {
+            updateStatus("請先標記剪貼內容");
+            return;
+        }
+        panelContainer.removeAllViews();
+
+        LinearLayout panel = new LinearLayout(this);
+        panel.setOrientation(LinearLayout.VERTICAL);
+        panel.setBackgroundColor(0xFF111122);
+        panel.setPadding(24, 16, 24, 16);
+
+        TextView title = new TextView(this);
+        title.setText("批次加入常用詞彙（" + clips.size() + " 則）");
+        title.setTextColor(0xFF4ECCA3);
+        title.setTextSize(16);
+        panel.addView(title);
+
+        TextView groupLabel = new TextView(this);
+        groupLabel.setText("選擇資料夾：");
+        groupLabel.setTextColor(0xFF888888);
+        groupLabel.setTextSize(12);
+        groupLabel.setPadding(0, 8, 0, 8);
+        panel.addView(groupLabel);
+
+        LinearLayout groupRow = new LinearLayout(this);
+        groupRow.setOrientation(LinearLayout.HORIZONTAL);
+        groupRow.setPadding(0, 8, 0, 12);
+
+        List<String> groupNames = commandsHelper.getGroupNames();
+        final String[] selectedGroup = { groupNames.isEmpty() ? null : groupNames.get(0) };
+        final Button[] groupButtons = new Button[groupNames.size()];
+        for (int i = 0; i < groupNames.size(); i++) {
+            String gName = groupNames.get(i);
+            Button btn = new Button(this);
+            btn.setText(gName);
+            btn.setTextSize(12);
+            btn.setAllCaps(false);
+            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.WRAP_CONTENT, 72);
+            lp.setMarginEnd(8);
+            btn.setLayoutParams(lp);
+            btn.setPadding(16, 0, 16, 0);
+            groupButtons[i] = btn;
+            if (gName.equals(selectedGroup[0])) {
+                btn.setTextColor(0xFF4ECCA3); btn.setBackgroundColor(0xFF1a1a2e);
+            } else {
+                btn.setTextColor(0xFF888888); btn.setBackgroundColor(0xFF16213e);
+            }
+            btn.setOnClickListener(v -> {
+                selectedGroup[0] = gName;
+                for (int j = 0; j < groupButtons.length; j++) {
+                    if (groupNames.get(j).equals(gName)) {
+                        groupButtons[j].setTextColor(0xFF4ECCA3); groupButtons[j].setBackgroundColor(0xFF1a1a2e);
+                    } else {
+                        groupButtons[j].setTextColor(0xFF888888); groupButtons[j].setBackgroundColor(0xFF16213e);
+                    }
+                }
+            });
+            groupRow.addView(btn);
+        }
+        panel.addView(groupRow);
+
+        LinearLayout actionRow = new LinearLayout(this);
+        actionRow.setOrientation(LinearLayout.HORIZONTAL);
+        Button btnConfirm = new Button(this);
+        btnConfirm.setText("確認加入");
+        btnConfirm.setTextColor(0xFF4ECCA3);
+        btnConfirm.setTextSize(14);
+        btnConfirm.setOnClickListener(v -> {
+            if (selectedGroup[0] != null) {
+                for (String clip : clips) {
+                    String lbl = clip.length() > 10 ? clip.substring(0, 10) + "…" : clip;
+                    commandsHelper.addCommand(selectedGroup[0], lbl, clip);
+                }
+                updateStatus("⚡ 已加入 " + clips.size() + " 則至「" + selectedGroup[0] + "」");
+                markedClips.clear();
+                showPanel(Panel.CLIPBOARD);
+            }
+        });
+        Button btnCancel = new Button(this);
+        btnCancel.setText("取消");
+        btnCancel.setTextColor(0xFF888888);
+        btnCancel.setTextSize(14);
+        btnCancel.setOnClickListener(v -> showPanel(Panel.CLIPBOARD));
+        actionRow.addView(btnConfirm);
+        actionRow.addView(btnCancel);
+        panel.addView(actionRow);
+
+        panelContainer.addView(panel);
+    }
+
+    /** 顯示/隱藏剪貼簿標記底欄並更新計數 */
+    private void updateClipMarkFooter() {
+        if (clipMarkFooter == null || clipMarkCount == null) return;
+        if (markedClips.isEmpty()) {
+            clipMarkFooter.setVisibility(View.GONE);
+        } else {
+            clipMarkFooter.setVisibility(View.VISIBLE);
+            clipMarkCount.setText("已標記 " + markedClips.size() + " 條");
+        }
+    }
+
+    /** 從 SharedPreferences 載入已登錄詞彙集合 */
+    private void loadEnrolledVocab() {
+        SharedPreferences prefs = getSharedPreferences("simon_ime_vocab", MODE_PRIVATE);
+        String json = prefs.getString("enrolled_vocab", "[]");
+        enrolledVocab = new HashSet<>();
+        try {
+            org.json.JSONArray arr = new org.json.JSONArray(json);
+            for (int i = 0; i < arr.length(); i++) {
+                String w = arr.optString(i, "");
+                if (!w.isEmpty()) enrolledVocab.add(w);
+            }
+        } catch (Exception ignored) {}
+    }
+
+    /**
+     * v6.20 R5 gate: 只收「短純中文詞」。trim 後長度 2–6、每個字元都是 CJK U+4E00–U+9FFF
+     * （這一條就擋掉空白/ASCII/數字/標點/URL），再排除少量填充停用詞。
+     */
+    private boolean isEnrollableVocab(String w) {
+        if (w == null) return false;
+        w = w.trim();
+        int len = w.length();
+        if (len < 2 || len > 6) return false;
+        for (int i = 0; i < len; i++) {
+            char c = w.charAt(i);
+            if (c < 0x4E00 || c > 0x9FFF) return false;
+        }
+        Set<String> stop = new HashSet<>(Arrays.asList(
+                "然後", "這個", "那個", "所以", "就是", "可是", "但是", "因為", "如果", "不過", "的話"));
+        return !stop.contains(w);
+    }
+
+    /**
+     * v6.20 R5: 速率限制詞彙自動登錄（≥1000ms 間隔、≤10 條/分鐘、≤100 條/天）。
+     * 只收短純中文詞；密碼欄位一律略過；重複詞彙直接略過；登錄後以 source="clip" 同步至伺服器。
+     */
+    private void maybeAutoEnrollVocab(String text) {
+        maybeAutoEnrollVocab(text, "");
+    }
+
+    private void maybeAutoEnrollVocab(String text, String label) {
+        if (text == null || text.trim().isEmpty()) return;
+        // MUST-FIX #1: never auto-enroll our own IME output (self-copy safety net uses label "simon-ime").
+        if ("simon-ime".equals(label)) return;
+        if (!autoVocabEnabled || vocabHelper == null) return;
+        String word = text.trim();
+        // R5 gate: short pure-CJK word only (rejects whitespace/ASCII/digits/punct/URLs + fillers)
+        if (!isEnrollableVocab(word)) return;
+        if (enrolledVocab.contains(word)) return;
+
+        // Password-field suppression: never enroll anything typed into a password field
+        try {
+            EditorInfo ei = getCurrentInputEditorInfo();
+            if (ei != null) {
+                int variation = ei.inputType & android.text.InputType.TYPE_MASK_VARIATION;
+                if (variation == android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD
+                        || variation == android.text.InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD
+                        || variation == android.text.InputType.TYPE_TEXT_VARIATION_WEB_PASSWORD
+                        || variation == android.text.InputType.TYPE_NUMBER_VARIATION_PASSWORD) {
+                    return;
+                }
+            }
+        } catch (Exception ignored) {}
+
+        long now = System.currentTimeMillis();
+        if (now - lastEnrollTimeMs < 1000L) return;  // ≥1000ms between enrolls
+        if (now - enrollMinuteStartMs > 60_000L) {
+            enrollMinuteStartMs = now;
+            enrollCountThisMinute = 0;
+        }
+        if (now - enrollDayStartMs > 86_400_000L) {
+            enrollDayStartMs = now;
+            enrollCountToday = 0;
+        }
+        if (enrollCountThisMinute >= 10 || enrollCountToday >= 100) return;
+
+        enrollCountThisMinute++;
+        enrollCountToday++;
+        lastEnrollTimeMs = now;
+        enrolledVocab.add(word);
+
+        // 持久化
+        SharedPreferences prefs = getSharedPreferences("simon_ime_vocab", MODE_PRIVATE);
+        org.json.JSONArray arr = new org.json.JSONArray();
+        for (String w : enrolledVocab) arr.put(w);
+        prefs.edit().putString("enrolled_vocab", arr.toString()).apply();
+
+        // 同步到伺服器（MUST-FIX #2: source="clip" 獨立命名空間）
+        vocabHelper.sync(word, "clip", new VocabHelper.SyncCallback() {
+            @Override public void onSuccess() {
+                Log.i(TAG, "[Vocab] synced: " + word);
+                mainHandler.post(() -> updateStatus("📗 已記住詞彙「" + word + "」"));
+            }
+            @Override public void onError(String msg) { Log.w(TAG, "[Vocab] sync error: " + msg); }
+        });
+    }
+
+    /** 在 panelContainer 顯示詞彙庫列表 */
+    private void showVocabListInline() {
+        panelContainer.removeAllViews();
+
+        LinearLayout panel = new LinearLayout(this);
+        panel.setOrientation(LinearLayout.VERTICAL);
+        panel.setBackgroundColor(0xFF111122);
+        panel.setPadding(16, 8, 16, 8);
+
+        // 標題列
+        LinearLayout titleRow = new LinearLayout(this);
+        titleRow.setOrientation(LinearLayout.HORIZONTAL);
+        titleRow.setGravity(Gravity.CENTER_VERTICAL);
+
+        TextView title = new TextView(this);
+        title.setText("📚 詞彙庫");
+        title.setTextColor(0xFF4ECCA3);
+        title.setTextSize(14);
+        LinearLayout.LayoutParams titleLp = new LinearLayout.LayoutParams(
+                0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f);
+        title.setLayoutParams(titleLp);
+        titleRow.addView(title);
+
+        Button btnBack = new Button(this);
+        btnBack.setText("← 返回");
+        btnBack.setTextColor(0xFF888888);
+        btnBack.setTextSize(12);
+        btnBack.setBackground(null);
+        btnBack.setAllCaps(false);
+        btnBack.setOnClickListener(v -> showPanel(Panel.CLIPBOARD));
+        titleRow.addView(btnBack);
+        panel.addView(titleRow);
+
+        if (enrolledVocab.isEmpty()) {
+            TextView empty = new TextView(this);
+            empty.setText("尚無詞彙（左滑剪貼簿項目 → 加詞彙）");
+            empty.setTextColor(0xFF666666);
+            empty.setTextSize(12);
+            empty.setPadding(0, 16, 0, 0);
+            panel.addView(empty);
+        } else {
+            for (String word : new ArrayList<>(enrolledVocab)) {
+                LinearLayout row = new LinearLayout(this);
+                row.setOrientation(LinearLayout.HORIZONTAL);
+                row.setGravity(Gravity.CENTER_VERTICAL);
+                row.setPadding(0, 4, 0, 4);
+
+                TextView wordView = new TextView(this);
+                wordView.setText(word);
+                wordView.setTextColor(0xFFcccccc);
+                wordView.setTextSize(13);
+                LinearLayout.LayoutParams wlp = new LinearLayout.LayoutParams(
+                        0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f);
+                wordView.setLayoutParams(wlp);
+                row.addView(wordView);
+
+                Button btnDel = new Button(this);
+                btnDel.setText("✕");
+                btnDel.setTextColor(0xFF666666);
+                btnDel.setTextSize(12);
+                btnDel.setBackground(null);
+                btnDel.setAllCaps(false);
+                btnDel.setOnClickListener(v -> {
+                    enrolledVocab.remove(word);
+                    SharedPreferences prefs = getSharedPreferences("simon_ime_vocab", MODE_PRIVATE);
+                    org.json.JSONArray arr = new org.json.JSONArray();
+                    for (String w : enrolledVocab) arr.put(w);
+                    prefs.edit().putString("enrolled_vocab", arr.toString()).apply();
+                    if (vocabHelper != null) {
+                        vocabHelper.delete(word, new VocabHelper.DeleteCallback() {
+                            @Override public void onSuccess() {}
+                            @Override public void onError(String msg) {}
+                        });
+                    }
+                    showVocabListInline();
+                });
+                row.addView(btnDel);
+                panel.addView(row);
+            }
+        }
+
+        panelContainer.addView(panel);
+    }
+
+    /** 在 panelContainer 顯示批次加入常用指令介面 */
+    private void showBatchAddToCommandsInline() {
+        if (markedClips.isEmpty()) return;
+        panelContainer.removeAllViews();
+
+        LinearLayout panel = new LinearLayout(this);
+        panel.setOrientation(LinearLayout.VERTICAL);
+        panel.setBackgroundColor(0xFF111122);
+        panel.setPadding(24, 16, 24, 16);
+
+        TextView title = new TextView(this);
+        title.setText("批次加入常用指令（" + markedClips.size() + " 條）");
+        title.setTextColor(0xFF4ECCA3);
+        title.setTextSize(16);
+        panel.addView(title);
+
+        TextView groupLabel = new TextView(this);
+        groupLabel.setText("選擇群組：");
+        groupLabel.setTextColor(0xFF888888);
+        groupLabel.setTextSize(12);
+        groupLabel.setPadding(0, 8, 0, 4);
+        panel.addView(groupLabel);
+
+        LinearLayout groupRow = new LinearLayout(this);
+        groupRow.setOrientation(LinearLayout.HORIZONTAL);
+        groupRow.setPadding(0, 0, 0, 12);
+
+        List<String> groupNames = commandsHelper.getGroupNames();
+        final String[] selectedGroup = { groupNames.isEmpty() ? null : groupNames.get(0) };
+        final Button[] groupButtons = new Button[groupNames.size()];
+
+        for (int i = 0; i < groupNames.size(); i++) {
+            String gName = groupNames.get(i);
+            Button btn = new Button(this);
+            btn.setText(gName);
+            btn.setTextSize(12);
+            btn.setAllCaps(false);
+            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.WRAP_CONTENT, 72);
+            lp.setMarginEnd(8);
+            btn.setLayoutParams(lp);
+            groupButtons[i] = btn;
+            if (gName.equals(selectedGroup[0])) {
+                btn.setTextColor(0xFF4ECCA3);
+                btn.setBackgroundColor(0xFF1a1a2e);
+            } else {
+                btn.setTextColor(0xFF888888);
+                btn.setBackgroundColor(0xFF16213e);
+            }
+            final int idx = i;
+            btn.setOnClickListener(v -> {
+                selectedGroup[0] = gName;
+                for (int j = 0; j < groupButtons.length; j++) {
+                    if (j == idx) {
+                        groupButtons[j].setTextColor(0xFF4ECCA3);
+                        groupButtons[j].setBackgroundColor(0xFF1a1a2e);
+                    } else {
+                        groupButtons[j].setTextColor(0xFF888888);
+                        groupButtons[j].setBackgroundColor(0xFF16213e);
+                    }
+                }
+            });
+            groupRow.addView(btn);
+        }
+        panel.addView(groupRow);
+
+        LinearLayout actionRow = new LinearLayout(this);
+        actionRow.setOrientation(LinearLayout.HORIZONTAL);
+
+        Button btnConfirm = new Button(this);
+        btnConfirm.setText("確認加入");
+        btnConfirm.setTextColor(0xFF4ECCA3);
+        btnConfirm.setTextSize(14);
+        btnConfirm.setAllCaps(false);
+        btnConfirm.setOnClickListener(v -> {
+            if (selectedGroup[0] != null) {
+                for (String clip : new ArrayList<>(markedClips)) {
+                    String label = clip.length() > 10 ? clip.substring(0, 10) + "…" : clip;
+                    commandsHelper.addCommand(selectedGroup[0], label, clip);
+                }
+                updateStatus("⚡ 已批次加入「" + selectedGroup[0] + "」");
+                markedClips.clear();
+                updateArmedIndicator();
+                showPanel(Panel.CLIPBOARD);
+            }
+        });
+
+        Button btnCancel = new Button(this);
+        btnCancel.setText("取消");
+        btnCancel.setTextColor(0xFF888888);
+        btnCancel.setTextSize(14);
+        btnCancel.setAllCaps(false);
+        btnCancel.setOnClickListener(v -> showPanel(Panel.CLIPBOARD));
+
+        actionRow.addView(btnConfirm);
+        actionRow.addView(btnCancel);
+        panel.addView(actionRow);
+
+        panelContainer.addView(panel);
     }
 
     private String getServerUrl() {
