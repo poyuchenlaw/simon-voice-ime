@@ -1169,10 +1169,14 @@ public class SimonIMEService extends InputMethodService {
             holder.accent.setVisibility(marked ? View.VISIBLE : View.GONE);
             holder.checkBox.setVisibility(marked ? View.VISIBLE : View.GONE);
             holder.checkBox.setChecked(marked);
-            holder.itemView.setOnClickListener(v -> {
+            // v6.21 fix: clipText 在版面裡是 clickable，會吞掉觸擊，itemView 的 onClick 收不到
+            // → 貼上監聽必須綁在 clipText 本身（主要點擊區），色條/邊緣區則交給 itemView 兜底。
+            View.OnClickListener pasteClick = v -> {
                 int p = holder.getBindingAdapterPosition();
                 if (p != RecyclerView.NO_POSITION) listener.onClick(p);
-            });
+            };
+            holder.text.setOnClickListener(pasteClick);
+            holder.itemView.setOnClickListener(pasteClick);
         }
 
         @Override public int getItemCount() { return items.size(); }
