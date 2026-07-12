@@ -126,6 +126,13 @@ public class SimonIMEService extends InputMethodService {
     private QwenHelper qwenHelper;
     private VocabHelper vocabHelper;
 
+    // v6.23: English predictive input
+    private EnglishDictionary englishDict;
+    private final StringBuilder enWordBuffer = new StringBuilder();
+    // Current suggestion strings (3 slots); null/empty = no suggestion
+    private final String[] enSuggestions = new String[3];
+    private TextView enSuggest0, enSuggest1, enSuggest2;
+
     // Streaming state (APPEND mode with VAD)
     private volatile boolean streamingMode = false;
     private volatile boolean streamQwenActive = false;
@@ -238,6 +245,10 @@ public class SimonIMEService extends InputMethodService {
         // 載入上次使用的模式
         loadSavedMode();
 
+        // v6.23: 背景載入英文預測字典
+        englishDict = new EnglishDictionary(this);
+        new Thread(() -> englishDict.loadAsync(), "EnglishDict-Load").start();
+
         // 背景初始化本機 STT
         localSTT = new LocalSTTHelper(this);
         new Thread(() -> {
@@ -281,6 +292,8 @@ public class SimonIMEService extends InputMethodService {
             aiContextCount = 0;
             markedClips.clear();
             updateArmedIndicator();
+            // v6.23: clear English prediction buffer on field switch
+            clearEnWordBuffer();
         }
     }
 
@@ -422,6 +435,14 @@ public class SimonIMEService extends InputMethodService {
         // 設定英文鍵盤和數字鍵盤的按鍵處理
         setupTypingKeyboard(englishKeyboard);
         setupTypingKeyboard(numbersKeyboard);
+
+        // v6.23: 英文預測列
+        enSuggest0 = rootView.findViewById(R.id.enSuggest0);
+        enSuggest1 = rootView.findViewById(R.id.enSuggest1);
+        enSuggest2 = rootView.findViewById(R.id.enSuggest2);
+        if (enSuggest0 != null) enSuggest0.setOnClickListener(v -> applyEnglishSuggestion(0));
+        if (enSuggest1 != null) enSuggest1.setOnClickListener(v -> applyEnglishSuggestion(1));
+        if (enSuggest2 != null) enSuggest2.setOnClickListener(v -> applyEnglishSuggestion(2));
 
         updateModeUI();
         updateArmedIndicator();
@@ -2445,6 +2466,10 @@ public class SimonIMEService extends InputMethodService {
 
     private void switchKeyboard(KeyboardMode mode) {
         dismissSymbolPopup();
+        // v6.23: clear English buffer when leaving English keyboard
+        if (currentKeyboardMode == KeyboardMode.ENGLISH && mode != KeyboardMode.ENGLISH) {
+            clearEnWordBuffer();
+        }
         currentKeyboardMode = mode;
         voiceKeyboard.setVisibility(mode == KeyboardMode.VOICE ? View.VISIBLE : View.GONE);
         englishKeyboard.setVisibility(mode == KeyboardMode.ENGLISH ? View.VISIBLE : View.GONE);
@@ -2485,9 +2510,19 @@ public class SimonIMEService extends InputMethodService {
                 toggleShift();
                 break;
             case "space":
+                // v6.23: learn current word before committing space (English only)
+                if (currentKeyboardMode == KeyboardMode.ENGLISH) {
+                    learnEnglishWord();
+                    clearEnWordBuffer();
+                }
                 commitTextProgrammatically(ic, " ");
                 break;
             case "enter":
+                // v6.23: learn current word before enter (English only)
+                if (currentKeyboardMode == KeyboardMode.ENGLISH) {
+                    learnEnglishWord();
+                    clearEnWordBuffer();
+                }
                 handleEnterKey();
                 break;
             case "toVoice":
@@ -2506,6 +2541,16 @@ public class SimonIMEService extends InputMethodService {
                     ch = key.toUpperCase();
                 }
                 commitTextProgrammatically(ic, ch);
+                // v6.23: maintain enWordBuffer for English keyboard letter keys only
+                if (currentKeyboardMode == KeyboardMode.ENGLISH
+                        && key.length() == 1 && Character.isLetter(key.charAt(0))) {
+                    enWordBuffer.append(key.toLowerCase());
+                    refreshEnglishSuggestions();
+                } else if (currentKeyboardMode == KeyboardMode.ENGLISH && !key.equals("shift")) {
+                    // Non-letter key (e.g., ".", ",") while on English — treat as word break
+                    learnEnglishWord();
+                    clearEnWordBuffer();
+                }
                 // Auto-unshift after one character (unless caps lock)
                 if (shiftActive && !capsLock) {
                     shiftActive = false;
@@ -2520,6 +2565,8 @@ public class SimonIMEService extends InputMethodService {
         CharSequence selectedText = ic.getSelectedText(0);
         if (selectedText != null && selectedText.length() > 0) {
             commitTextProgrammatically(ic, "");
+            // v6.23: a selection delete breaks word continuity — resync English buffer.
+            if (currentKeyboardMode == KeyboardMode.ENGLISH) clearEnWordBuffer();
             return true;
         }
         return false;
@@ -2607,7 +2654,14 @@ public class SimonIMEService extends InputMethodService {
                     backspaceRepeatCount = 0;
                     InputConnection ic0 = getCurrentInputConnection();
                     if (ic0 != null) {
-                        if (!deleteSelectionIfAny(ic0)) deleteSurroundingTextProgrammatically(ic0, 1, 0);
+                        if (!deleteSelectionIfAny(ic0)) {
+                            deleteSurroundingTextProgrammatically(ic0, 1, 0);
+                            // v6.23: pop last char from enWordBuffer on English keyboard
+                            if (currentKeyboardMode == KeyboardMode.ENGLISH && enWordBuffer.length() > 0) {
+                                enWordBuffer.deleteCharAt(enWordBuffer.length() - 1);
+                                refreshEnglishSuggestions();
+                            }
+                        }
                     }
                     backspaceRepeatRunnable = new Runnable() {
                         @Override
@@ -2619,6 +2673,12 @@ public class SimonIMEService extends InputMethodService {
                                 int deleteCount = backspaceRepeatCount < 5 ? 1
                                         : backspaceRepeatCount < 15 ? 2 : 5;
                                 deleteSurroundingTextProgrammatically(ic, deleteCount, 0);
+                                // v6.23: pop chars from enWordBuffer on repeat backspace (English)
+                                if (currentKeyboardMode == KeyboardMode.ENGLISH && enWordBuffer.length() > 0) {
+                                    int popCount = Math.min(deleteCount, enWordBuffer.length());
+                                    enWordBuffer.delete(enWordBuffer.length() - popCount, enWordBuffer.length());
+                                    refreshEnglishSuggestions();
+                                }
                             }
                             long delay = Math.max(30, 120 - backspaceRepeatCount * 6);
                             mainHandler.postDelayed(this, delay);
@@ -2638,6 +2698,117 @@ public class SimonIMEService extends InputMethodService {
             }
             return false;
         });
+    }
+
+    // ==================== English Predictive Input (v6.23) ====================
+
+    /**
+     * Refresh suggestion bar from enWordBuffer. Safe to call on main thread.
+     */
+    private void refreshEnglishSuggestions() {
+        try {
+            String prefix = enWordBuffer.toString();
+            List<String> suggestions = (englishDict != null && englishDict.isLoaded())
+                    ? englishDict.suggest(prefix, 3)
+                    : java.util.Collections.<String>emptyList();
+
+            for (int i = 0; i < 3; i++) {
+                enSuggestions[i] = (i < suggestions.size()) ? suggestions.get(i) : null;
+            }
+            updateSuggestionBar();
+        } catch (Exception e) {
+            Log.w(TAG, "refreshEnglishSuggestions failed (fail-open)", e);
+        }
+    }
+
+    /**
+     * Apply suggestion at slot index: delete typed prefix, commit suggestion word + space.
+     */
+    private void applyEnglishSuggestion(int index) {
+        try {
+            if (index < 0 || index >= 3) return;
+            String word = enSuggestions[index];
+            if (word == null || word.isEmpty()) return;
+            InputConnection ic = getCurrentInputConnection();
+            if (ic == null) return;
+
+            int bufLen = enWordBuffer.length();
+            if (bufLen > 0) {
+                // v6.23 safety (Codex cross-family review): only delete if the text before the
+                // cursor actually matches our buffer. Guards against buffer/field desync (cursor
+                // moved externally, selection deleted) so we NEVER delete unrelated text.
+                CharSequence before = ic.getTextBeforeCursor(bufLen, 0);
+                if (before == null || before.length() != bufLen
+                        || !before.toString().equalsIgnoreCase(enWordBuffer.toString())) {
+                    clearEnWordBuffer();  // desynced → abort safely, no deletion
+                    return;
+                }
+                deleteSurroundingTextProgrammatically(ic, bufLen, 0);
+            }
+
+            // Capitalize if buffer started with uppercase (i.e., shift was active when first letter typed)
+            // Simple heuristic: check if buffer had first char typed uppercase (we always store lower,
+            // but we can check shift state). Keep it simple: commit as-is (lowercase) for safety.
+            commitTextProgrammatically(ic, word + " ");
+
+            if (englishDict != null) englishDict.learn(word);
+
+            enWordBuffer.setLength(0);
+            clearEnSuggestions();
+            updateSuggestionBar();
+        } catch (Exception e) {
+            Log.w(TAG, "applyEnglishSuggestion failed (fail-open)", e);
+        }
+    }
+
+    /**
+     * Learn the current enWordBuffer contents if valid and not in a password field.
+     */
+    private void learnEnglishWord() {
+        try {
+            if (englishDict == null || enWordBuffer.length() < 2) return;
+            String word = enWordBuffer.toString();
+            // Password-field check
+            EditorInfo ei = getCurrentInputEditorInfo();
+            if (ei != null) {
+                int variation = ei.inputType & android.text.InputType.TYPE_MASK_VARIATION;
+                if (variation == android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD
+                        || variation == android.text.InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD
+                        || variation == android.text.InputType.TYPE_TEXT_VARIATION_WEB_PASSWORD
+                        || variation == android.text.InputType.TYPE_NUMBER_VARIATION_PASSWORD) {
+                    return;
+                }
+            }
+            englishDict.learn(word);
+        } catch (Exception e) {
+            Log.w(TAG, "learnEnglishWord failed (fail-open)", e);
+        }
+    }
+
+    /**
+     * Clear enWordBuffer and suggestions (does NOT commit anything).
+     */
+    private void clearEnWordBuffer() {
+        try {
+            enWordBuffer.setLength(0);
+            clearEnSuggestions();
+            updateSuggestionBar();
+        } catch (Exception e) {
+            Log.w(TAG, "clearEnWordBuffer failed (fail-open)", e);
+        }
+    }
+
+    private void clearEnSuggestions() {
+        enSuggestions[0] = null;
+        enSuggestions[1] = null;
+        enSuggestions[2] = null;
+    }
+
+    private void updateSuggestionBar() {
+        if (enSuggest0 == null) return;
+        enSuggest0.setText(enSuggestions[0] != null ? enSuggestions[0] : "");
+        if (enSuggest1 != null) enSuggest1.setText(enSuggestions[1] != null ? enSuggestions[1] : "");
+        if (enSuggest2 != null) enSuggest2.setText(enSuggestions[2] != null ? enSuggestions[2] : "");
     }
 
     // ==================== Mode ====================

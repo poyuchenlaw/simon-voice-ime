@@ -54,6 +54,7 @@ public class SettingsActivity extends Activity {
         Button btnImportCmds = findViewById(R.id.btnImportCmds);
         Button btnUploadCorrections = findViewById(R.id.btnUploadCorrections);
         Button btnOpenEditor = findViewById(R.id.btnOpenEditor);
+        Button btnClearEnglishLearned = findViewById(R.id.btnClearEnglishLearned);
 
         commandsHelper = new CommandsHelper(this);
         updateHelper = new UpdateHelper(this);
@@ -68,6 +69,15 @@ public class SettingsActivity extends Activity {
 
         // Check for updates
         btnCheckUpdate.setOnClickListener(v -> checkForUpdate());
+
+        // v6.23: 清除已學英文字
+        if (btnClearEnglishLearned != null) {
+            btnClearEnglishLearned.setOnClickListener(v -> {
+                EnglishDictionary dict = new EnglishDictionary(this);
+                dict.clearLearned();
+                Toast.makeText(this, "已清除已學英文字 ✅", Toast.LENGTH_SHORT).show();
+            });
+        }
 
         // Load saved settings
         SharedPreferences prefs = getSharedPreferences("simon_ime_prefs", MODE_PRIVATE);

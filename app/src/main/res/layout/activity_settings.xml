@@ -123,6 +123,15 @@
             android:text="複製自動記詞（短中文詞自動加入語音詞庫）"
             android:textColor="#e0e0e0"
             android:textSize="14sp"
+            android:layout_marginBottom="8dp" />
+
+        <!-- v6.23: 清除已學英文字 -->
+        <Button
+            android:id="@+id/btnClearEnglishLearned"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="清除已學英文字"
+            android:textSize="14sp"
             android:layout_marginBottom="20dp" />
 
         <!-- ===== 使用說明 ===== -->

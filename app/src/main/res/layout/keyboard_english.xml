@@ -8,6 +8,60 @@
     android:paddingEnd="3dp"
     android:paddingBottom="3dp">
 
+    <!-- Suggestion bar (English predictive input) -->
+    <LinearLayout
+        android:id="@+id/enSuggestBar"
+        android:layout_width="match_parent"
+        android:layout_height="38dp"
+        android:orientation="horizontal"
+        android:layout_marginBottom="2dp">
+
+        <TextView
+            android:id="@+id/enSuggest0"
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_weight="1"
+            android:gravity="center"
+            android:textSize="14sp"
+            android:textColor="@color/key_text"
+            android:background="@color/key_bg"
+            android:layout_marginEnd="2dp"
+            android:ellipsize="end"
+            android:singleLine="true"
+            android:clickable="true"
+            android:focusable="true" />
+
+        <TextView
+            android:id="@+id/enSuggest1"
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_weight="1"
+            android:gravity="center"
+            android:textSize="14sp"
+            android:textColor="@color/key_text"
+            android:background="@color/key_bg"
+            android:layout_marginEnd="2dp"
+            android:ellipsize="end"
+            android:singleLine="true"
+            android:clickable="true"
+            android:focusable="true" />
+
+        <TextView
+            android:id="@+id/enSuggest2"
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_weight="1"
+            android:gravity="center"
+            android:textSize="14sp"
+            android:textColor="@color/key_text"
+            android:background="@color/key_bg"
+            android:ellipsize="end"
+            android:singleLine="true"
+            android:clickable="true"
+            android:focusable="true" />
+
+    </LinearLayout>
+
     <!-- Row 1: q w e r t y u i o p -->
     <LinearLayout
         android:layout_width="match_parent"
