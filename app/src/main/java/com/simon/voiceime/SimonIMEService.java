@@ -1442,8 +1442,22 @@ public class SimonIMEService extends InputMethodService {
         final int bufferSize = rawBufferSize > 0 ? rawBufferSize : SAMPLE_RATE * 2;
 
         try {
-            audioRecord = new AudioRecord(MediaRecorder.AudioSource.MIC,
-                    SAMPLE_RATE, CHANNEL, ENCODING, bufferSize);
+            // v2.x 收音改善：VOICE_RECOGNITION 是語音辨識專用來源（裝置端為 ASR 調校，
+            // 距離/小聲時收音較 raw MIC 好）。若機型不支援則 fallback 回 MIC。
+            AudioRecord rec;
+            try {
+                rec = new AudioRecord(MediaRecorder.AudioSource.VOICE_RECOGNITION,
+                        SAMPLE_RATE, CHANNEL, ENCODING, bufferSize);
+                if (rec.getState() != AudioRecord.STATE_INITIALIZED) {
+                    rec.release();
+                    rec = new AudioRecord(MediaRecorder.AudioSource.MIC,
+                            SAMPLE_RATE, CHANNEL, ENCODING, bufferSize);
+                }
+            } catch (Exception ve) {
+                rec = new AudioRecord(MediaRecorder.AudioSource.MIC,
+                        SAMPLE_RATE, CHANNEL, ENCODING, bufferSize);
+            }
+            audioRecord = rec;
         } catch (SecurityException e) {
             updateStatus("需要麥克風權限");
             return;
@@ -1452,6 +1466,18 @@ public class SimonIMEService extends InputMethodService {
         if (audioRecord.getState() != AudioRecord.STATE_INITIALIZED) {
             updateStatus("麥克風初始化失敗");
             return;
+        }
+
+        // v2.x 收音改善：距離/小聲時開啟自動增益（若裝置支援；失敗不影響錄音）。
+        try {
+            int _sessionId = audioRecord.getAudioSessionId();
+            if (android.media.audiofx.AutomaticGainControl.isAvailable()) {
+                android.media.audiofx.AutomaticGainControl _agc =
+                        android.media.audiofx.AutomaticGainControl.create(_sessionId);
+                if (_agc != null) _agc.setEnabled(true);
+            }
+        } catch (Exception agcEx) {
+            Log.w(TAG, "AGC unavailable: " + agcEx.getMessage());
         }
 
         pcmBuffer = new ByteArrayOutputStream();
