@@ -104,7 +104,10 @@ public class SimonIMEService extends InputMethodService {
 
     private static final long CORRECTION_CAPTURE_WINDOW_MS = 15_000;
     private static final long CORRECTION_CAPTURE_DEBOUNCE_MS = 1_500;
+    private static final long CONNECTION_WARM_UP_DEBOUNCE_MS = 10_000;
+    private static final long CONNECTION_WARM_UP_INTERVAL_MS = 25_000;
     private volatile boolean mIgnoreNextUpdateSelection = false;
+    private volatile long lastWarmUpMs = 0L;
     private String mLastVoiceCommittedText = null;
     private long mLastVoiceCommittedTs = 0L;
     private int mLastVoiceCommitStart = -1;
@@ -114,6 +117,15 @@ public class SimonIMEService extends InputMethodService {
     private long mPendingCorrectionCommitTs = 0L;
     private long mCapturePostedCommitTs = 0L;
     private final Runnable mPendingCorrectionCaptureRunnable = this::flushPendingCorrectionCapture;
+    private final Runnable connectionWarmUpRunnable = new Runnable() {
+        @Override
+        public void run() {
+            warmUpConnection();
+            if (mainHandler != null) {
+                mainHandler.postDelayed(this, CONNECTION_WARM_UP_INTERVAL_MS);
+            }
+        }
+    };
 
     // Helpers
     private ClipboardHelper clipboardHelper;
@@ -3598,6 +3610,37 @@ public class SimonIMEService extends InputMethodService {
         return prefs.getString("server_url", "http://100.84.86.128:8001");
     }
 
+    private void warmUpConnection() {
+        long now = System.currentTimeMillis();
+        if (now - lastWarmUpMs < CONNECTION_WARM_UP_DEBOUNCE_MS) {
+            return;
+        }
+        lastWarmUpMs = now;
+
+        Request request = new Request.Builder()
+                .url(getServerUrl() + "/")
+                .get()
+                .build();
+
+        httpClient.newCall(request).enqueue(new Callback() {
+            @Override
+            public void onFailure(Call call, IOException e) {
+                Log.d(TAG, "Connection warm-up failed: " + e.getMessage());
+            }
+
+            @Override
+            public void onResponse(Call call, Response response) throws IOException {
+                try {
+                    Log.d(TAG, "Connection warm-up HTTP " + response.code());
+                } finally {
+                    if (response.body() != null) {
+                        response.body().close();
+                    }
+                }
+            }
+        });
+    }
+
     private String getAuthPassword() {
         SharedPreferences prefs = getSharedPreferences("simon_ime_prefs", MODE_PRIVATE);
         return prefs.getString("auth_password", "guangxin_voice_2026");
@@ -3659,7 +3702,20 @@ public class SimonIMEService extends InputMethodService {
     }
 
     @Override
+    public void onStartInputView(EditorInfo info, boolean restarting) {
+        super.onStartInputView(info, restarting);
+        warmUpConnection();
+        if (mainHandler != null) {
+            mainHandler.removeCallbacks(connectionWarmUpRunnable);
+            mainHandler.postDelayed(connectionWarmUpRunnable, CONNECTION_WARM_UP_INTERVAL_MS);
+        }
+    }
+
+    @Override
     public void onFinishInputView(boolean finishingInput) {
+        if (mainHandler != null) {
+            mainHandler.removeCallbacks(connectionWarmUpRunnable);
+        }
         settlePendingCorrectionCapture();
         dismissSymbolPopup();
         // v6.1: 鍵盤收起 → 釋放螢幕常亮，避免非錄音時殘留 keepScreenOn 拖電
@@ -3697,6 +3753,7 @@ public class SimonIMEService extends InputMethodService {
         }
         if (mainHandler != null) {
             mainHandler.removeCallbacks(mPendingCorrectionCaptureRunnable);
+            mainHandler.removeCallbacks(connectionWarmUpRunnable);
         }
         if (localSTT != null) {
             localSTT.release();

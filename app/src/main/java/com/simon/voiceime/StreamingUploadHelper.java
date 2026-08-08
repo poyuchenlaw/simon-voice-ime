@@ -73,7 +73,7 @@ public class StreamingUploadHelper {
     private volatile WebSocket webSocket;
     private volatile boolean wsMode = false;           // 當前 session 是否使用 WS
     private volatile boolean wsAuthenticated = false;   // WS auth 是否已確認
-    private volatile boolean wsAvailable = true;        // WS 是否可用（失敗後設 false，之後 session 不再嘗試 WS）
+    private volatile long wsDisabledUntilMs = 0L;       // WS 失敗後短暫冷卻，避免一次失敗後永久降級
 
     // finalize 結果同步
     private volatile String finalResultText;
@@ -88,21 +88,21 @@ public class StreamingUploadHelper {
     public StreamingUploadHelper() {
         // chunk: short timeout, fire-and-forget
         chunkClient = new OkHttpClient.Builder()
-                .connectTimeout(3, TimeUnit.SECONDS)
+                .connectTimeout(8, TimeUnit.SECONDS)
                 .writeTimeout(3, TimeUnit.SECONDS)
                 .readTimeout(3, TimeUnit.SECONDS)
                 .build();
 
         // finalize: longer timeout for LLM processing
         finalizeClient = new OkHttpClient.Builder()
-                .connectTimeout(5, TimeUnit.SECONDS)
+                .connectTimeout(8, TimeUnit.SECONDS)
                 .writeTimeout(5, TimeUnit.SECONDS)
                 .readTimeout(15, TimeUnit.SECONDS)
                 .build();
 
         // WebSocket client with ping keep-alive
         wsClient = new OkHttpClient.Builder()
-                .connectTimeout(3, TimeUnit.SECONDS)
+                .connectTimeout(8, TimeUnit.SECONDS)
                 .readTimeout(0, TimeUnit.SECONDS) // no read timeout for WS
                 .pingInterval(15, TimeUnit.SECONDS)
                 .build();
@@ -124,7 +124,7 @@ public class StreamingUploadHelper {
         this.finalErrorText = null;
 
         // 嘗試 WebSocket 連線
-        if (wsAvailable) {
+        if (System.currentTimeMillis() > wsDisabledUntilMs) {
             try {
                 String wsUrl = buildWsUrl(serverUrl);
                 CountDownLatch authLatch = new CountDownLatch(1);
@@ -203,6 +203,7 @@ public class StreamingUploadHelper {
                     @Override
                     public void onFailure(WebSocket ws, Throwable t, @Nullable Response response) {
                         Log.w(TAG, "WebSocket failure: " + t.getMessage());
+                        disableWsTemporarily("failure");
                         wsAuthenticated = false;
                         // 如果在 auth 階段失敗，解鎖 authLatch
                         authLatch.countDown();
@@ -237,11 +238,13 @@ public class StreamingUploadHelper {
                 } else {
                     // auth 超時或失敗 → 降級 HTTP
                     Log.w(TAG, "WebSocket auth timeout/failed, falling back to HTTP");
+                    disableWsTemporarily("auth timeout/failed");
                     closeWebSocket();
                     wsMode = false;
                 }
             } catch (Exception e) {
                 Log.w(TAG, "WebSocket connect error, falling back to HTTP: " + e.getMessage());
+                disableWsTemporarily("connect error");
                 closeWebSocket();
                 wsMode = false;
             }
@@ -534,7 +537,7 @@ public class StreamingUploadHelper {
      * 重設 WebSocket 可用狀態（例如伺服器升級後可重新嘗試）。
      */
     public void resetWsAvailability() {
-        wsAvailable = true;
+        wsDisabledUntilMs = 0L;
         Log.i(TAG, "WebSocket availability reset");
     }
 
@@ -557,6 +560,11 @@ public class StreamingUploadHelper {
             wsUrl = wsUrl.substring(0, wsUrl.length() - 1);
         }
         return wsUrl + "/ws/stream";
+    }
+
+    private void disableWsTemporarily(String reason) {
+        wsDisabledUntilMs = System.currentTimeMillis() + 60_000;
+        Log.w(TAG, "WebSocket disabled for 60s after " + reason);
     }
 
     /**
