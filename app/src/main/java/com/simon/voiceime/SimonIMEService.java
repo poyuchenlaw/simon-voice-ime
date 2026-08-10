@@ -39,6 +39,9 @@ import androidx.recyclerview.widget.ItemTouchHelper;
 import androidx.recyclerview.widget.LinearLayoutManager;
 import androidx.recyclerview.widget.RecyclerView;
 
+import com.simon.voiceime.correct.OnDeviceCorrectionEngine;
+import com.simon.voiceime.correct.TimeoutWall;
+
 import org.json.JSONObject;
 
 import java.io.ByteArrayOutputStream;
@@ -52,6 +55,7 @@ import java.util.HashSet;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.TimeUnit;
 
 import okhttp3.Call;
@@ -133,6 +137,7 @@ public class SimonIMEService extends InputMethodService {
     private LocalSTTHelper localSTT;
     private volatile boolean localSTTReady = false;
     private EnglishMapper englishMapper;
+    private OnDeviceCorrectionEngine onDeviceCorrection;
     private StreamingUploadHelper streamingUpload;
     private DataBackupHelper dataBackupHelper;
     private QwenHelper qwenHelper;
@@ -164,9 +169,20 @@ public class SimonIMEService extends InputMethodService {
     //       絕不再把無標點的串流預覽倒進輸入框。streamFailed = WS 中途斷線旗標。
     private ByteArrayOutputStream fullPcmBuffer;
     private volatile boolean streamFailed = false;
-    // v6.1: 每段口述只允許一次「終局動作」（commit final 或 HTTP fallback），防 WS 晚到回呼重複提交
-    private final java.util.concurrent.atomic.AtomicBoolean utteranceFinished =
-            new java.util.concurrent.atomic.AtomicBoolean(false);
+    // v6.25: 每段口述用獨立 generation；同世代仍只允許一次終局動作，不同世代互不干擾。
+    private final java.util.concurrent.atomic.AtomicInteger utteranceGeneration =
+            new java.util.concurrent.atomic.AtomicInteger(0);
+    private volatile int activeUtteranceGeneration = 0;
+    private final java.util.concurrent.ConcurrentHashMap<Integer, Boolean> committedGenerations =
+            new java.util.concurrent.ConcurrentHashMap<>();
+    private final java.util.concurrent.ConcurrentHashMap<Integer, byte[]> fullPcmByGeneration =
+            new java.util.concurrent.ConcurrentHashMap<>();
+    private final java.util.concurrent.ConcurrentHashMap<Integer, Runnable> serverWaitBudgetCallbacks =
+            new java.util.concurrent.ConcurrentHashMap<>();
+    private final Object utteranceCommitLock = new Object();
+    private int nextGenToCommit = 1;
+    private final java.util.TreeMap<Integer, String> pendingCommits = new java.util.TreeMap<>();
+    private final Set<Integer> completedGenerations = new HashSet<>();
     // v6.1: fullPcmBuffer 封頂 ~10 分鐘（19.2MB）防無界成長
     private static final int MAX_FULL_PCM_BYTES = SAMPLE_RATE * 2 * 600;
 
@@ -233,6 +249,12 @@ public class SimonIMEService extends InputMethodService {
             ",", ".", "?", "!", ":", ";", "'", "\"", "(", ")", "[", "]", "{", "}", "/",
             "\\", "-", "_", "~", "@", "#", "%", "&", "*", "+", "=", "<", ">"
     };
+    private static final long OFFLINE_CORRECTION_TIMEOUT_MS = 2_000L;
+    // 等伺服器語意校正的預算。實測伺服器 p50 約 650ms、尾端可達 1.8s；
+    // 端上確定性校正約 11ms。超過此預算就先給端上結果，不讓使用者空等。
+    private static final long SERVER_WAIT_BUDGET_MS = 1_200L;
+    private static final String OFFLINE_CORRECTION_FAILED_SENTINEL =
+            "\uE000OFFLINE_CORRECTION_FAILED\uE000";
 
     @Override
     public void onCreate() {
@@ -245,6 +267,14 @@ public class SimonIMEService extends InputMethodService {
         clipboardHelper = new ClipboardHelper(this);
         commandsHelper = new CommandsHelper(this);
         englishMapper = new EnglishMapper(this);
+        onDeviceCorrection = new OnDeviceCorrectionEngine(this);
+        new Thread(() -> {
+            onDeviceCorrection.init();
+            if (onDeviceCorrection.isCorrectorReady()) {
+                Log.i(TAG, "端上 APPEND 校正就緒"
+                        + (onDeviceCorrection.isPunctuationReady() ? "（含標點）" : "（標點待下載）"));
+            }
+        }, "OnDeviceCorrect-Init").start();
         streamingUpload = new StreamingUploadHelper();
         dataBackupHelper = new DataBackupHelper(this);
         qwenHelper = new QwenHelper(this);
@@ -643,6 +673,105 @@ public class SimonIMEService extends InputMethodService {
         } catch (Exception e) {
             Log.e(TAG, "commitFinalText: unexpected exception, text should be on clipboard", e);
             updateStatus("已複製，可長按貼上");
+        }
+    }
+
+    private boolean reserveUtteranceGeneration(int gen) {
+        if (gen <= 0) return true;
+        boolean reserved = committedGenerations.putIfAbsent(gen, Boolean.TRUE) == null;
+        pruneUtteranceGenerationState();
+        return reserved;
+    }
+
+    private void rememberFullPcmForGeneration(int gen, byte[] pcm) {
+        if (gen <= 0 || pcm == null) return;
+        fullPcmByGeneration.put(gen, pcm);
+        pruneUtteranceGenerationState();
+    }
+
+    private byte[] getFullPcmForGeneration(int gen) {
+        byte[] pcm = fullPcmByGeneration.get(gen);
+        if (pcm != null) return pcm;
+        if (gen == activeUtteranceGeneration && fullPcmBuffer != null) {
+            return fullPcmBuffer.toByteArray();
+        }
+        return null;
+    }
+
+    private <T> void pruneConcurrentGenerationMap(java.util.concurrent.ConcurrentHashMap<Integer, T> map) {
+        while (map.size() > 8) {
+            Integer min = null;
+            for (Integer key : map.keySet()) {
+                if (min == null || key < min) min = key;
+            }
+            if (min == null) return;
+            map.remove(min);
+        }
+    }
+
+    private void pruneUtteranceGenerationState() {
+        pruneConcurrentGenerationMap(committedGenerations);
+        pruneConcurrentGenerationMap(fullPcmByGeneration);
+    }
+
+    private void clearServerWaitBudgetCallbacks() {
+        if (mainHandler == null) return;
+        for (Runnable callback : serverWaitBudgetCallbacks.values()) {
+            mainHandler.removeCallbacks(callback);
+        }
+        serverWaitBudgetCallbacks.clear();
+    }
+
+    private void completeReservedUtteranceWithText(int gen, String text) {
+        if (text == null || text.isEmpty()) {
+            completeReservedUtteranceWithoutText(gen);
+            return;
+        }
+        if (Looper.myLooper() != Looper.getMainLooper()) {
+            mainHandler.post(() -> completeReservedUtteranceWithText(gen, text));
+            return;
+        }
+
+        List<String> readyTexts = new ArrayList<>();
+        synchronized (utteranceCommitLock) {
+            if (gen < nextGenToCommit) return;
+            completedGenerations.add(gen);
+            pendingCommits.put(gen, text);
+            collectReadyUtteranceCommitsLocked(readyTexts);
+        }
+        for (String readyText : readyTexts) {
+            commitFinalText(readyText);
+            updateStatus("完成: " + truncate(readyText, 20));
+        }
+    }
+
+    private void completeReservedUtteranceWithoutText(int gen) {
+        if (gen <= 0) return;
+        if (Looper.myLooper() != Looper.getMainLooper()) {
+            mainHandler.post(() -> completeReservedUtteranceWithoutText(gen));
+            return;
+        }
+
+        List<String> readyTexts = new ArrayList<>();
+        synchronized (utteranceCommitLock) {
+            if (gen < nextGenToCommit) return;
+            completedGenerations.add(gen);
+            collectReadyUtteranceCommitsLocked(readyTexts);
+        }
+        for (String readyText : readyTexts) {
+            commitFinalText(readyText);
+            updateStatus("完成: " + truncate(readyText, 20));
+        }
+    }
+
+    private void collectReadyUtteranceCommitsLocked(List<String> readyTexts) {
+        while (completedGenerations.contains(nextGenToCommit)) {
+            String text = pendingCommits.remove(nextGenToCommit);
+            if (text != null && !text.isEmpty()) {
+                readyTexts.add(text);
+            }
+            completedGenerations.remove(nextGenToCommit);
+            nextGenToCommit++;
         }
     }
 
@@ -1495,7 +1624,11 @@ public class SimonIMEService extends InputMethodService {
         pcmBuffer = new ByteArrayOutputStream();
         fullPcmBuffer = new ByteArrayOutputStream();  // v6.1: 整段音訊保留供乾淨 fallback
         streamFailed = false;
-        utteranceFinished.set(false);
+        final int myGen = utteranceGeneration.incrementAndGet();
+        activeUtteranceGeneration = myGen;
+        if (currentMode != Mode.APPEND) {
+            completeReservedUtteranceWithoutText(myGen);
+        }
         isRecording = true;
 
         // v6.1: 錄音期間維持螢幕常亮 → 長口述時螢幕不休眠、IME 視窗不被回收，
@@ -1522,7 +1655,7 @@ public class SimonIMEService extends InputMethodService {
 
         // v4.2: 音訊串流 WebSocket（已修復文字消失 + 亂序 bug）
         if (currentMode == Mode.APPEND) {
-            startAudioStreamWs();
+            startAudioStreamWs(myGen);
         }
 
         updateStatus("🔴 錄音中...");
@@ -1605,7 +1738,7 @@ public class SimonIMEService extends InputMethodService {
      * v4.1: 開啟音訊串流 WebSocket 連線。
      * APPEND 模式下，每 2 秒送 PCM chunk → Server Groq Whisper + Moonshot K2 → 即時回傳文字。
      */
-    private void startAudioStreamWs() {
+    private void startAudioStreamWs(final int myGen) {
         streamedChunks.clear();
         streamChunkTotal = 0;
         audioStreamActive = false;
@@ -1646,7 +1779,9 @@ public class SimonIMEService extends InputMethodService {
                 } catch (Exception e) {
                     ws.send("{\"type\":\"auth\",\"password\":\"" + (auth != null ? auth : "") + "\"}");
                 }
-                audioStreamActive = true;
+                if (myGen == utteranceGeneration.get()) {
+                    audioStreamActive = true;
+                }
                 Log.i(TAG, "[AudioStream] WebSocket 已連線，已送出認證" +
                         (contextBefore.isEmpty() ? "" : " (含上下文)"));
             }
@@ -1662,19 +1797,24 @@ public class SimonIMEService extends InputMethodService {
 
                     } else if ("auth_fail".equals(type)) {
                         Log.e(TAG, "[AudioStream] 認證失敗");
-                        streamFailed = true;
-                        audioStreamActive = false;
-                        audioStreamWs = null;
+                        if (myGen == utteranceGeneration.get()) {
+                            streamFailed = true;
+                            audioStreamActive = false;
+                            audioStreamWs = null;
+                        }
                         mainHandler.post(() -> {
-                            if (isRecording) {
+                            if (myGen != utteranceGeneration.get()) {
+                                httpFallbackFullAudio(myGen);
+                            } else if (isRecording) {
                                 updateStatus("🔴 錄音中…（連線中斷，本地暫存）");
                             } else {
                                 updateStatus("整理中…");
-                                httpFallbackFullAudio();
+                                httpFallbackFullAudio(myGen);
                             }
                         });
 
                     } else if ("chunk".equals(type)) {
+                        if (myGen != utteranceGeneration.get()) return;
                         String chunkText = json.optString("text", "");
                         int idx = json.optInt("index", -1);
                         if (!chunkText.isEmpty()) {
@@ -1698,24 +1838,25 @@ public class SimonIMEService extends InputMethodService {
 
                     } else if ("final".equals(type)) {
                         String finalText = json.optString("text", "");
-                        streamedChunks.clear();
-                        updatePreviewStrip("");
+                        if (myGen == utteranceGeneration.get()) {
+                            streamedChunks.clear();
+                            updatePreviewStrip("");
+                        }
 
                         mainHandler.post(() -> {
                             if (!finalText.isEmpty()) {
                                 // v6.1: 一次性提交最終（雲端已拼接＋校正）結果。全程未動 composing text，故直接 commitText。
-                                //       utteranceFinished 守衛：晚到的 onFailure fallback 會被擋，不會重複提交。
+                                //       generation 守衛：晚到的 onFailure fallback 會被擋，不會重複提交。
                                 // v6.17: 走 commitFinalText 以支援不接受 commitText 的 app（Termux/Gemini）。
-                                if (utteranceFinished.compareAndSet(false, true)) {
-                                    commitFinalText(finalText);
-                                    updateStatus("完成: " + truncate(finalText, 20));
+                                if (reserveUtteranceGeneration(myGen)) {
+                                    completeReservedUtteranceWithText(myGen, finalText);
                                 }
                             } else {
                                 // 伺服器最終結果為空 → 用保留的整段音訊做一次乾淨重轉錄（有標點），
                                 //       而非把無標點串流文字倒進輸入框。
                                 Log.w(TAG, "[AudioStream] final 為空，改用整段音訊 HTTP fallback");
                                 updateStatus("整理中…");
-                                httpFallbackFullAudio();
+                                httpFallbackFullAudio(myGen);
                             }
                         });
                         Log.i(TAG, "[AudioStream] 最終文字: '" + truncate(finalText, 50) + "'");
@@ -1723,15 +1864,19 @@ public class SimonIMEService extends InputMethodService {
                     } else if ("error".equals(type)) {
                         String msg = json.optString("message", "unknown");
                         Log.e(TAG, "[AudioStream] 伺服器錯誤: " + msg);
-                        streamFailed = true;
-                        audioStreamActive = false;
-                        audioStreamWs = null;
+                        if (myGen == utteranceGeneration.get()) {
+                            streamFailed = true;
+                            audioStreamActive = false;
+                            audioStreamWs = null;
+                        }
                         mainHandler.post(() -> {
-                            if (isRecording) {
+                            if (myGen != utteranceGeneration.get()) {
+                                httpFallbackFullAudio(myGen);
+                            } else if (isRecording) {
                                 updateStatus("🔴 錄音中…（連線中斷，本地暫存）");
                             } else {
                                 updateStatus("整理中…");
-                                httpFallbackFullAudio();
+                                httpFallbackFullAudio(myGen);
                             }
                         });
                     }
@@ -1743,22 +1888,26 @@ public class SimonIMEService extends InputMethodService {
             @Override
             public void onFailure(WebSocket ws, Throwable t, Response response) {
                 Log.w(TAG, "[AudioStream] WebSocket 連線失敗（改走整段音訊 fallback）", t);
-                streamFailed = true;
-                audioStreamActive = false;
-                audioStreamWs = null;
-                streamedChunks.clear();
-                if (!onDeviceAppendPreviewEnabled || !isRecording) {
-                    updatePreviewStrip("");
+                if (myGen == utteranceGeneration.get()) {
+                    streamFailed = true;
+                    audioStreamActive = false;
+                    audioStreamWs = null;
+                    streamedChunks.clear();
+                    if (!onDeviceAppendPreviewEnabled || !isRecording) {
+                        updatePreviewStrip("");
+                    }
                 }
                 // v6.1: 不再把已收到的「無標點串流文字」倒進輸入框（那正是 Simon 要根除的半成品）。
                 //   - 仍在錄音：什麼都不提交，繼續本地累積整段音訊；停止時用整段走乾淨 HTTP。
                 //   - 已停止（finalize 階段才斷）：立刻用整段保留音訊重轉錄（有標點、走校正）。
                 mainHandler.post(() -> {
-                    if (isRecording) {
+                    if (myGen != utteranceGeneration.get()) {
+                        httpFallbackFullAudio(myGen);
+                    } else if (isRecording) {
                         updateStatus("🔴 錄音中…（連線中斷，本地暫存）");
                     } else {
                         updateStatus("整理中…");
-                        httpFallbackFullAudio();
+                        httpFallbackFullAudio(myGen);
                     }
                 });
             }
@@ -1766,8 +1915,10 @@ public class SimonIMEService extends InputMethodService {
             @Override
             public void onClosed(WebSocket ws, int code, String reason) {
                 Log.i(TAG, "[AudioStream] WebSocket 已關閉: " + code + " " + reason);
-                audioStreamActive = false;
-                audioStreamWs = null;
+                if (myGen == utteranceGeneration.get()) {
+                    audioStreamActive = false;
+                    audioStreamWs = null;
+                }
             }
         });
     }
@@ -1819,6 +1970,7 @@ public class SimonIMEService extends InputMethodService {
         updatePreviewStrip("");
 
         final boolean wasStreaming = streamingMode;
+        final int myGen = activeUtteranceGeneration;
         streamingMode = false;
 
         try {
@@ -1846,6 +1998,7 @@ public class SimonIMEService extends InputMethodService {
         }
 
         byte[] pcmData = pcmBuffer.toByteArray();
+        rememberFullPcmForGeneration(myGen, pcmData);
         pcmBuffer = null;
 
         mainHandler.post(() -> {
@@ -1889,7 +2042,7 @@ public class SimonIMEService extends InputMethodService {
         //       （有標點、走伺服器校正），而非 pcmData 殘片（只剩斷線後那段）。
         if (currentMode == Mode.APPEND && streamFailed) {
             streamedChunks.clear();
-            httpFallbackFullAudio();
+            httpFallbackFullAudio(myGen);
             return;
         }
 
@@ -1921,6 +2074,9 @@ public class SimonIMEService extends InputMethodService {
             }
             // v6.1: 不再有 composing text 需清理（輸入框全程乾淨），只清狀態
             streamedChunks.clear();
+            if (currentMode == Mode.APPEND) {
+                completeReservedUtteranceWithoutText(myGen);
+            }
             mainHandler.post(() -> {
                 updatePreviewStrip("");
                 updateStatus("錄音太短，請再試一次");
@@ -1953,7 +2109,7 @@ public class SimonIMEService extends InputMethodService {
 
         // === 舊串流模式收尾 ===
         if (wasStreaming && streamingUpload.isStreamingSupported()) {
-            finalizeStreamingSession(pcmData);
+            finalizeStreamingSession(pcmData, myGen);
             return;
         }
 
@@ -1992,10 +2148,10 @@ public class SimonIMEService extends InputMethodService {
                         if (aiContextText != null) {
                             sendAiCommand(finalText, aiContextText);
                         } else {
-                            sendTextReplace(finalText, bc, ac);
+                            sendTextReplace(finalText, bc, ac, myGen);
                         }
                     } else {
-                        sendTextProcess(finalText, modeNow);
+                        sendTextProcess(finalText, modeNow, myGen);
                     }
                 } else {
                     // 本機 STT 失敗 → fallback 上傳音訊
@@ -2004,7 +2160,7 @@ public class SimonIMEService extends InputMethodService {
                     if (modeNow == Mode.REPLACE && aiContextText != null) {
                         sendAiCommandAudio(wavData, aiContextText);
                     } else {
-                        sendToWTI(wavData, modeNow, false);
+                        sendToWTI(wavData, modeNow, false, myGen);
                     }
                 }
             }, "LocalSTT-Recognize").start();
@@ -2016,7 +2172,7 @@ public class SimonIMEService extends InputMethodService {
         if (currentMode == Mode.REPLACE && aiContextText != null) {
             sendAiCommandAudio(wavData, aiContextText);
         } else {
-            sendToWTI(wavData, currentMode);
+            sendToWTI(wavData, currentMode, myGen);
         }
     }
 
@@ -2104,7 +2260,7 @@ public class SimonIMEService extends InputMethodService {
      * 3. POST stream-finalize → 取得 LLM 語義校正結果
      * 4. 若 finalize 失敗 → fallback 到整段辨識
      */
-    private void finalizeStreamingSession(byte[] pcmData) {
+    private void finalizeStreamingSession(byte[] pcmData, int gen) {
         new Thread(() -> {
             // 1. Flush VAD — 處理最後殘留的語音段
             localSTT.flushVad(segmentText -> {
@@ -2125,7 +2281,7 @@ public class SimonIMEService extends InputMethodService {
             if (totalChunks == 0) {
                 // 沒有任何 chunk（可能全部太短被過濾）→ fallback 整段辨識
                 Log.w(TAG, "No chunks sent, falling back to single-shot recognition");
-                fallbackSingleShot(pcmData);
+                fallbackSingleShot(pcmData, gen);
                 return;
             }
 
@@ -2139,10 +2295,21 @@ public class SimonIMEService extends InputMethodService {
                     mainHandler.post(() -> {
                         if (!finalText.isEmpty()) {
                             // v6.17: 走 commitFinalText 以支援 Termux/Gemini 等不接受 commitText 的 app。
-                            commitFinalText(finalText);
-                            updateStatus("✅ " + truncate(finalText, 20));
+                            if (reserveUtteranceGeneration(gen)) {
+                                completeReservedUtteranceWithText(gen, finalText);
+                            }
                         } else {
-                            updateStatus("未辨識到文字");
+                            String localConcat;
+                            synchronized (streamChunkTexts) {
+                                localConcat = String.join("", streamChunkTexts).trim();
+                            }
+                            if (!localConcat.isEmpty() && reserveUtteranceGeneration(gen)) {
+                                completeOfflineAppendWithLocalCorrection(
+                                        gen, localConcat, "stream finalize empty response");
+                            } else {
+                                completeReservedUtteranceWithoutText(gen);
+                                updateStatus("未辨識到文字");
+                            }
                         }
                     });
                 }
@@ -2154,7 +2321,7 @@ public class SimonIMEService extends InputMethodService {
                     if ("STREAMING_NOT_SUPPORTED".equals(error)) {
                         // 伺服器不支援串流 → fallback + 之後不再嘗試串流
                         Log.w(TAG, "Server does not support streaming, disabling");
-                        fallbackSingleShot(pcmData);
+                        fallbackSingleShot(pcmData, gen);
                     } else {
                         // 其他錯誤 → fallback 用本地收集的文字
                         String localConcat;
@@ -2164,9 +2331,9 @@ public class SimonIMEService extends InputMethodService {
                         if (!localConcat.isEmpty()) {
                             // 用本地拼接的文字送 process-text
                             mainHandler.post(() -> updateStatus("串流整理失敗，使用本地結果"));
-                            sendTextProcess(localConcat, Mode.APPEND);
+                            sendTextProcess(localConcat, Mode.APPEND, gen);
                         } else {
-                            fallbackSingleShot(pcmData);
+                            fallbackSingleShot(pcmData, gen);
                         }
                     }
                 }
@@ -2177,7 +2344,7 @@ public class SimonIMEService extends InputMethodService {
     /**
      * Fallback：整段 PCM → SenseVoice 單次辨識 → process-text
      */
-    private void fallbackSingleShot(byte[] pcmData) {
+    private void fallbackSingleShot(byte[] pcmData, int gen) {
         if (localSTTReady) {
             long t0 = System.currentTimeMillis();
             String spokenText = localSTT.recognize(pcmData, SAMPLE_RATE);
@@ -2186,27 +2353,38 @@ public class SimonIMEService extends InputMethodService {
                 spokenText = englishMapper.apply(spokenText);
                 final String finalText = spokenText;
                 mainHandler.post(() -> updateStatus("辨識(" + sttMs + "ms): " + truncate(finalText, 15)));
-                sendTextProcess(finalText, Mode.APPEND);
+                sendTextProcess(finalText, Mode.APPEND, gen);
             } else {
                 mainHandler.post(() -> updateStatus("本機辨識無結果，上傳中..."));
                 byte[] wavData = pcmToWav(pcmData, SAMPLE_RATE, 1, 16);
-                sendToWTI(wavData, Mode.APPEND, false);
+                sendToWTI(wavData, Mode.APPEND, false, gen);
             }
         } else {
             byte[] wavData = pcmToWav(pcmData, SAMPLE_RATE, 1, 16);
-            sendToWTI(wavData, Mode.APPEND, false);
+            sendToWTI(wavData, Mode.APPEND, false, gen);
         }
     }
 
     // ==================== Network ====================
 
     private void sendToWTI(byte[] wavData, Mode mode) {
-        sendToWTI(wavData, mode, mode == Mode.APPEND);
+        sendToWTI(wavData, mode, mode == Mode.APPEND, 0);
+    }
+
+    private void sendToWTI(byte[] wavData, Mode mode, int gen) {
+        sendToWTI(wavData, mode, mode == Mode.APPEND, gen);
     }
 
     private void sendToWTI(byte[] wavData, Mode mode, boolean allowOfflineAppendFallback) {
+        sendToWTI(wavData, mode, allowOfflineAppendFallback, 0);
+    }
+
+    private void sendToWTI(byte[] wavData, Mode mode, boolean allowOfflineAppendFallback, int gen) {
         // v6.20: guard against null/empty audio
         if (wavData == null || wavData.length == 0) {
+            if (mode == Mode.APPEND) {
+                completeReservedUtteranceWithoutText(gen);
+            }
             mainHandler.post(() -> updateStatus("沒有可用的音訊，請再試一次"));
             return;
         }
@@ -2268,8 +2446,11 @@ public class SimonIMEService extends InputMethodService {
             public void onFailure(Call call, IOException e) {
                 Log.e(TAG, "WTI request failed", e);
                 if (allowOfflineAppendFallback && mode == Mode.APPEND) {
-                    runOfflineFullAudioFallback("HTTP request failed: " + e.getMessage(), false);
+                    runOfflineFullAudioFallback(gen, "HTTP request failed: " + e.getMessage(), false);
                 } else {
+                    if (mode == Mode.APPEND) {
+                        completeReservedUtteranceWithoutText(gen);
+                    }
                     mainHandler.post(() -> updateStatus("連線失敗: " + e.getMessage()));
                 }
             }
@@ -2280,8 +2461,11 @@ public class SimonIMEService extends InputMethodService {
                     String responseBody = response.body() != null ? response.body().string() : "";
                     if (!response.isSuccessful()) {
                         if (allowOfflineAppendFallback && mode == Mode.APPEND) {
-                            runOfflineFullAudioFallback("HTTP response " + response.code(), false);
+                            runOfflineFullAudioFallback(gen, "HTTP response " + response.code(), false);
                         } else {
+                            if (mode == Mode.APPEND) {
+                                completeReservedUtteranceWithoutText(gen);
+                            }
                             mainHandler.post(() -> updateStatus("伺服器錯誤: " + response.code()));
                         }
                         return;
@@ -2289,15 +2473,18 @@ public class SimonIMEService extends InputMethodService {
                     JSONObject json = new JSONObject(responseBody);
                     if (allowOfflineAppendFallback && mode == Mode.APPEND
                             && json.optString("text", "").trim().isEmpty()) {
-                        runOfflineFullAudioFallback("HTTP response text empty", false);
+                        runOfflineFullAudioFallback(gen, "HTTP response text empty", false);
                     } else {
-                        handleWTIResponse(json, mode);
+                        handleWTIResponse(json, mode, gen);
                     }
                 } catch (Exception e) {
                     Log.e(TAG, "Error parsing response", e);
                     if (allowOfflineAppendFallback && mode == Mode.APPEND) {
-                        runOfflineFullAudioFallback("HTTP response parse error: " + e.getMessage(), false);
+                        runOfflineFullAudioFallback(gen, "HTTP response parse error: " + e.getMessage(), false);
                     } else {
+                        if (mode == Mode.APPEND) {
+                            completeReservedUtteranceWithoutText(gen);
+                        }
                         mainHandler.post(() -> updateStatus("解析錯誤"));
                     }
                 }
@@ -2312,7 +2499,18 @@ public class SimonIMEService extends InputMethodService {
      * v2.7: 本機 STT 完成後，傳文字到 /v1/process-text 做校正/拼字/翻譯。
      */
     private void sendTextProcess(String spokenText, Mode mode) {
+        sendTextProcess(spokenText, mode, 0);
+    }
+
+    private void sendTextProcess(String spokenText, Mode mode, int gen) {
+        sendTextProcess(spokenText, mode, gen, false);
+    }
+
+    private void sendTextProcess(String spokenText, Mode mode, int gen, boolean utteranceAlreadyReserved) {
         String serverUrl = getServerUrl();
+        if (mode == Mode.APPEND && gen > 0 && !utteranceAlreadyReserved) {
+            startAppendProcessTextRace(spokenText, gen);
+        }
 
         String modeStr;
         switch (mode) {
@@ -2343,6 +2541,15 @@ public class SimonIMEService extends InputMethodService {
             @Override
             public void onFailure(@NonNull Call call, @NonNull IOException e) {
                 Log.e(TAG, "Process-text request failed", e);
+                if (mode == Mode.APPEND) {
+                    completeAppendProcessTextFailureWithOfflineFallback(
+                            gen,
+                            spokenText,
+                            "Process-text request failed: " + e.getMessage(),
+                            utteranceAlreadyReserved,
+                            "連線失敗: " + e.getMessage());
+                    return;
+                }
                 mainHandler.post(() -> updateStatus("連線失敗: " + e.getMessage()));
             }
 
@@ -2351,12 +2558,37 @@ public class SimonIMEService extends InputMethodService {
                 try {
                     String responseBody = response.body() != null ? response.body().string() : "";
                     if (!response.isSuccessful()) {
+                        if (mode == Mode.APPEND) {
+                            completeAppendProcessTextFailureWithOfflineFallback(
+                                    gen,
+                                    spokenText,
+                                    "server error " + response.code(),
+                                    utteranceAlreadyReserved,
+                                    "伺服器錯誤: " + response.code());
+                            return;
+                        }
                         mainHandler.post(() -> updateStatus("伺服器錯誤: " + response.code()));
                         return;
                     }
                     JSONObject json = new JSONObject(responseBody);
                     String text = json.optString("text", "").trim();
                     mainHandler.post(() -> {
+                        if (mode == Mode.APPEND && gen > 0) {
+                            if (!text.isEmpty()) {
+                                if (!utteranceAlreadyReserved && !reserveUtteranceGeneration(gen)) {
+                                    return;
+                                }
+                                completeReservedUtteranceWithText(gen, text);
+                                return;
+                            }
+                            completeAppendProcessTextFailureWithOfflineFallback(
+                                    gen,
+                                    spokenText,
+                                    "process-text empty response",
+                                    utteranceAlreadyReserved,
+                                    "未辨識到文字");
+                            return;
+                        }
                         InputConnection ic = getCurrentInputConnection();
                         if (ic != null && !text.isEmpty()) {
                             settlePendingCorrectionCapture();
@@ -2377,13 +2609,128 @@ public class SimonIMEService extends InputMethodService {
                     });
                 } catch (Exception e) {
                     Log.e(TAG, "Error parsing process-text response", e);
+                    if (mode == Mode.APPEND) {
+                        completeAppendProcessTextFailureWithOfflineFallback(
+                                gen,
+                                spokenText,
+                                "process-text parse error: " + e.getMessage(),
+                                utteranceAlreadyReserved,
+                                "解析錯誤");
+                        return;
+                    }
                     mainHandler.post(() -> updateStatus("解析錯誤"));
                 }
             }
         });
     }
 
-    private void sendTextReplace(String spokenText, String beforeCursor, String afterCursor) {
+    private void startAppendProcessTextRace(String spokenText, int gen) {
+        final String localText = spokenText == null ? "" : spokenText.trim();
+        if (localText.isEmpty() || mainHandler == null) return;
+
+        final AtomicReference<String> onDeviceResult = new AtomicReference<>(null);
+        new Thread(() -> {
+            try {
+                OnDeviceCorrectionEngine current = onDeviceCorrection;
+                if (current == null || !current.isCorrectorReady()) return;
+                String corrected = current.correct(localText, null);
+                if (corrected == null || corrected.trim().isEmpty()) return;
+                onDeviceResult.set(corrected.trim());
+            } catch (Throwable t) {
+                Log.w(TAG, "[AppendRace] on-device correction failed", t);
+            }
+        }, "AppendRace-OnDevice").start();
+
+        Runnable previous = serverWaitBudgetCallbacks.remove(gen);
+        if (previous != null) {
+            mainHandler.removeCallbacks(previous);
+        }
+
+        Runnable budgetCallback = () -> {
+            serverWaitBudgetCallbacks.remove(gen);
+            if (committedGenerations.containsKey(gen)) return;
+            String fastText = onDeviceResult.get();
+            if (fastText == null || fastText.isEmpty()) return;
+            if (!reserveUtteranceGeneration(gen)) return;
+            completeReservedUtteranceWithText(gen, fastText);
+            updateStatus("快速完成（未潤稿）: " + truncate(fastText, 20));
+        };
+        serverWaitBudgetCallbacks.put(gen, budgetCallback);
+        mainHandler.postDelayed(budgetCallback, SERVER_WAIT_BUDGET_MS);
+    }
+
+    private void completeAppendProcessTextFailureWithOfflineFallback(
+            int gen,
+            String spokenText,
+            String reason,
+            boolean utteranceAlreadyReserved,
+            String noLocalTextStatus) {
+        String localText = spokenText == null ? "" : spokenText.trim();
+        if (gen > 0 && !localText.isEmpty()) {
+            if (utteranceAlreadyReserved || reserveUtteranceGeneration(gen)) {
+                completeOfflineAppendWithLocalCorrection(gen, localText, reason);
+            }
+            return;
+        }
+        completeReservedUtteranceWithoutText(gen);
+        mainHandler.post(() -> updateStatus(noLocalTextStatus));
+    }
+
+    private void completeOfflineAppendWithLocalCorrection(int gen, String spokenText, String reason) {
+        final String localText = spokenText == null ? "" : spokenText.trim();
+        if (gen <= 0 || localText.isEmpty()) {
+            Log.w(TAG, "[OfflineCorrection] no local text after process-text failure: " + reason);
+            completeReservedUtteranceWithoutText(gen);
+            mainHandler.post(() -> updateStatus("離線校正無本機文字"));
+            return;
+        }
+
+        mainHandler.post(() -> updateStatus("離線校正中…"));
+        new Thread(() -> {
+            String corrected = TimeoutWall.runWithBudget(() -> {
+                OnDeviceCorrectionEngine current = onDeviceCorrection;
+                if (current == null || !current.isCorrectorReady()) return null;
+                return current.correct(localText, null);
+            }, OFFLINE_CORRECTION_FAILED_SENTINEL, OFFLINE_CORRECTION_TIMEOUT_MS);
+
+            if (!OFFLINE_CORRECTION_FAILED_SENTINEL.equals(corrected)
+                    && corrected != null
+                    && !corrected.trim().isEmpty()) {
+                final String offlineText = corrected.trim();
+                mainHandler.post(() -> {
+                    completeReservedUtteranceWithText(gen, offlineText);
+                    updateStatus("離線完成（未潤稿）: " + truncate(offlineText, 20));
+                });
+                return;
+            }
+
+            String deterministic = TimeoutWall.runWithBudget(() -> {
+                OnDeviceCorrectionEngine current = onDeviceCorrection;
+                if (current == null || !current.isCorrectorReady()) return null;
+                return current.correctDeterministic(localText);
+            }, OFFLINE_CORRECTION_FAILED_SENTINEL, OFFLINE_CORRECTION_TIMEOUT_MS);
+
+            if (!OFFLINE_CORRECTION_FAILED_SENTINEL.equals(deterministic)
+                    && deterministic != null
+                    && !deterministic.trim().isEmpty()) {
+                final String offlineText = deterministic.trim();
+                Log.w(TAG, "[OfflineCorrection] correction failed after process-text failure: " + reason);
+                mainHandler.post(() -> {
+                    completeReservedUtteranceWithText(gen, offlineText);
+                    updateStatus("離線完成（無標點）: " + truncate(offlineText, 20));
+                });
+                return;
+            }
+
+            Log.w(TAG, "[OfflineCorrection] using raw local text after process-text failure: " + reason);
+            mainHandler.post(() -> {
+                completeReservedUtteranceWithText(gen, localText);
+                updateStatus("離線原文（未校正）: " + truncate(localText, 20));
+            });
+        }, "OfflineAppend-Correct").start();
+    }
+
+    private void sendTextReplace(String spokenText, String beforeCursor, String afterCursor, int gen) {
         String serverUrl = getServerUrl();
 
         MultipartBody body = new MultipartBody.Builder()
@@ -2418,7 +2765,7 @@ public class SimonIMEService extends InputMethodService {
                         return;
                     }
                     JSONObject json = new JSONObject(responseBody);
-                    handleWTIResponse(json, Mode.REPLACE);
+                    handleWTIResponse(json, Mode.REPLACE, gen);
                 } catch (Exception e) {
                     Log.e(TAG, "Error parsing replace-text response", e);
                     mainHandler.post(() -> updateStatus("解析錯誤"));
@@ -2427,7 +2774,7 @@ public class SimonIMEService extends InputMethodService {
         });
     }
 
-    private void handleWTIResponse(JSONObject json, Mode mode) {
+    private void handleWTIResponse(JSONObject json, Mode mode, int gen) {
         mainHandler.post(() -> {
             try {
                 // v6.17: ic null-guard moved into each case.
@@ -2438,12 +2785,12 @@ public class SimonIMEService extends InputMethodService {
                     case APPEND: {
                         String text = json.optString("text", "").trim();
                         if (!text.isEmpty()) {
-                            if (utteranceFinished.compareAndSet(false, true)) {
+                            if (reserveUtteranceGeneration(gen)) {
                                 // v6.17: commitFinalText 支援 Termux/Gemini 備援。
-                                commitFinalText(text);
-                                updateStatus("✅ " + truncate(text, 20));
+                                completeReservedUtteranceWithText(gen, text);
                             }
                         } else {
+                            completeReservedUtteranceWithoutText(gen);
                             updateStatus("未辨識到文字");
                         }
                         break;
@@ -2943,24 +3290,25 @@ public class SimonIMEService extends InputMethodService {
      * 伺服器端會做標點＋法律詞校正），避免把無標點的串流預覽倒進輸入框。
      * 只在 WS 失敗或 final 為空時呼叫。須在錄音停止後（fullPcmBuffer 寫入已完成）呼叫。
      */
-    private void httpFallbackFullAudio() {
-        // v6.1: 終局守衛——每段口述只允許一次 commit/fallback，擋 WS 晚到回呼造成的重複提交
-        if (!utteranceFinished.compareAndSet(false, true)) return;
-        byte[] pcm = (fullPcmBuffer != null) ? fullPcmBuffer.toByteArray() : null;
+    private void httpFallbackFullAudio(int gen) {
+        // v6.25: 終局守衛——同一 generation 只允許一次 commit/fallback，擋 WS 晚到回呼造成的重複提交
+        if (!reserveUtteranceGeneration(gen)) return;
+        byte[] pcm = getFullPcmForGeneration(gen);
         if (pcm == null || pcm.length < 3200) {
+            completeReservedUtteranceWithoutText(gen);
             mainHandler.post(() -> updateStatus("沒有可用的音訊，請再試一次"));
             return;
         }
         byte[] wavData = pcmToWav(pcm, SAMPLE_RATE, 1, 16);
         Log.i(TAG, "[AudioStream] 整段音訊 HTTP fallback (" + pcm.length + " bytes)");
-        sendFullAudioHttpFallback(wavData, pcm);
+        sendFullAudioHttpFallback(gen, wavData, pcm);
     }
 
     /**
      * v6.3: WS 已失敗或 final 為空後，先嘗試整段 HTTP 轉錄；HTTP 也失敗/空結果時，
      * 使用手機端內建 SenseVoice 對同一段 fullPcmBuffer 做最終兜底。
      */
-    private void sendFullAudioHttpFallback(byte[] wavData, byte[] pcm) {
+    private void sendFullAudioHttpFallback(int gen, byte[] wavData, byte[] pcm) {
         String serverUrl = getServerUrl();
         MultipartBody.Builder bodyBuilder = new MultipartBody.Builder()
                 .setType(MultipartBody.FORM)
@@ -2979,7 +3327,7 @@ public class SimonIMEService extends InputMethodService {
             @Override
             public void onFailure(@NonNull Call call, @NonNull IOException e) {
                 Log.e(TAG, "[AudioStream] HTTP fallback failed", e);
-                runOfflineFullAudioFallback("HTTP fallback failed: " + e.getMessage(), true, pcm);
+                runOfflineFullAudioFallback(gen, "HTTP fallback failed: " + e.getMessage(), true, pcm);
             }
 
             @Override
@@ -2988,7 +3336,7 @@ public class SimonIMEService extends InputMethodService {
                     String responseBody = response.body() != null ? response.body().string() : "";
                     if (!response.isSuccessful()) {
                         Log.w(TAG, "[AudioStream] HTTP fallback server error: " + response.code());
-                        runOfflineFullAudioFallback("HTTP fallback response " + response.code(), true, pcm);
+                        runOfflineFullAudioFallback(gen, "HTTP fallback response " + response.code(), true, pcm);
                         return;
                     }
 
@@ -2996,50 +3344,40 @@ public class SimonIMEService extends InputMethodService {
                     String text = json.optString("text", "").trim();
                     if (text.isEmpty()) {
                         Log.w(TAG, "[AudioStream] HTTP fallback returned empty text");
-                        runOfflineFullAudioFallback("HTTP fallback text empty", true, pcm);
+                        runOfflineFullAudioFallback(gen, "HTTP fallback text empty", true, pcm);
                         return;
                     }
 
-                    mainHandler.post(() -> {
-                        InputConnection ic = getCurrentInputConnection();
-                        if (ic != null) {
-                            settlePendingCorrectionCapture();
-                            TextSnapshot beforeSnapshot = getCurrentTextSnapshotSafely();
-                            if (commitTextProgrammatically(ic, text)) {
-                                recordVoiceCommit(text, beforeSnapshot);
-                            }
-                            updateStatus("✅ " + truncate(text, 20));
-                        } else {
-                            updateStatus("無法取得輸入連線");
-                        }
-                    });
+                    completeReservedUtteranceWithText(gen, text);
                 } catch (Exception e) {
                     Log.e(TAG, "[AudioStream] HTTP fallback parse error", e);
-                    runOfflineFullAudioFallback("HTTP fallback parse error: " + e.getMessage(), true, pcm);
+                    runOfflineFullAudioFallback(gen, "HTTP fallback parse error: " + e.getMessage(), true, pcm);
                 }
             }
         });
     }
 
-    private void runOfflineFullAudioFallback(String reason, boolean utteranceAlreadyReserved) {
-        byte[] pcm = (fullPcmBuffer != null) ? fullPcmBuffer.toByteArray() : null;
-        runOfflineFullAudioFallback(reason, utteranceAlreadyReserved, pcm);
+    private void runOfflineFullAudioFallback(int gen, String reason, boolean utteranceAlreadyReserved) {
+        byte[] pcm = getFullPcmForGeneration(gen);
+        runOfflineFullAudioFallback(gen, reason, utteranceAlreadyReserved, pcm);
     }
 
     /**
      * v6.12-revert: 最後防線只允許本機 STT 產生候選文字，再送回 server correction。
      * 不直接 commit SenseVoice 原文，避免簡體/無標點漏出。
      */
-    private void runOfflineFullAudioFallback(String reason, boolean utteranceAlreadyReserved, byte[] pcm) {
-        if (!utteranceAlreadyReserved && !utteranceFinished.compareAndSet(false, true)) return;
+    private void runOfflineFullAudioFallback(int gen, String reason, boolean utteranceAlreadyReserved, byte[] pcm) {
+        if (!utteranceAlreadyReserved && !reserveUtteranceGeneration(gen)) return;
 
         if (pcm == null || pcm.length < 3200) {
             Log.w(TAG, "[OfflineFallback] no usable PCM after server failure: " + reason);
+            completeReservedUtteranceWithoutText(gen);
             mainHandler.post(() -> updateStatus("沒有可用的音訊，請再試一次"));
             return;
         }
         if (!localSTTReady || localSTT == null || !localSTT.isReady()) {
             Log.e(TAG, "[OfflineFallback] SenseVoice not ready after server failure: " + reason);
+            completeReservedUtteranceWithoutText(gen);
             mainHandler.post(() -> updateStatus("離線辨識未就緒"));
             return;
         }
@@ -3057,9 +3395,10 @@ public class SimonIMEService extends InputMethodService {
                         + " (" + sttMs + "ms), routing to server correction: '"
                         + truncate(finalText, 50) + "'");
                 mainHandler.post(() -> updateStatus("伺服器校正中…"));
-                sendTextProcess(finalText, Mode.APPEND);
+                sendTextProcess(finalText, Mode.APPEND, gen, true);
             } else {
                 Log.e(TAG, "[OfflineFallback] SenseVoice returned empty after server failure: " + reason);
+                completeReservedUtteranceWithoutText(gen);
                 mainHandler.post(() -> updateStatus("離線辨識無結果"));
             }
         }, "OfflineFallback-SenseVoice").start();
@@ -3715,6 +4054,7 @@ public class SimonIMEService extends InputMethodService {
     public void onFinishInputView(boolean finishingInput) {
         if (mainHandler != null) {
             mainHandler.removeCallbacks(connectionWarmUpRunnable);
+            clearServerWaitBudgetCallbacks();
         }
         settlePendingCorrectionCapture();
         dismissSymbolPopup();
@@ -3754,9 +4094,13 @@ public class SimonIMEService extends InputMethodService {
         if (mainHandler != null) {
             mainHandler.removeCallbacks(mPendingCorrectionCaptureRunnable);
             mainHandler.removeCallbacks(connectionWarmUpRunnable);
+            clearServerWaitBudgetCallbacks();
         }
         if (localSTT != null) {
             localSTT.release();
+        }
+        if (onDeviceCorrection != null) {
+            onDeviceCorrection.release();
         }
         super.onDestroy();
     }
