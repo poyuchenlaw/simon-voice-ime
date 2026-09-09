@@ -87,6 +87,7 @@ import okio.ByteString;
 public class SimonIMEService extends InputMethodService {
 
     private static final String TAG = "SimonIME";
+    private static final boolean REPLACE_SERVER_ASR = true; // v6.27 2026-09-09：換＝語音筆記走伺服器辨識，文意精準優先於速度
     private static final int SAMPLE_RATE = 16000;
     private static final int CHANNEL = AudioFormat.CHANNEL_IN_MONO;
     private static final int ENCODING = AudioFormat.ENCODING_PCM_16BIT;
@@ -2116,7 +2117,7 @@ public class SimonIMEService extends InputMethodService {
         // === 非串流模式：本機 STT → 文字上傳 ===
         // v4.0: 只有 REPLACE 模式用本機 STT（需要游標上下文）
         // APPEND/SPELL/TRANSLATE 一律傳音訊到 Server（Groq Whisper 品質遠超手機 SenseVoice）
-        if (localSTTReady && currentMode == Mode.REPLACE) {
+        if (localSTTReady && currentMode == Mode.REPLACE && !REPLACE_SERVER_ASR) {
             // 在主執行緒先取游標前後文字（背景執行緒拿不到 InputConnection）
             InputConnection icNow = getCurrentInputConnection();
             String beforeCursor = "";
@@ -2441,7 +2442,13 @@ public class SimonIMEService extends InputMethodService {
             reqBuilder.addHeader("Authorization", "Bearer " + auth);
         }
 
-        httpClient.newCall(reqBuilder.build()).enqueue(new Callback() {
+        OkHttpClient callClient = mode == Mode.REPLACE
+                ? httpClient.newBuilder()
+                        .readTimeout(60, TimeUnit.SECONDS)
+                        .callTimeout(75, TimeUnit.SECONDS)
+                        .build()
+                : httpClient;
+        callClient.newCall(reqBuilder.build()).enqueue(new Callback() {
             @Override
             public void onFailure(Call call, IOException e) {
                 Log.e(TAG, "WTI request failed", e);
