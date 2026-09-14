@@ -106,7 +106,7 @@ public class VocabHelper {
             return;
         }
         String url = getServerUrl() + "/v1/vocab/sync";
-        RequestBody body = new FormBody.Builder()
+        RequestBody body = AppVersion.withAppVersion(new FormBody.Builder())
                 .add("word", word.trim())
                 .add("source", source != null ? source : "manual")
                 .build();
@@ -142,7 +142,7 @@ public class VocabHelper {
      */
     public void list(ListCallback callback) {
         String url = getServerUrl() + "/v1/vocab/list";
-        Request request = authorizedBuilder(url).get().build();
+        Request request = authorizedBuilder(AppVersion.withAppVersion(url)).get().build();
 
         client.newCall(request).enqueue(new Callback() {
             @Override
@@ -205,7 +205,7 @@ public class VocabHelper {
         try {
             String encoded = URLEncoder.encode(word.trim(), StandardCharsets.UTF_8.name());
             String url = getServerUrl() + "/v1/vocab/" + encoded;
-            Request request = authorizedBuilder(url).delete().build();
+            Request request = authorizedBuilder(AppVersion.withAppVersion(url)).delete().build();
 
             client.newCall(request).enqueue(new Callback() {
                 @Override

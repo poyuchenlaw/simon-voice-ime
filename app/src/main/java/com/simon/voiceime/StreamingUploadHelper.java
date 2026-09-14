@@ -129,7 +129,7 @@ public class StreamingUploadHelper {
                 String wsUrl = buildWsUrl(serverUrl);
                 CountDownLatch authLatch = new CountDownLatch(1);
 
-                Request wsRequest = new Request.Builder().url(wsUrl).build();
+                Request wsRequest = new Request.Builder().url(AppVersion.withAppVersion(wsUrl)).build();
 
                 webSocket = wsClient.newWebSocket(wsRequest, new WebSocketListener() {
                     @Override
@@ -137,7 +137,7 @@ public class StreamingUploadHelper {
                         Log.i(TAG, "WebSocket connected: " + wsUrl);
                         // 發送 auth
                         try {
-                            JSONObject auth = new JSONObject();
+                            JSONObject auth = AppVersion.withAppVersion(new JSONObject());
                             auth.put("type", "auth");
                             if (authPassword != null && !authPassword.isEmpty()) {
                                 auth.put("password", authPassword);
@@ -300,7 +300,7 @@ public class StreamingUploadHelper {
      */
     private void sendChunkWs(String text, int idx) {
         try {
-            JSONObject msg = new JSONObject();
+            JSONObject msg = AppVersion.withAppVersion(new JSONObject());
             msg.put("type", "chunk");
             msg.put("text", text);
             msg.put("index", idx);
@@ -324,7 +324,7 @@ public class StreamingUploadHelper {
      */
     private void sendChunkHttp(String text, int idx) {
         try {
-            JSONObject body = new JSONObject();
+            JSONObject body = AppVersion.withAppVersion(new JSONObject());
             body.put("session_id", sessionId);
             body.put("chunk_text", text);
             body.put("chunk_index", idx);
@@ -399,7 +399,7 @@ public class StreamingUploadHelper {
             finalErrorText = null;
             resultLatch = new CountDownLatch(1);
 
-            JSONObject msg = new JSONObject();
+            JSONObject msg = AppVersion.withAppVersion(new JSONObject());
             msg.put("type", "finalize");
 
             boolean sent = webSocket.send(msg.toString());
@@ -444,7 +444,7 @@ public class StreamingUploadHelper {
      */
     private void finalizeHttp(FinalizeCallback callback, int totalChunks) {
         try {
-            JSONObject body = new JSONObject();
+            JSONObject body = AppVersion.withAppVersion(new JSONObject());
             body.put("session_id", sessionId);
             body.put("total_chunks", totalChunks);
             if (authPassword != null && !authPassword.isEmpty()) {

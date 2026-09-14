@@ -133,7 +133,7 @@ public class SimonIMEService extends InputMethodService {
     };
 
     // Helpers
-    private ClipboardHelper clipboardHelper;
+    protected ClipboardHelper clipboardHelper;
     private CommandsHelper commandsHelper;
     private LocalSTTHelper localSTT;
     private volatile boolean localSTTReady = false;
@@ -202,10 +202,10 @@ public class SimonIMEService extends InputMethodService {
     private boolean folderNamingMode = false;
 
     // UI elements
-    private View rootView;
-    private TextView statusText;
+    protected View rootView;
+    protected TextView statusText;
     private TextView previewText;
-    private View btnMic;
+    protected View btnMic;
     private TextView btnMode;
     private TextView btnClipboard;   // v6.20: promoted to field (was local in onCreateInputView)
     private FrameLayout panelContainer;
@@ -257,6 +257,10 @@ public class SimonIMEService extends InputMethodService {
     private static final String OFFLINE_CORRECTION_FAILED_SENTINEL =
             "\uE000OFFLINE_CORRECTION_FAILED\uE000";
 
+    protected boolean isWatchService() { return false; }
+    protected void onWatchAudio(byte[] pcm) {}
+    protected boolean isVoiceRecording() { return isRecording; }
+
     @Override
     public void onCreate() {
         super.onCreate();
@@ -266,6 +270,10 @@ public class SimonIMEService extends InputMethodService {
                 .build();
         mainHandler = new Handler(Looper.getMainLooper());
         clipboardHelper = new ClipboardHelper(this);
+        if (isWatchService()) {
+            currentMode = Mode.REPLACE; // Watch owns its mode and HTTP dispatch; no phone streaming.
+            return;
+        }
         commandsHelper = new CommandsHelper(this);
         englishMapper = new EnglishMapper(this);
         onDeviceCorrection = new OnDeviceCorrectionEngine(this);
@@ -621,7 +629,7 @@ public class SimonIMEService extends InputMethodService {
      *   - ic == null: text already on clipboard, show hint.
      * Small single-char / punctuation / space commits should NOT use this method.
      */
-    private void commitFinalText(String text) {
+    protected void commitFinalText(String text) {
         try {
             if (text == null || text.isEmpty()) return;
             settlePendingCorrectionCapture();
@@ -845,6 +853,7 @@ public class SimonIMEService extends InputMethodService {
     }
 
     private void recordVoiceCommit(String text, TextSnapshot beforeSnapshot) {
+        if (isWatchService()) return; // Watch bridge owns the complete response; no phone correction capture.
         try {
             if (text == null || text.isEmpty()) return;
             mLastVoiceCommittedText = text;
@@ -985,7 +994,7 @@ public class SimonIMEService extends InputMethodService {
             payload.put("committed_ts", committedTs);
             payload.put("edit_ts", editTs);
             payload.put("source", "ime_edit");
-            payload.put("app_version", BuildConfig.VERSION_NAME);
+            AppVersion.withAppVersion(payload);
 
             RequestBody body = RequestBody.create(payload.toString(),
                     MediaType.parse("application/json; charset=utf-8"));
@@ -1071,7 +1080,7 @@ public class SimonIMEService extends InputMethodService {
      * 狀態訊息可遠端診斷：點了「完全沒訊息」＝觸擊沒進來(版面問題)；
      * 「無輸入連線」＝ic null；「📋 已貼上」＝commit 成功。
      */
-    private boolean pasteClipboardText(String text) {
+    protected boolean pasteClipboardText(String text) {
         if (text == null || text.isEmpty()) return false;
         InputConnection ic = getCurrentInputConnection();
         if (ic == null) {
@@ -1564,7 +1573,7 @@ public class SimonIMEService extends InputMethodService {
 
     // ==================== Recording ====================
 
-    private void startRecording() {
+    protected void startRecording() {
         if (isRecording) {
             // v5.4.1: tap-toggle 停止也走延遲（和 handleTouchUp 一致）
             if (currentMode == Mode.APPEND && audioStreamWs != null) {
@@ -1578,7 +1587,7 @@ public class SimonIMEService extends InputMethodService {
         }
 
         // Close any open panel
-        closePanel();
+        if (!isWatchService()) closePanel();
 
         int rawBufferSize = AudioRecord.getMinBufferSize(SAMPLE_RATE, CHANNEL, ENCODING);
         final int bufferSize = rawBufferSize > 0 ? rawBufferSize : SAMPLE_RATE * 2;
@@ -1652,7 +1661,7 @@ public class SimonIMEService extends InputMethodService {
 
         // v3.6: 停用舊串流模式（VAD 分段）
         streamingMode = false;
-        prepareOnDeviceAppendPreview();
+        if (!isWatchService()) prepareOnDeviceAppendPreview();
 
         // v4.2: 音訊串流 WebSocket（已修復文字消失 + 亂序 bug）
         if (currentMode == Mode.APPEND) {
@@ -1764,21 +1773,21 @@ public class SimonIMEService extends InputMethodService {
         String serverUrl = getServerUrl();
         String wsUrl = serverUrl.replace("http://", "ws://").replace("https://", "wss://") + "/ws/stream-audio";
 
-        Request wsReq = new Request.Builder().url(wsUrl).build();
+        Request wsReq = new Request.Builder().url(AppVersion.withAppVersion(wsUrl)).build();
         audioStreamWs = httpClient.newWebSocket(wsReq, new WebSocketListener() {
             @Override
             public void onOpen(WebSocket ws, Response response) {
                 // Send auth + context
                 String auth = getAuthPassword();
                 try {
-                    JSONObject authMsg = new JSONObject();
+                    JSONObject authMsg = AppVersion.withAppVersion(new JSONObject());
                     authMsg.put("type", "auth");
                     authMsg.put("password", auth != null ? auth : "");
                     if (!contextBefore.isEmpty()) authMsg.put("context_before", contextBefore);
                     if (!contextAfter.isEmpty()) authMsg.put("context_after", contextAfter);
                     ws.send(authMsg.toString());
                 } catch (Exception e) {
-                    ws.send("{\"type\":\"auth\",\"password\":\"" + (auth != null ? auth : "") + "\"}");
+                    ws.send("{\"app_version\":\"" + BuildConfig.VERSION_NAME + "\",\"type\":\"auth\",\"password\":\"" + (auth != null ? auth : "") + "\"}");
                 }
                 if (myGen == utteranceGeneration.get()) {
                     audioStreamActive = true;
@@ -1961,7 +1970,7 @@ public class SimonIMEService extends InputMethodService {
         }
     }
 
-    private void stopRecordingAndSend() {
+    protected void stopRecordingAndSend() {
         if (!isRecording) return;
         isRecording = false;
         onDeviceAppendPreviewEnabled = false;
@@ -2005,8 +2014,13 @@ public class SimonIMEService extends InputMethodService {
         mainHandler.post(() -> {
             btnMic.setBackgroundColor(getResources().getColor(R.color.mic_idle, null));
             if (btnMic instanceof Button) ((Button) btnMic).setText("🎤");
-            updateStatus("辨識中...");
+            if (!isWatchService()) updateStatus("辨識中...");
         });
+
+        if (isWatchService()) {
+            onWatchAudio(pcmData);
+            return;
+        }
 
         // v6.20: 資料夾語音命名攔截
         if (folderNamingMode) {
@@ -2057,7 +2071,7 @@ public class SimonIMEService extends InputMethodService {
                 Log.i(TAG, "[AudioStream] 送出剩餘音訊 (" + pcmData.length + " bytes)");
             }
             // Send finalize command
-            audioStreamWs.send("{\"type\":\"finalize\"}");
+            audioStreamWs.send(AppVersion.controlMessage("finalize"));
             Log.i(TAG, "[AudioStream] 已送出 finalize，共 " + streamChunkTotal + " chunks");
             // The final result will come via onMessage callback — don't send via HTTP
             mainHandler.post(() -> updateStatus("整理中..."));
@@ -2093,7 +2107,7 @@ public class SimonIMEService extends InputMethodService {
                 Log.i(TAG, "[AudioStream] 送出剩餘音訊 (" + pcmData.length + " bytes)");
             }
             // Send finalize command
-            audioStreamWs.send("{\"type\":\"finalize\"}");
+            audioStreamWs.send(AppVersion.controlMessage("finalize"));
             Log.i(TAG, "[AudioStream] 已送出 finalize，共 " + streamChunkTotal + " chunks");
             // The final result will come via onMessage callback — don't send via HTTP
             mainHandler.post(() -> updateStatus("整理中..."));
@@ -2399,7 +2413,7 @@ public class SimonIMEService extends InputMethodService {
         String serverUrl = getServerUrl();
 
         String endpoint;
-        MultipartBody.Builder bodyBuilder = new MultipartBody.Builder()
+        MultipartBody.Builder bodyBuilder = AppVersion.withAppVersion(new MultipartBody.Builder())
                 .setType(MultipartBody.FORM)
                 .addFormDataPart("file", "recording.wav",
                         RequestBody.create(wavData, MediaType.parse("audio/wav")));
@@ -2526,7 +2540,7 @@ public class SimonIMEService extends InputMethodService {
             default: modeStr = "append"; break;
         }
 
-        MultipartBody.Builder bodyBuilder = new MultipartBody.Builder()
+        MultipartBody.Builder bodyBuilder = AppVersion.withAppVersion(new MultipartBody.Builder())
                 .setType(MultipartBody.FORM)
                 .addFormDataPart("text", spokenText)
                 .addFormDataPart("mode", modeStr);
@@ -2740,7 +2754,7 @@ public class SimonIMEService extends InputMethodService {
     private void sendTextReplace(String spokenText, String beforeCursor, String afterCursor, int gen) {
         String serverUrl = getServerUrl();
 
-        MultipartBody body = new MultipartBody.Builder()
+        MultipartBody body = AppVersion.withAppVersion(new MultipartBody.Builder())
                 .setType(MultipartBody.FORM)
                 .addFormDataPart("spoken_text", spokenText)
                 .addFormDataPart("before_cursor", beforeCursor)
@@ -2952,7 +2966,7 @@ public class SimonIMEService extends InputMethodService {
         }
     }
 
-    private boolean deleteSelectionIfAny(InputConnection ic) {
+    protected boolean deleteSelectionIfAny(InputConnection ic) {
         if (ic == null) return false;
         CharSequence selectedText = ic.getSelectedText(0);
         if (selectedText != null && selectedText.length() > 0) {
@@ -3257,7 +3271,7 @@ public class SimonIMEService extends InputMethodService {
 
     // ==================== Helpers ====================
 
-    private void updateStatus(String text) {
+    protected void updateStatus(String text) {
         if (statusText == null) return;
         if (text == null || text.isEmpty()) {
             statusText.setVisibility(View.GONE);
@@ -3317,7 +3331,7 @@ public class SimonIMEService extends InputMethodService {
      */
     private void sendFullAudioHttpFallback(int gen, byte[] wavData, byte[] pcm) {
         String serverUrl = getServerUrl();
-        MultipartBody.Builder bodyBuilder = new MultipartBody.Builder()
+        MultipartBody.Builder bodyBuilder = AppVersion.withAppVersion(new MultipartBody.Builder())
                 .setType(MultipartBody.FORM)
                 .addFormDataPart("file", "recording.wav",
                         RequestBody.create(wavData, MediaType.parse("audio/wav")));
@@ -3473,7 +3487,7 @@ public class SimonIMEService extends InputMethodService {
             return;
         }
         final int capturedGeneration = fieldGeneration;
-        okhttp3.FormBody body = new okhttp3.FormBody.Builder()
+        okhttp3.FormBody body = AppVersion.withAppVersion(new okhttp3.FormBody.Builder())
                 .add("instruction", instruction.trim())
                 .add("context", context != null ? context : "")
                 .add("language", "zh-TW")
@@ -3502,7 +3516,7 @@ public class SimonIMEService extends InputMethodService {
             return;
         }
         final int capturedGeneration = fieldGeneration;
-        MultipartBody body = new MultipartBody.Builder()
+        MultipartBody body = AppVersion.withAppVersion(new MultipartBody.Builder())
                 .setType(MultipartBody.FORM)
                 .addFormDataPart("file", "recording.wav",
                         RequestBody.create(wavData, MediaType.parse("audio/wav")))
@@ -3964,7 +3978,7 @@ public class SimonIMEService extends InputMethodService {
         lastWarmUpMs = now;
 
         Request request = new Request.Builder()
-                .url(getServerUrl() + "/")
+                .url(AppVersion.withAppVersion(getServerUrl() + "/"))
                 .get()
                 .build();
 
@@ -3996,7 +4010,7 @@ public class SimonIMEService extends InputMethodService {
         return s.length() > maxLen ? s.substring(0, maxLen) + "..." : s;
     }
 
-    private static byte[] pcmToWav(byte[] pcmData, int sampleRate, int channels, int bitsPerSample) {
+    protected static byte[] pcmToWav(byte[] pcmData, int sampleRate, int channels, int bitsPerSample) {
         int dataLength = pcmData.length;
         int totalLength = 36 + dataLength;
 
@@ -4050,6 +4064,7 @@ public class SimonIMEService extends InputMethodService {
     @Override
     public void onStartInputView(EditorInfo info, boolean restarting) {
         super.onStartInputView(info, restarting);
+        if (isWatchService()) return;
         warmUpConnection();
         if (mainHandler != null) {
             mainHandler.removeCallbacks(connectionWarmUpRunnable);

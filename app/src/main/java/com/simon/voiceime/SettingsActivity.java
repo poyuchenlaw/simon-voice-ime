@@ -245,7 +245,7 @@ public class SettingsActivity extends Activity {
         String normalized = input;
 
         try {
-            JSONObject body = new JSONObject();
+            JSONObject body = AppVersion.withAppVersion(new JSONObject());
             body.put("corrections", normalized);
 
             OkHttpClient client = new OkHttpClient.Builder()
@@ -309,7 +309,7 @@ public class SettingsActivity extends Activity {
                 .build();
 
         Request.Builder reqBuilder = new Request.Builder()
-                .url(url + "/v1/models")
+                .url(AppVersion.withAppVersion(url + "/v1/models"))
                 .get();
 
         String auth = editAuthPassword.getText().toString().trim();
