@@ -1,5 +1,7 @@
 package com.simon.voiceime;
 
+import com.simon.voiceime.KeyboardPager.KeyboardMode;
+
 import android.content.ClipData;
 import android.content.ClipboardManager;
 import android.content.Context;
@@ -24,15 +26,12 @@ import android.view.inputmethod.InputMethodManager;
 import android.widget.Button;
 import android.widget.CheckBox;
 import android.widget.FrameLayout;
-import android.widget.GridLayout;
 import android.widget.LinearLayout;
-import android.widget.PopupWindow;
 import android.widget.TextView;
 
 import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.Paint;
-import android.graphics.drawable.ColorDrawable;
 
 import androidx.annotation.NonNull;
 import androidx.recyclerview.widget.ItemTouchHelper;
@@ -93,7 +92,6 @@ public class SimonIMEService extends InputMethodService {
     private static final int ENCODING = AudioFormat.ENCODING_PCM_16BIT;
 
     enum Mode { APPEND, REPLACE, SPELL, TRANSLATE }
-    enum KeyboardMode { VOICE, ENGLISH, NUMBERS }
 
     private static final String PREF_MODE_KEY = "last_mode";
     private Mode currentMode = Mode.APPEND;
@@ -209,7 +207,6 @@ public class SimonIMEService extends InputMethodService {
     private TextView btnMode;
     private TextView btnClipboard;   // v6.20: promoted to field (was local in onCreateInputView)
     private FrameLayout panelContainer;
-    private PopupWindow symbolPopup;
     private View clipMarkFooter;
     private TextView clipMarkCount;
 
@@ -240,16 +237,6 @@ public class SimonIMEService extends InputMethodService {
     private int backspaceRepeatCount = 0;
     private Runnable backspaceRepeatRunnable;
 
-    private static final String ORIGINAL_COMMA = "，";
-    private static final String ORIGINAL_PERIOD = "。";
-    private static final String[] FULL_WIDTH_SYMBOLS = {
-            "，", "。", "、", "？", "！", "：", "；", "「", "」", "『", "』", "（", "）",
-            "《", "》", "〈", "〉", "─", "…", "～", "％", "＃", "＠", "＆", "＊"
-    };
-    private static final String[] HALF_WIDTH_SYMBOLS = {
-            ",", ".", "?", "!", ":", ";", "'", "\"", "(", ")", "[", "]", "{", "}", "/",
-            "\\", "-", "_", "~", "@", "#", "%", "&", "*", "+", "=", "<", ">"
-    };
     private static final long OFFLINE_CORRECTION_TIMEOUT_MS = 2_000L;
     // 等伺服器語意校正的預算。實測伺服器 p50 約 650ms、尾端可達 1.8s；
     // 端上確定性校正約 11ms。超過此預算就先給端上結果，不讓使用者空等。
@@ -390,11 +377,11 @@ public class SimonIMEService extends InputMethodService {
 
         // --- 逗號 ---
         View btnComma = rootView.findViewById(R.id.btnComma);
-        setupSymbolLauncher(btnComma, FULL_WIDTH_SYMBOLS, 5, ORIGINAL_COMMA);
+        setupPunctuationKey(btnComma, "，", ",");
 
         // --- 句號 ---
         View btnPeriod = rootView.findViewById(R.id.btnPeriod);
-        setupSymbolLauncher(btnPeriod, HALF_WIDTH_SYMBOLS, 6, ORIGINAL_PERIOD);
+        setupPunctuationKey(btnPeriod, "。", ".");
 
         // --- 退格（長按加速連刪） ---
         btnBackspace.setOnTouchListener((v, event) -> {
@@ -482,6 +469,9 @@ public class SimonIMEService extends InputMethodService {
         voiceKeyboard = rootView.findViewById(R.id.voiceKeyboard);
         englishKeyboard = rootView.findViewById(R.id.englishKeyboard);
         numbersKeyboard = rootView.findViewById(R.id.numbersKeyboard);
+        setupKeyboardSwipe(voiceKeyboard);
+        setupKeyboardSwipe(englishKeyboard);
+        setupKeyboardSwipe(numbersKeyboard);
 
         // 設定英文鍵盤和數字鍵盤的按鍵處理
         setupTypingKeyboard(englishKeyboard);
@@ -500,115 +490,19 @@ public class SimonIMEService extends InputMethodService {
         return rootView;
     }
 
-    // ==================== Symbol Launchers ====================
-
-    private void setupSymbolLauncher(View key, String[] symbols, int columns, String fallbackText) {
+    private void setupPunctuationKey(View key, String fullWidth, String halfWidth) {
         if (key == null) return;
-        key.setOnClickListener(v -> showSymbolPopupOrFallback(v, symbols, columns, fallbackText));
+        key.setOnClickListener(v -> commitPunctuation(fullWidth));
         key.setOnLongClickListener(v -> {
-            dismissSymbolPopup();
-            commitTextSafely(fallbackText);
+            commitPunctuation(halfWidth);
             return true;
         });
     }
 
-    private void showSymbolPopupOrFallback(View anchor, String[] symbols, int columns, String fallbackText) {
-        try {
-            dismissSymbolPopup();
-            if (activePanel != Panel.NONE) {
-                closePanel();
-            }
-
-            View content = buildSymbolPopupContent(symbols, columns, fallbackText);
-            content.measure(
-                    View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED),
-                    View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED));
-
-            int popupWidth = content.getMeasuredWidth();
-            int popupHeight = content.getMeasuredHeight();
-            if (popupWidth <= 0 || popupHeight <= 0) {
-                throw new IllegalStateException("symbol popup measured empty");
-            }
-
-            symbolPopup = new PopupWindow(content, popupWidth, popupHeight, false);
-            symbolPopup.setBackgroundDrawable(new ColorDrawable(Color.TRANSPARENT));
-            symbolPopup.setOutsideTouchable(true);
-            symbolPopup.setClippingEnabled(false);
-            symbolPopup.setElevation(dp(8));
-
-            int xOffset = calculateSymbolPopupXOffset(anchor, popupWidth);
-            int yOffset = -(popupHeight + anchor.getHeight() + dp(6));
-            symbolPopup.showAsDropDown(anchor, xOffset, yOffset);
-        } catch (Exception e) {
-            Log.w(TAG, "Symbol popup failed; committing fallback punctuation", e);
-            dismissSymbolPopup();
-            commitTextSafely(fallbackText);
-        }
-    }
-
-    private View buildSymbolPopupContent(String[] symbols, int columns, String fallbackText) {
-        LinearLayout panel = new LinearLayout(this);
-        panel.setOrientation(LinearLayout.VERTICAL);
-        panel.setPadding(dp(6), dp(6), dp(6), dp(6));
-        panel.setBackgroundColor(0xFF1A1A2E);
-
-        GridLayout grid = new GridLayout(this);
-        grid.setColumnCount(columns);
-        grid.setRowCount((int) Math.ceil(symbols.length / (double) columns));
-
-        for (String symbol : symbols) {
-            TextView button = new TextView(this);
-            button.setText(symbol);
-            button.setTextColor(0xFFE0E0E0);
-            button.setTextSize(18);
-            button.setGravity(Gravity.CENTER);
-            button.setBackgroundColor(0xFF16213E);
-            button.setClickable(true);
-            button.setFocusable(true);
-            button.setOnClickListener(v -> {
-                commitSymbolFromPopup(symbol, fallbackText);
-                dismissSymbolPopup();
-            });
-
-            GridLayout.LayoutParams lp = new GridLayout.LayoutParams();
-            lp.width = dp(40);
-            lp.height = dp(38);
-            lp.setMargins(dp(2), dp(2), dp(2), dp(2));
-            grid.addView(button, lp);
-        }
-
-        panel.addView(grid);
-        return panel;
-    }
-
-    private int calculateSymbolPopupXOffset(View anchor, int popupWidth) {
-        if (rootView == null || rootView.getWidth() <= 0) {
-            return -Math.max(0, popupWidth - anchor.getWidth()) / 2;
-        }
-
-        int[] anchorLocation = new int[2];
-        int[] rootLocation = new int[2];
-        anchor.getLocationOnScreen(anchorLocation);
-        rootView.getLocationOnScreen(rootLocation);
-
-        int margin = dp(4);
-        int anchorLeft = anchorLocation[0] - rootLocation[0];
-        int desiredLeft = anchorLeft + anchor.getWidth() / 2 - popupWidth / 2;
-        int maxLeft = Math.max(margin, rootView.getWidth() - popupWidth - margin);
-        int clampedLeft = Math.max(margin, Math.min(desiredLeft, maxLeft));
-        return clampedLeft - anchorLeft;
-    }
-
-    private void commitSymbolFromPopup(String symbol, String fallbackText) {
-        try {
-            InputConnection ic = getCurrentInputConnection();
-            if (ic != null) {
-                commitTextProgrammatically(ic, symbol);
-            }
-        } catch (Exception e) {
-            Log.w(TAG, "Symbol commit failed; committing fallback punctuation", e);
-            commitTextSafely(fallbackText);
-        }
+    private void commitPunctuation(String text) {
+        InputConnection ic = getCurrentInputConnection();
+        if (ic != null) commitTextProgrammatically(ic, text);
+        else commitTextSafely(text);
     }
 
     private boolean commitTextSafely(String text) {
@@ -1025,18 +919,6 @@ public class SimonIMEService extends InputMethodService {
 
     private static int clamp(int value, int min, int max) {
         return Math.max(min, Math.min(value, max));
-    }
-
-    private void dismissSymbolPopup() {
-        try {
-            if (symbolPopup != null && symbolPopup.isShowing()) {
-                symbolPopup.dismiss();
-            }
-        } catch (Exception e) {
-            Log.w(TAG, "Symbol popup dismiss failed", e);
-        } finally {
-            symbolPopup = null;
-        }
     }
 
     private int dp(int value) {
@@ -2870,8 +2752,43 @@ public class SimonIMEService extends InputMethodService {
 
     // ==================== Keyboard Switching ====================
 
+    private void setupKeyboardSwipe(View page) {
+        if (!isWatchService() && page instanceof SwipeInterceptLayout) {
+            ((SwipeInterceptLayout) page).setOnSwipeListener(this::swipeKeyboard);
+        }
+    }
+
+    private void swipeKeyboard(KeyboardPager.Direction direction) {
+        KeyboardMode mode = KeyboardPager.next(currentKeyboardMode, direction);
+        switchKeyboard(mode);
+        View page = mode == KeyboardMode.VOICE ? voiceKeyboard
+                : mode == KeyboardMode.ENGLISH ? englishKeyboard : numbersKeyboard;
+        try {
+            page.setTranslationX((direction == KeyboardPager.Direction.LEFT ? 1f : -1f)
+                    * rootView.getWidth() / 3f);
+            page.setAlpha(0.6f);
+            page.animate().translationX(0f).alpha(1f).setDuration(150).start();
+        } catch (RuntimeException e) {
+            Log.w(TAG, "Keyboard animation failed; retaining selected page", e);
+            resetKeyboardAnimation(page);
+        }
+    }
+
+    private void resetKeyboardAnimation(View page) {
+        try {
+            page.animate().cancel();
+        } catch (RuntimeException e) {
+            Log.w(TAG, "Keyboard animation cancellation failed", e);
+        } finally {
+            page.setTranslationX(0f);
+            page.setAlpha(1f);
+        }
+    }
+
     private void switchKeyboard(KeyboardMode mode) {
-        dismissSymbolPopup();
+        for (View page : new View[] { voiceKeyboard, englishKeyboard, numbersKeyboard }) {
+            resetKeyboardAnimation(page);
+        }
         // v6.23: clear English buffer when leaving English keyboard
         if (currentKeyboardMode == KeyboardMode.ENGLISH && mode != KeyboardMode.ENGLISH) {
             clearEnWordBuffer();
@@ -4079,7 +3996,6 @@ public class SimonIMEService extends InputMethodService {
             clearServerWaitBudgetCallbacks();
         }
         settlePendingCorrectionCapture();
-        dismissSymbolPopup();
         // v6.1: 鍵盤收起 → 釋放螢幕常亮，避免非錄音時殘留 keepScreenOn 拖電
         if (rootView != null) rootView.setKeepScreenOn(false);
         super.onFinishInputView(finishingInput);
@@ -4087,7 +4003,6 @@ public class SimonIMEService extends InputMethodService {
 
     @Override
     public void onDestroy() {
-        dismissSymbolPopup();
         if (isRecording) {
             isRecording = false;
             streamingMode = false;

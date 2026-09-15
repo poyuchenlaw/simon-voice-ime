@@ -38,7 +38,7 @@
         android:visibility="gone" />
 
     <!-- ========== 語音鍵盤（預設顯示） ========== -->
-    <LinearLayout
+    <com.simon.voiceime.SwipeInterceptLayout
         android:id="@+id/voiceKeyboard"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
@@ -160,7 +160,7 @@
                     android:layout_height="38dp"
                     android:layout_weight="1"
                     android:gravity="center"
-                    android:text="全"
+                    android:text="，"
                     android:textColor="@color/key_text"
                     android:textSize="16sp"
                     android:background="@color/key_bg"
@@ -174,7 +174,7 @@
                     android:layout_height="38dp"
                     android:layout_weight="1"
                     android:gravity="center"
-                    android:text="半"
+                    android:text="。"
                     android:textColor="@color/key_text"
                     android:textSize="16sp"
                     android:background="@color/key_bg"
@@ -225,7 +225,7 @@
             android:textColor="@color/key_text"
             android:background="@color/mic_idle" />
 
-    </LinearLayout>
+    </com.simon.voiceime.SwipeInterceptLayout>
 
     <!-- ========== 英文鍵盤（預設隱藏） ========== -->
     <include
