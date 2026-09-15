@@ -76,7 +76,7 @@ public class ClipboardHelper {
         }
     }
 
-    public void addToHistory(String text) {
+    public synchronized void addToHistory(String text) {
         if (text == null || text.trim().isEmpty()) return;
         // Remove if already exists (move to top)
         history.remove(text);

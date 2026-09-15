@@ -96,8 +96,11 @@ public class SimonIMEService extends InputMethodService {
     private static final String PREF_MODE_KEY = "last_mode";
     private Mode currentMode = Mode.APPEND;
     private KeyboardMode currentKeyboardMode = KeyboardMode.VOICE;
-    private boolean isRecording = false;
-    private AudioRecord audioRecord;
+    private volatile boolean isRecording = false;
+    private volatile AudioRecord audioRecord;
+    private final Object recorderRestartLock = new Object();
+    private volatile long lastRecognitionStatusMs;
+    private long activeRecordingStartedMs;
     private Thread recordingThread;
     // v5.6: 鎖屏期間保 CPU，避免 AudioRecord underrun + WebSocket 心跳逾時
     private PowerManager.WakeLock recordingWakeLock;
@@ -178,6 +181,19 @@ public class SimonIMEService extends InputMethodService {
             new java.util.concurrent.ConcurrentHashMap<>();
     private final java.util.concurrent.ConcurrentHashMap<Integer, Runnable> serverWaitBudgetCallbacks =
             new java.util.concurrent.ConcurrentHashMap<>();
+    // v6.30: keep the accepted result length even after the ordered commit queue drains.
+    private final java.util.concurrent.ConcurrentHashMap<Integer, Integer> acceptedTextLengths =
+            new java.util.concurrent.ConcurrentHashMap<>();
+    private final java.util.concurrent.ConcurrentHashMap<Integer, String> appendRescueCandidates =
+            new java.util.concurrent.ConcurrentHashMap<>();
+    private final java.util.concurrent.ConcurrentHashMap<Integer, Long> recordingDurationMs =
+            new java.util.concurrent.ConcurrentHashMap<>();
+    private static final int REPLACE_SHORT_CHARS = 6;
+    private static final long REPLACE_LONG_AUDIO_MS = 5000;
+    private int rescueExtraChars = TextLossGuard.MIN_EXTRA_CHARS;
+    private double rescueRatio = TextLossGuard.MIN_RATIO;
+    private int replaceShortChars = REPLACE_SHORT_CHARS;
+    private long replaceLongAudioMs = REPLACE_LONG_AUDIO_MS;
     private final Object utteranceCommitLock = new Object();
     private int nextGenToCommit = 1;
     private final java.util.TreeMap<Integer, String> pendingCommits = new java.util.TreeMap<>();
@@ -257,6 +273,11 @@ public class SimonIMEService extends InputMethodService {
                 .build();
         mainHandler = new Handler(Looper.getMainLooper());
         clipboardHelper = new ClipboardHelper(this);
+        SharedPreferences rescuePrefs = getSharedPreferences("simon_ime_prefs", MODE_PRIVATE);
+        rescueExtraChars = rescuePrefs.getInt("text_loss_min_extra_chars", TextLossGuard.MIN_EXTRA_CHARS);
+        rescueRatio = rescuePrefs.getFloat("text_loss_min_ratio", (float) TextLossGuard.MIN_RATIO);
+        replaceShortChars = Math.max(0, rescuePrefs.getInt("replace_short_chars", REPLACE_SHORT_CHARS));
+        replaceLongAudioMs = Math.max(1, rescuePrefs.getLong("replace_long_audio_ms", REPLACE_LONG_AUDIO_MS));
         if (isWatchService()) {
             currentMode = Mode.REPLACE; // Watch owns its mode and HTTP dispatch; no phone streaming.
             return;
@@ -615,6 +636,9 @@ public class SimonIMEService extends InputMethodService {
     private void pruneUtteranceGenerationState() {
         pruneConcurrentGenerationMap(committedGenerations);
         pruneConcurrentGenerationMap(fullPcmByGeneration);
+        pruneConcurrentGenerationMap(acceptedTextLengths);
+        pruneConcurrentGenerationMap(appendRescueCandidates);
+        pruneConcurrentGenerationMap(recordingDurationMs);
     }
 
     private void clearServerWaitBudgetCallbacks() {
@@ -640,6 +664,7 @@ public class SimonIMEService extends InputMethodService {
             if (gen < nextGenToCommit) return;
             completedGenerations.add(gen);
             pendingCommits.put(gen, text);
+            if (!isWatchService()) acceptedTextLengths.put(gen, text.length());
             collectReadyUtteranceCommitsLocked(readyTexts);
         }
         for (String readyText : readyTexts) {
@@ -1455,6 +1480,132 @@ public class SimonIMEService extends InputMethodService {
 
     // ==================== Recording ====================
 
+    private void postMicrophoneWarning(int gen, long observedMs, String message) {
+        mainHandler.post(() -> {
+            if (isRecording && gen == activeUtteranceGeneration
+                    && lastRecognitionStatusMs < observedMs) updateStatus(message);
+        });
+    }
+
+    private boolean restartMicrophone(int bufferSize, int gen, SilenceWatchdog.Verdict reason,
+                                   int readResult, long observedMs) {
+        synchronized (recorderRestartLock) {
+            if (!isRecording || gen != activeUtteranceGeneration) return false;
+            Log.w(TAG, "[SilenceWatchdog] restart reason=" + reason + " readResult=" + readResult);
+            AudioRecord replacement = null;
+            try {
+                try {
+                    audioRecord.stop();
+                } catch (Exception e) {
+                    Log.w(TAG, "[SilenceWatchdog] stop failed", e);
+                }
+                audioRecord.release();
+                if (reason == SilenceWatchdog.Verdict.SILENT_RESTART) {
+                    replacement = new AudioRecord(MediaRecorder.AudioSource.MIC,
+                            SAMPLE_RATE, CHANNEL, ENCODING, bufferSize);
+                } else {
+                    try {
+                        replacement = new AudioRecord(MediaRecorder.AudioSource.VOICE_RECOGNITION,
+                                SAMPLE_RATE, CHANNEL, ENCODING, bufferSize);
+                        if (replacement.getState() != AudioRecord.STATE_INITIALIZED) {
+                            replacement.release();
+                            replacement = null;
+                        }
+                    } catch (Exception e) {
+                        Log.w(TAG, "[SilenceWatchdog] VOICE_RECOGNITION unavailable", e);
+                    }
+                    if (replacement == null) {
+                        replacement = new AudioRecord(MediaRecorder.AudioSource.MIC,
+                                SAMPLE_RATE, CHANNEL, ENCODING, bufferSize);
+                    }
+                }
+                if (replacement.getState() != AudioRecord.STATE_INITIALIZED) {
+                    throw new IllegalStateException("AudioRecord initialization failed");
+                }
+                if (!isRecording || gen != activeUtteranceGeneration) {
+                    replacement.release();
+                    return false;
+                }
+                replacement.startRecording();
+                audioRecord = replacement;
+                postMicrophoneWarning(gen, observedMs, "⚠️ 麥克風已重新啟動");
+                return true;
+            } catch (Exception e) {
+                if (replacement != null) {
+                    try {
+                        replacement.release();
+                    } catch (Exception releaseError) {
+                        Log.w(TAG, "[SilenceWatchdog] replacement release failed", releaseError);
+                    }
+                }
+                Log.w(TAG, "[SilenceWatchdog] rebuild failed readResult=" + readResult, e);
+                postMicrophoneWarning(gen, observedMs, "⚠️ 麥克風重新啟動失敗，錄音已保留");
+                return false;
+            }
+        }
+    }
+
+    private String appendRescueCandidate(int gen) {
+        String candidate = appendRescueCandidates.getOrDefault(gen, "");
+        if (gen != activeUtteranceGeneration) return candidate;
+        StringBuilder chunks = new StringBuilder();
+        synchronized (streamedChunks) {
+            for (String chunk : streamedChunks) chunks.append(chunk);
+        }
+        String local;
+        synchronized (onDeviceAppendPreviewLock) {
+            local = TextLossGuard.joinDedup(onDeviceAppendPreviewSegments, 6);
+        }
+        if (chunks.length() > candidate.length()) candidate = chunks.toString();
+        if (local.length() > candidate.length()) candidate = local;
+        return candidate;
+    }
+
+    // Runs on the main thread, like both existing race completion callbacks.
+    private void rescueDiscardedLocal(int gen, String candidate) {
+        int committedLen = acceptedTextLengths.getOrDefault(gen, 0);
+        if (!isWatchService() && TextLossGuard.shouldRescue(
+                committedLen, candidate.length(), rescueExtraChars, rescueRatio)) {
+            clipboardHelper.addToHistory(candidate);
+            updateStatus("辨識到更完整版本，已存剪貼簿");
+        } else {
+            Log.i(TAG, "[TextLossGuard] discard on-device candidate=" + candidate.length()
+                    + " committed=" + committedLen + " gen=" + gen);
+        }
+    }
+
+    private void rescueReplaceAudio(int gen, boolean shortResult) {
+        final byte[] pcm = fullPcmByGeneration.get(gen);
+        final LocalSTTHelper recognizer = localSTT;
+        final String retained = shortResult ? "換字結果偏短，錄音已保留，請再按一次換"
+                : "換字逾時，錄音已保留，請再按一次換";
+        if (pcm == null || pcm.length == 0) {
+            Log.w(TAG, "[ReplaceRescue] no PCM for gen=" + gen);
+            mainHandler.post(() -> updateStatus("換字失敗，這段錄音已無法取得"));
+            return;
+        }
+        mainHandler.post(() -> updateStatus(retained));
+        if (!localSTTReady || recognizer == null) return;
+        new Thread(() -> {
+            try {
+                String recognized = recognizer.recognize(pcm, SAMPLE_RATE);
+                if (recognized == null || recognized.trim().isEmpty()) {
+                    Log.w(TAG, "[ReplaceRescue] empty local result gen=" + gen);
+                    return; // Keep PCM and the visible retained-audio warning.
+                }
+                final String rescued = recognized.trim();
+                mainHandler.post(() -> {
+                    clipboardHelper.addToHistory(rescued);
+                    updateStatus(shortResult ? "換字結果偏短，原話已存剪貼簿"
+                            : "換字逾時，原話已存剪貼簿（端上辨識）");
+                });
+            } catch (Exception e) {
+                Log.w(TAG, "[ReplaceRescue] local recognition failed gen=" + gen, e);
+                mainHandler.post(() -> updateStatus(retained));
+            }
+        }, "ReplaceRescue-STT").start();
+    }
+
     protected void startRecording() {
         if (isRecording) {
             // v5.4.1: tap-toggle 停止也走延遲（和 handleTouchUp 一致）
@@ -1539,6 +1690,8 @@ public class SimonIMEService extends InputMethodService {
             Log.w(TAG, "WakeLock 取得失敗，繼續錄音", e);
         }
 
+        final long recordingStartedMs = android.os.SystemClock.elapsedRealtime();
+        activeRecordingStartedMs = recordingStartedMs;
         audioRecord.startRecording();
 
         // v3.6: 停用舊串流模式（VAD 分段）
@@ -1566,9 +1719,41 @@ public class SimonIMEService extends InputMethodService {
             // v5.4: 跳過前 400ms 音訊（避免按鈕點擊聲干擾 STT）
             final int SKIP_INITIAL_BYTES = 12800; // 400ms @ 16kHz 16-bit mono
             int totalBytesRead = 0;
+            boolean rebuildFailed = false;
+            SharedPreferences prefs = getSharedPreferences("simon_ime_prefs", MODE_PRIVATE);
+            SilenceWatchdog watchdog = new SilenceWatchdog(recordingStartedMs,
+                    prefs.getFloat("silent_rms", (float) SilenceWatchdog.SILENT_RMS),
+                    prefs.getLong("silent_warn_ms", SilenceWatchdog.SILENT_WARN_MS),
+                    prefs.getLong("silent_restart_ms", SilenceWatchdog.SILENT_RESTART_MS),
+                    prefs.getInt("read_error_limit", SilenceWatchdog.READ_ERROR_LIMIT));
 
             while (isRecording) {
-                int read = audioRecord.read(buffer, 0, buffer.length);
+                int read;
+                try {
+                    read = audioRecord.read(buffer, 0, buffer.length);
+                } catch (IllegalStateException e) {
+                    read = AudioRecord.ERROR_INVALID_OPERATION;
+                }
+                if (!isRecording) break;
+                if (!isWatchService()) {
+                    long sum = 0;
+                    for (int i = 0; i + 1 < read; i += 2) {
+                        short sample = (short) ((buffer[i] & 0xff) | (buffer[i + 1] << 8));
+                        sum += (long) sample * sample;
+                    }
+                    double normalizedRms = read >= 2
+                            ? Math.sqrt(sum / (double) (read / 2)) / 32768.0 : Double.NaN;
+                    long observedMs = android.os.SystemClock.elapsedRealtime();
+                    SilenceWatchdog.Verdict verdict = watchdog.feed(read, normalizedRms, observedMs);
+                    if (verdict == SilenceWatchdog.Verdict.SILENT_WARN) {
+                        postMicrophoneWarning(myGen, observedMs,
+                                "⚠️ 沒收到聲音（藍牙耳機或別的 App 占用麥克風？）");
+                    } else if (!rebuildFailed && (verdict == SilenceWatchdog.Verdict.READ_ERROR
+                            || verdict == SilenceWatchdog.Verdict.SILENT_RESTART)) {
+                        rebuildFailed = !restartMicrophone(bufferSize, myGen, verdict, read, observedMs);
+                    }
+                    if (read <= 0) android.os.SystemClock.sleep(20); // avoid a hot error loop
+                }
                 if (read > 0) {
                     totalBytesRead += read;
                     // v5.4: 前 400ms 不寫入 buffer（丟掉點擊聲）
@@ -1585,7 +1770,7 @@ public class SimonIMEService extends InputMethodService {
                     }
 
                     if (currentMode == Mode.APPEND && onDeviceAppendPreviewEnabled) {
-                        feedOnDeviceAppendPreview(buffer, read);
+                        feedOnDeviceAppendPreview(buffer, read, myGen);
                     }
 
                     // v4.3: 音量偵測 — 依語音停頓分段，不依固定秒數
@@ -1730,18 +1915,32 @@ public class SimonIMEService extends InputMethodService {
 
                     } else if ("final".equals(type)) {
                         String finalText = json.optString("text", "");
-                        if (myGen == utteranceGeneration.get()) {
-                            streamedChunks.clear();
-                            updatePreviewStrip("");
-                        }
-
                         mainHandler.post(() -> {
+                            // Main-thread snapshot cannot mix a new recording's preview into this generation.
+                            final String candidate = isWatchService() ? "" : appendRescueCandidate(myGen);
+                            final boolean rescue = !isWatchService() && TextLossGuard.shouldRescue(
+                                    finalText.length(), candidate.length(), rescueExtraChars, rescueRatio);
+                            if (myGen == utteranceGeneration.get()) {
+                                streamedChunks.clear();
+                                updatePreviewStrip("");
+                            }
                             if (!finalText.isEmpty()) {
                                 // v6.1: 一次性提交最終（雲端已拼接＋校正）結果。全程未動 composing text，故直接 commitText。
                                 //       generation 守衛：晚到的 onFailure fallback 會被擋，不會重複提交。
                                 // v6.17: 走 commitFinalText 以支援不接受 commitText 的 app（Termux/Gemini）。
                                 if (reserveUtteranceGeneration(myGen)) {
                                     completeReservedUtteranceWithText(myGen, finalText);
+                                } else {
+                                    int committedLen = acceptedTextLengths.getOrDefault(myGen, 0);
+                                    String discarded = candidate.length() > finalText.length() ? candidate : finalText;
+                                    if (!isWatchService() && TextLossGuard.shouldRescue(
+                                            committedLen, discarded.length(), rescueExtraChars, rescueRatio)) {
+                                        clipboardHelper.addToHistory(discarded);
+                                        updateStatus("辨識到更完整版本，已存剪貼簿");
+                                    } else {
+                                        Log.i(TAG, "[TextLossGuard] discard WS candidate=" + discarded.length()
+                                                + " committed=" + committedLen + " gen=" + myGen);
+                                    }
                                 }
                             } else {
                                 // 伺服器最終結果為空 → 用保留的整段音訊做一次乾淨重轉錄（有標點），
@@ -1749,6 +1948,10 @@ public class SimonIMEService extends InputMethodService {
                                 Log.w(TAG, "[AudioStream] final 為空，改用整段音訊 HTTP fallback");
                                 updateStatus("整理中…");
                                 httpFallbackFullAudio(myGen);
+                            }
+                            if (rescue) {
+                                clipboardHelper.addToHistory(candidate);
+                                updateStatus("辨識結果偏短，較完整版本已存剪貼簿");
                             }
                         });
                         Log.i(TAG, "[AudioStream] 最終文字: '" + truncate(finalText, 50) + "'");
@@ -1863,13 +2066,18 @@ public class SimonIMEService extends InputMethodService {
 
         final boolean wasStreaming = streamingMode;
         final int myGen = activeUtteranceGeneration;
+        if (!isWatchService()) {
+            recordingDurationMs.put(myGen, android.os.SystemClock.elapsedRealtime() - activeRecordingStartedMs);
+        }
         streamingMode = false;
 
-        try {
-            audioRecord.stop();
-            audioRecord.release();
-        } catch (Exception e) {
-            Log.e(TAG, "Error stopping recorder", e);
+        synchronized (recorderRestartLock) {
+            try {
+                audioRecord.stop();
+                audioRecord.release();
+            } catch (Exception e) {
+                Log.e(TAG, "Error stopping recorder", e);
+            }
         }
 
         // v5.6: 釋放 WakeLock
@@ -1889,6 +2097,7 @@ public class SimonIMEService extends InputMethodService {
             Thread.currentThread().interrupt();
         }
 
+        if (!isWatchService()) appendRescueCandidates.put(myGen, appendRescueCandidate(myGen));
         byte[] pcmData = pcmBuffer.toByteArray();
         rememberFullPcmForGeneration(myGen, pcmData);
         pcmBuffer = null;
@@ -2095,7 +2304,7 @@ public class SimonIMEService extends InputMethodService {
     /**
      * v6.4: 錄音執行緒複製 PCM 給 LocalSTT VAD；SenseVoice 解碼在 LocalSTTHelper 背景緒完成。
      */
-    private void feedOnDeviceAppendPreview(byte[] pcm, int byteCount) {
+    private void feedOnDeviceAppendPreview(byte[] pcm, int byteCount, int gen) {
         if (localSTT == null || !localSTT.isStreamingReady() || byteCount < 2) return;
 
         int numSamples = byteCount / 2;
@@ -2108,27 +2317,24 @@ public class SimonIMEService extends InputMethodService {
         try {
             localSTT.feedAudioChunk(floatSamples, segmentText -> {
                 try {
-                    if (!isRecording || !onDeviceAppendPreviewEnabled) return;
+                    if (!isRecording || !onDeviceAppendPreviewEnabled || gen != activeUtteranceGeneration) return;
                     String mapped = englishMapper.apply(segmentText != null ? segmentText.trim() : "");
                     if (mapped == null || mapped.isEmpty()) return;
 
                     String live;
                     synchronized (onDeviceAppendPreviewLock) {
+                        if (gen != activeUtteranceGeneration) return;
                         onDeviceAppendPreviewSegments.add(mapped);
-                        StringBuilder sb = new StringBuilder();
-                        String prev = "";
-                        for (String segment : onDeviceAppendPreviewSegments) {
-                            String seg = dedupOverlapHead(prev, segment, 6);
-                            sb.append(seg);
-                            prev = sb.toString();
-                        }
-                        live = sb.toString();
+                        live = TextLossGuard.joinDedup(onDeviceAppendPreviewSegments, 6);
                     }
 
                     String tail = live.length() > 28 ? "…" + live.substring(live.length() - 28) : live;
                     int liveLen = live.length();
-                    updatePreviewStrip("📱 " + tail);
-                    mainHandler.post(() -> updateStatus("聆聽中…（本機預覽 " + liveLen + " 字）"));
+                    mainHandler.post(() -> {
+                        if (!isRecording || !onDeviceAppendPreviewEnabled || gen != activeUtteranceGeneration) return;
+                        updatePreviewStrip("📱 " + tail);
+                        updateStatus("聆聽中…（本機預覽 " + liveLen + " 字）");
+                    });
                     Log.d(TAG, "[OnDevicePreview] segment: '" + mapped + "'");
                 } catch (Throwable t) {
                     onDeviceAppendPreviewEnabled = false;
@@ -2141,14 +2347,6 @@ public class SimonIMEService extends InputMethodService {
         }
     }
 
-    private static String dedupOverlapHead(String prev, String seg, int maxWindow) {
-        if (prev == null || prev.isEmpty() || seg == null || seg.isEmpty()) return seg == null ? "" : seg;
-        int max = Math.min(maxWindow, Math.min(prev.length(), seg.length()));
-        for (int k = max; k > 0; k--) {
-            if (prev.regionMatches(prev.length() - k, seg, 0, k)) return seg.substring(k);
-        }
-        return seg;
-    }
 
     /**
      * 串流模式收尾：
@@ -2350,6 +2548,8 @@ public class SimonIMEService extends InputMethodService {
                 Log.e(TAG, "WTI request failed", e);
                 if (allowOfflineAppendFallback && mode == Mode.APPEND) {
                     runOfflineFullAudioFallback(gen, "HTTP request failed: " + e.getMessage(), false);
+                } else if (mode == Mode.REPLACE && !isWatchService()) {
+                    rescueReplaceAudio(gen, false);
                 } else {
                     if (mode == Mode.APPEND) {
                         completeReservedUtteranceWithoutText(gen);
@@ -2365,6 +2565,8 @@ public class SimonIMEService extends InputMethodService {
                     if (!response.isSuccessful()) {
                         if (allowOfflineAppendFallback && mode == Mode.APPEND) {
                             runOfflineFullAudioFallback(gen, "HTTP response " + response.code(), false);
+                        } else if (mode == Mode.REPLACE && !isWatchService()) {
+                            rescueReplaceAudio(gen, false);
                         } else {
                             if (mode == Mode.APPEND) {
                                 completeReservedUtteranceWithoutText(gen);
@@ -2384,6 +2586,8 @@ public class SimonIMEService extends InputMethodService {
                     Log.e(TAG, "Error parsing response", e);
                     if (allowOfflineAppendFallback && mode == Mode.APPEND) {
                         runOfflineFullAudioFallback(gen, "HTTP response parse error: " + e.getMessage(), false);
+                    } else if (mode == Mode.REPLACE && !isWatchService()) {
+                        rescueReplaceAudio(gen, false);
                     } else {
                         if (mode == Mode.APPEND) {
                             completeReservedUtteranceWithoutText(gen);
@@ -2479,6 +2683,15 @@ public class SimonIMEService extends InputMethodService {
                         if (mode == Mode.APPEND && gen > 0) {
                             if (!text.isEmpty()) {
                                 if (!utteranceAlreadyReserved && !reserveUtteranceGeneration(gen)) {
+                                    int committedLen = acceptedTextLengths.getOrDefault(gen, 0);
+                                    if (!isWatchService() && TextLossGuard.shouldRescue(
+                                            committedLen, text.length(), rescueExtraChars, rescueRatio)) {
+                                        clipboardHelper.addToHistory(text);
+                                        updateStatus("辨識到更完整版本，已存剪貼簿");
+                                    } else {
+                                        Log.i(TAG, "[TextLossGuard] discard server candidate=" + text.length()
+                                                + " committed=" + committedLen + " gen=" + gen);
+                                    }
                                     return;
                                 }
                                 completeReservedUtteranceWithText(gen, text);
@@ -2539,6 +2752,10 @@ public class SimonIMEService extends InputMethodService {
                 String corrected = current.correct(localText, null);
                 if (corrected == null || corrected.trim().isEmpty()) return;
                 onDeviceResult.set(corrected.trim());
+                // A late local result can arrive after the budget callback already ran.
+                mainHandler.post(() -> {
+                    if (committedGenerations.containsKey(gen)) rescueDiscardedLocal(gen, corrected.trim());
+                });
             } catch (Throwable t) {
                 Log.w(TAG, "[AppendRace] on-device correction failed", t);
             }
@@ -2551,10 +2768,12 @@ public class SimonIMEService extends InputMethodService {
 
         Runnable budgetCallback = () -> {
             serverWaitBudgetCallbacks.remove(gen);
-            if (committedGenerations.containsKey(gen)) return;
             String fastText = onDeviceResult.get();
             if (fastText == null || fastText.isEmpty()) return;
-            if (!reserveUtteranceGeneration(gen)) return;
+            if (committedGenerations.containsKey(gen) || !reserveUtteranceGeneration(gen)) {
+                rescueDiscardedLocal(gen, fastText);
+                return;
+            }
             completeReservedUtteranceWithText(gen, fastText);
             updateStatus("快速完成（未潤稿）: " + truncate(fastText, 20));
         };
@@ -2656,7 +2875,8 @@ public class SimonIMEService extends InputMethodService {
             @Override
             public void onFailure(@NonNull Call call, @NonNull IOException e) {
                 Log.e(TAG, "Replace-text request failed", e);
-                mainHandler.post(() -> updateStatus("連線失敗: " + e.getMessage()));
+                if (!isWatchService()) rescueReplaceAudio(gen, false);
+                else mainHandler.post(() -> updateStatus("連線失敗: " + e.getMessage()));
             }
 
             @Override
@@ -2664,14 +2884,16 @@ public class SimonIMEService extends InputMethodService {
                 try {
                     String responseBody = response.body() != null ? response.body().string() : "";
                     if (!response.isSuccessful()) {
-                        mainHandler.post(() -> updateStatus("伺服器錯誤: " + response.code()));
+                        if (!isWatchService()) rescueReplaceAudio(gen, false);
+                        else mainHandler.post(() -> updateStatus("伺服器錯誤: " + response.code()));
                         return;
                     }
                     JSONObject json = new JSONObject(responseBody);
                     handleWTIResponse(json, Mode.REPLACE, gen);
                 } catch (Exception e) {
                     Log.e(TAG, "Error parsing replace-text response", e);
-                    mainHandler.post(() -> updateStatus("解析錯誤"));
+                    if (!isWatchService()) rescueReplaceAudio(gen, false);
+                    else mainHandler.post(() -> updateStatus("解析錯誤"));
                 }
             }
         });
@@ -2699,16 +2921,26 @@ public class SimonIMEService extends InputMethodService {
                         break;
                     }
                     case REPLACE: {
-                        if (ic == null) {
-                            updateStatus("無法取得輸入連線");
-                            return;
-                        }
                         String text = json.optString("text", "").trim();
                         int deleteBefore = json.optInt("delete_before", 0);
                         int deleteAfter = json.optInt("delete_after", 0);
                         String insert = json.optString("insert", text);
+                        if (!isWatchService() && insert.length() <= replaceShortChars
+                                && recordingDurationMs.getOrDefault(gen, 0L) >= replaceLongAudioMs) {
+                            rescueReplaceAudio(gen, true);
+                        }
+                        if (ic == null) {
+                            updateStatus("無法取得輸入連線");
+                            return;
+                        }
 
                         if (deleteBefore > 0 || deleteAfter > 0) {
+                            if (!isWatchService()) {
+                                CharSequence before = deleteBefore > 0 ? ic.getTextBeforeCursor(deleteBefore, 0) : "";
+                                CharSequence after = deleteAfter > 0 ? ic.getTextAfterCursor(deleteAfter, 0) : "";
+                                clipboardHelper.addToHistory((before == null ? "" : before.toString())
+                                        + (after == null ? "" : after.toString()));
+                            }
                             deleteSurroundingTextProgrammatically(ic, deleteBefore, deleteAfter);
                         }
                         if (!insert.isEmpty()) {
@@ -3189,6 +3421,9 @@ public class SimonIMEService extends InputMethodService {
     // ==================== Helpers ====================
 
     protected void updateStatus(String text) {
+        if (text != null && text.startsWith("聆聽中")) {
+            lastRecognitionStatusMs = android.os.SystemClock.elapsedRealtime();
+        }
         if (statusText == null) return;
         if (text == null || text.isEmpty()) {
             statusText.setVisibility(View.GONE);
@@ -4006,10 +4241,14 @@ public class SimonIMEService extends InputMethodService {
         if (isRecording) {
             isRecording = false;
             streamingMode = false;
-            try {
-                audioRecord.stop();
-                audioRecord.release();
-            } catch (Exception ignored) {}
+            synchronized (recorderRestartLock) {
+                try {
+                    audioRecord.stop();
+                    audioRecord.release();
+                } catch (Exception e) {
+                    Log.w(TAG, "Recorder release during destroy failed", e);
+                }
+            }
         }
         // v6.1: safety net 釋放螢幕常亮（IME 被系統回收時）
         if (rootView != null) rootView.setKeepScreenOn(false);
