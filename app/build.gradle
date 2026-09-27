@@ -10,8 +10,8 @@ android {
         applicationId "com.simon.voiceime"
         minSdk 26
         targetSdk 34
-        versionCode 69
-        versionName "6.32"
+        versionCode 70
+        versionName "6.33"
 
         ndk {
             abiFilters 'arm64-v8a', 'armeabi-v7a'
@@ -69,6 +69,17 @@ android {
     packagingOptions {
         pickFirst '**/*.so'
     }
+}
+
+def buildZhuyinIndex = tasks.register("buildPhoneZhuyinIndex", Exec) {
+    workingDir rootProject.projectDir
+    inputs.files(file("../third_party/libchewing/data/dict/chewing/tsi.csv"), file("src/phone/assets/correction/protected_terms.txt"), file("../scripts/build_v633_zhuyin_index.py"))
+    outputs.files(file("src/phone/assets/zhuyin_initials.db"), file("src/phone/assets/personal_seed.csv"), file("../evidence/v633/g2pw-unresolved.txt"))
+    commandLine "/home/simon/whisper-to-input-proxy/.g2pw_venv/bin/python",
+            "scripts/build_v633_zhuyin_index.py"
+}
+tasks.matching { it.name in ["prePhoneDebugBuild", "prePhoneReleaseBuild"] }.configureEach {
+    dependsOn buildZhuyinIndex
 }
 
 dependencies {

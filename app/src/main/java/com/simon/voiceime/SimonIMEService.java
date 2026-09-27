@@ -157,6 +157,10 @@ public class SimonIMEService extends InputMethodService {
     private TextView enSuggest0, enSuggest1, enSuggest2;
 
     private ZhuyinInputController zhuyinInput;
+    private ZhuyinWordIndex zhuyinWordIndex;
+    private ZhuyinAssociationHistory zhuyinAssociationHistory;
+    private String lastCommittedZhuyinWord;
+    private String renderedZhuyinCandidateKind = "engine";
     private HorizontalScrollView boCandidateScroll;
     private LinearLayout boCandidateItems;
     private TextView boCursorLeft, boCursorRight;
@@ -344,7 +348,10 @@ public class SimonIMEService extends InputMethodService {
         // v6.23: 背景載入英文預測字典
         englishDict = new EnglishDictionary(this);
         new Thread(() -> englishDict.loadAsync(), "EnglishDict-Load").start();
-        zhuyinInput = new ZhuyinInputController(createZhuyinEngine());
+        try { zhuyinWordIndex = ZhuyinWordIndex.open(this); }
+        catch (Exception error) { Log.e(TAG, "Initial-symbol dictionary unavailable", error); }
+        zhuyinAssociationHistory = new ZhuyinAssociationHistory(new java.io.File(getFilesDir(), "zhuyin_associations.tsv"));
+        zhuyinInput = new ZhuyinInputController(createZhuyinEngine(), zhuyinWordIndex);
 
         // 背景初始化本機 STT
         localSTT = createLocalSTT();
@@ -3561,7 +3568,17 @@ public class SimonIMEService extends InputMethodService {
         if (state == null) return;
         InputConnection ic = getCurrentInputConnection();
         if (ic != null) {
-            if (!state.commitText.isEmpty()) commitTextProgrammatically(ic, state.commitText);
+            if (!state.commitText.isEmpty()) {
+                commitTextProgrammatically(ic, state.commitText);
+                if (lastCommittedZhuyinWord != null && zhuyinAssociationHistory != null)
+                    zhuyinAssociationHistory.record(lastCommittedZhuyinWord, state.commitText);
+                lastCommittedZhuyinWord = state.commitText;
+                if (zhuyinWordIndex != null) {
+                    java.util.LinkedHashSet<String> next = new java.util.LinkedHashSet<>(zhuyinWordIndex.continuations(state.commitText));
+                    if (zhuyinAssociationHistory != null) next.addAll(zhuyinAssociationHistory.nextWords(state.commitText));
+                    if (!next.isEmpty()) state = zhuyinInput.showAssociations(new ArrayList<>(next));
+                }
+            }
             if (state.composingText.isEmpty()) ic.finishComposingText();
             else {
                 ic.setComposingText(state.composingText, 1);
@@ -3570,7 +3587,7 @@ public class SimonIMEService extends InputMethodService {
         }
         if (boCursorLeft != null) boCursorLeft.setVisibility(state.composingText.isEmpty() ? View.INVISIBLE : View.VISIBLE);
         if (boCursorRight != null) boCursorRight.setVisibility(state.composingText.isEmpty() ? View.INVISIBLE : View.VISIBLE);
-        renderZhuyinCandidates(state.candidates);
+        renderZhuyinCandidates(state.candidates, state.candidateKind);
     }
 
     private void moveEditorCursorWithinComposition(InputConnection ic, String composing, int cursor) {
@@ -3587,11 +3604,12 @@ public class SimonIMEService extends InputMethodService {
         }
     }
 
-    private void renderZhuyinCandidates(List<String> candidates) {
-        if (boCandidateItems == null || candidates == null || candidates.equals(renderedZhuyinCandidates)) return;
+    private void renderZhuyinCandidates(List<String> candidates, String kind) {
+        if (boCandidateItems == null || candidates == null || (candidates.equals(renderedZhuyinCandidates) && kind.equals(renderedZhuyinCandidateKind))) return;
         boCandidateItems.removeAllViews();
         renderedZhuyinCandidateCount = 0;
         renderedZhuyinCandidates = new ArrayList<>(candidates);
+        renderedZhuyinCandidateKind = kind;
         appendZhuyinCandidateBatch();
         if (boCandidateScroll != null) boCandidateScroll.scrollTo(0, 0);
     }
@@ -3609,8 +3627,11 @@ public class SimonIMEService extends InputMethodService {
             candidate.setSingleLine(true);
             candidate.setEllipsize(android.text.TextUtils.TruncateAt.END);
             candidate.setPadding(dp(12), 0, dp(12), 0);
-            candidate.setText(renderedZhuyinCandidates.get(i));
-            candidate.setOnClickListener(v -> applyZhuyinState(zhuyinInput.chooseCandidate(candidateIndex)));
+            String value = renderedZhuyinCandidates.get(i);
+            candidate.setText(("association".equals(renderedZhuyinCandidateKind) ? "…" : "abbreviation".equals(renderedZhuyinCandidateKind) ? "首·" : "") + value);
+            String kind = renderedZhuyinCandidateKind;
+            candidate.setOnClickListener(v -> applyZhuyinState("association".equals(kind)
+                    ? zhuyinInput.chooseAssociation(candidateIndex) : zhuyinInput.chooseCandidate(candidateIndex)));
             boCandidateItems.addView(candidate, new LinearLayout.LayoutParams(
                     ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.MATCH_PARENT));
         }
@@ -4512,6 +4533,7 @@ public class SimonIMEService extends InputMethodService {
     public void onDestroy() {
         dismissSymbolPopup();
         if (zhuyinInput != null) zhuyinInput.close();
+        if (zhuyinWordIndex != null) zhuyinWordIndex.close();
         if (isRecording) {
             isRecording = false;
             streamingMode = false;

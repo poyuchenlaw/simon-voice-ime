@@ -5,6 +5,8 @@ import android.util.Log;
 import java.io.File;
 import java.io.FileOutputStream;
 import java.io.InputStream;
+import java.io.BufferedReader;
+import java.io.InputStreamReader;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
@@ -30,10 +32,27 @@ final class ChewingEngine implements ZhuyinInputController.Engine, AutoCloseable
             File userDict = new File(context.getFilesDir(), "chewing.dat");
             handle = LIBRARY_READY ? nativeCreate(systemDir.getAbsolutePath(), userDict.getAbsolutePath()) : 0L;
             if (handle == 0L) Log.e(TAG, "libchewing context initialization failed");
+            else seedPersonalPhrases(context);
         } catch (Throwable error) {
             Log.e(TAG, "libchewing initialization failed; keeping keyboard usable", error);
             handle = 0L;
         }
+    }
+
+    private void seedPersonalPhrases(Context context) {
+        File marker = new File(context.getFilesDir(), "chewing_personal_seed_v1.done");
+        if (marker.isFile()) return;
+        try (BufferedReader reader = new BufferedReader(new InputStreamReader(
+                context.getAssets().open("personal_seed.csv"), StandardCharsets.UTF_8))) {
+            String line; boolean header = true;
+            while ((line = reader.readLine()) != null) {
+                if (header) { header = false; continue; }
+                int comma = line.indexOf(',');
+                if (comma > 0 && nativeLearnPhrase(handle, line.substring(0, comma), line.substring(comma + 1)) <= 0)
+                    throw new IllegalStateException("libchewing rejected a personal seed row");
+            }
+            if (!marker.createNewFile() && !marker.isFile()) Log.w(TAG, "Personal seed marker could not be created");
+        } catch (Throwable error) { Log.w(TAG, "Personal phrase seed failed; it will retry next startup", error); }
     }
 
     private static void copyDictionaryAssets(Context context, File target) throws Exception {
@@ -57,6 +76,23 @@ final class ChewingEngine implements ZhuyinInputController.Engine, AutoCloseable
     @Override public void space() { safe(() -> nativeSpace(handle)); }
     @Override public void enter() { safe(() -> nativeEnter(handle)); }
     @Override public void choose(int index) { safe(() -> nativeChoose(handle, index)); }
+    @Override public void learnPhrase(String word, String pronunciation) {
+        if (handle == 0L || word == null || pronunciation == null) return;
+        try { nativeLearnPhrase(handle, word, pronunciation); }
+        catch (Throwable error) { Log.w(TAG, "Personal phrase learning failed", error); }
+    }
+    @Override public List<String[]> personalPhrases() {
+        if (handle == 0L) return Collections.emptyList();
+        try {
+            byte[][] rows = nativePersonalPhrases(handle);
+            List<String[]> result = new ArrayList<>();
+            if (rows != null) for (byte[] row : rows) {
+                String value = decode(row); int sep = value.indexOf('\t');
+                if (sep > 0 && sep + 1 < value.length()) result.add(new String[]{value.substring(0, sep), value.substring(sep + 1)});
+            }
+            return result;
+        } catch (Throwable error) { Log.w(TAG, "Personal phrase enumeration failed", error); return Collections.emptyList(); }
+    }
     @Override public void moveCursor(String direction) {
         if ("left".equals(direction)) safe(() -> nativeMoveCursor(handle, false));
         else if ("right".equals(direction)) safe(() -> nativeMoveCursor(handle, true));
@@ -107,6 +143,8 @@ final class ChewingEngine implements ZhuyinInputController.Engine, AutoCloseable
     private static native void nativeSpace(long handle);
     private static native void nativeEnter(long handle);
     private static native void nativeChoose(long handle, int index);
+    private static native int nativeLearnPhrase(long handle, String word, String pronunciation);
+    private static native byte[][] nativePersonalPhrases(long handle);
     private static native void nativeMoveCursor(long handle, boolean right);
     private static native int nativeCursor(long handle);
     private static native byte[] nativeComposing(long handle);

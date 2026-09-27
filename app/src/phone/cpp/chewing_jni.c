@@ -1,5 +1,6 @@
 #include <jni.h>
 #include <stdint.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include "chewing.h"
@@ -137,6 +138,78 @@ JNIEXPORT void JNICALL Java_com_simon_voiceime_ChewingEngine_nativeChoose(JNIEnv
             }
         }
     }
+}
+
+JNIEXPORT jint JNICALL Java_com_simon_voiceime_ChewingEngine_nativeLearnPhrase(JNIEnv *env, jclass type,
+        jlong handle, jstring word, jstring pronunciation) {
+    (void)type;
+    struct ChewingContext *ctx = ctx_of(handle);
+    if (ctx == NULL || word == NULL || pronunciation == NULL) return 0;
+    const char *w = (*env)->GetStringUTFChars(env, word, NULL);
+    const char *p = (*env)->GetStringUTFChars(env, pronunciation, NULL);
+    if (w == NULL || p == NULL) {
+        if (w != NULL) (*env)->ReleaseStringUTFChars(env, word, w);
+        if (p != NULL) (*env)->ReleaseStringUTFChars(env, pronunciation, p);
+        return 0;
+    }
+    int result = chewing_userphrase_add(ctx, w, p);
+    if (result <= 0) {
+        /* libchewing reports zero when the phrase already exists; lookup distinguishes
+           that idempotent first-run seed from a failed insertion. */
+        result = chewing_userphrase_lookup(ctx, w, p) ? 1 : result;
+    }
+    (*env)->ReleaseStringUTFChars(env, word, w);
+    (*env)->ReleaseStringUTFChars(env, pronunciation, p);
+    return result;
+}
+
+JNIEXPORT jobjectArray JNICALL Java_com_simon_voiceime_ChewingEngine_nativePersonalPhrases(JNIEnv *env, jclass type, jlong handle) {
+    (void)type;
+    struct ChewingContext *ctx = ctx_of(handle);
+    jclass byte_array_class = (*env)->FindClass(env, "[B");
+    if (byte_array_class == NULL) return NULL;
+    if (ctx == NULL || chewing_userphrase_enumerate(ctx) != 0) {
+        jobjectArray empty = (*env)->NewObjectArray(env, 0, byte_array_class, NULL);
+        (*env)->DeleteLocalRef(env, byte_array_class);
+        return empty;
+    }
+    char **rows = NULL;
+    size_t count = 0, capacity = 0;
+    unsigned int phrase_len = 0, bopomofo_len = 0;
+    while (chewing_userphrase_has_next(ctx, &phrase_len, &bopomofo_len)) {
+        if (phrase_len == 0 || bopomofo_len == 0 || phrase_len > 65536 || bopomofo_len > 65536 || count >= 10000) break;
+        char *phrase = (char *)calloc(phrase_len, 1);
+        char *bopomofo = (char *)calloc(bopomofo_len, 1);
+        if (phrase == NULL || bopomofo == NULL) { free(phrase); free(bopomofo); break; }
+        if (chewing_userphrase_get(ctx, phrase, phrase_len, bopomofo, bopomofo_len) != 0) {
+            free(phrase); free(bopomofo); continue;
+        }
+        size_t total = strlen(phrase) + strlen(bopomofo) + 2;
+        char *row = (char *)malloc(total);
+        if (row == NULL) { free(phrase); free(bopomofo); break; }
+        snprintf(row, total, "%s\t%s", phrase, bopomofo);
+        free(phrase); free(bopomofo);
+        if (count == capacity) {
+            size_t next = capacity == 0 ? 32 : capacity * 2;
+            char **grown = (char **)realloc(rows, next * sizeof(char *));
+            if (grown == NULL) { free(row); break; }
+            rows = grown; capacity = next;
+        }
+        rows[count++] = row;
+    }
+    jobjectArray result = (*env)->NewObjectArray(env, (jsize)count, byte_array_class, NULL);
+    (*env)->DeleteLocalRef(env, byte_array_class);
+    size_t freed = 0;
+    if (result != NULL) for (size_t i = 0; i < count; i++) {
+        jbyteArray value = utf8_bytes(env, rows[i]);
+        if (value != NULL) { (*env)->SetObjectArrayElement(env, result, (jsize)i, value); (*env)->DeleteLocalRef(env, value); }
+        free(rows[i]);
+        freed = i + 1;
+        if ((*env)->ExceptionCheck(env)) break;
+    }
+    for (size_t i = freed; i < count; i++) free(rows[i]);
+    free(rows);
+    return result;
 }
 
 JNIEXPORT void JNICALL Java_com_simon_voiceime_ChewingEngine_nativeMoveCursor(JNIEnv *env, jclass type,
