@@ -45,7 +45,7 @@ import okhttp3.Response;
  *
  * 模型存放在 app filesDir/models/，下載失敗時優雅降級為伺服器辨識。
  */
-public class LocalSTTHelper {
+public class LocalSTTHelper implements LocalSTT {
     private static final String TAG = "LocalSTT";
     private static final int SAMPLE_RATE = 16000;
     private static final String MODEL_DOWNLOAD_CHANNEL_ID = "model_download";
@@ -96,11 +96,6 @@ public class LocalSTTHelper {
 
     private final Context context;
     private final OkHttpClient modelDownloadClient;
-
-    public interface StreamingCallback {
-        /** VAD 偵測到句尾，SenseVoice 完成精確辨識 */
-        void onSegmentResult(String text);
-    }
 
     public LocalSTTHelper(Context context) {
         this.context = context;

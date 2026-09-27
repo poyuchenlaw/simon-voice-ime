@@ -20,13 +20,16 @@ import android.view.LayoutInflater;
 import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewGroup;
+import android.graphics.drawable.ColorDrawable;
 import android.view.inputmethod.EditorInfo;
 import android.view.inputmethod.InputConnection;
 import android.view.inputmethod.InputMethodManager;
 import android.widget.Button;
 import android.widget.CheckBox;
 import android.widget.FrameLayout;
+import android.widget.GridLayout;
 import android.widget.LinearLayout;
+import android.widget.PopupWindow;
 import android.widget.TextView;
 
 import android.graphics.Canvas;
@@ -94,6 +97,7 @@ public class SimonIMEService extends InputMethodService {
     enum Mode { APPEND, REPLACE, SPELL, TRANSLATE }
 
     private static final String PREF_MODE_KEY = "last_mode";
+    private static final String PREF_BOPOMOFO_CONFIRMED_KEY = "bopomofo_confirmed_v1";
     private Mode currentMode = Mode.APPEND;
     private KeyboardMode currentKeyboardMode = KeyboardMode.VOICE;
     private volatile boolean isRecording = false;
@@ -136,7 +140,7 @@ public class SimonIMEService extends InputMethodService {
     // Helpers
     protected ClipboardHelper clipboardHelper;
     private CommandsHelper commandsHelper;
-    private LocalSTTHelper localSTT;
+    private LocalSTT localSTT;
     private volatile boolean localSTTReady = false;
     private EnglishMapper englishMapper;
     private OnDeviceCorrectionEngine onDeviceCorrection;
@@ -151,6 +155,12 @@ public class SimonIMEService extends InputMethodService {
     // Current suggestion strings (3 slots); null/empty = no suggestion
     private final String[] enSuggestions = new String[3];
     private TextView enSuggest0, enSuggest1, enSuggest2;
+
+    // 注音的手打內容屬使用者確認的金標；只走本機前綴索引，不送語意模型。
+    private BopomofoDictionary bopomofoDict;
+    private final StringBuilder bopomofoBuffer = new StringBuilder();
+    private final String[] bopomofoSuggestions = new String[3];
+    private TextView boSuggest0, boSuggest1, boSuggest2;
 
     // Streaming state (APPEND mode with VAD)
     private volatile boolean streamingMode = false;
@@ -223,11 +233,13 @@ public class SimonIMEService extends InputMethodService {
     private TextView btnMode;
     private TextView btnClipboard;   // v6.20: promoted to field (was local in onCreateInputView)
     private FrameLayout panelContainer;
+    private PopupWindow symbolPopup;
     private View clipMarkFooter;
     private TextView clipMarkCount;
 
     // Keyboard switching
     private View voiceKeyboard;
+    private View bopomofoKeyboard;
     private View englishKeyboard;
     private View numbersKeyboard;
     private boolean shiftActive = false;
@@ -264,6 +276,29 @@ public class SimonIMEService extends InputMethodService {
     protected void onWatchAudio(byte[] pcm) {}
     protected boolean isVoiceRecording() { return isRecording; }
 
+    /** Keep sherpa-backed implementations out of the common/watch compile classpath. */
+    private LocalSTT createLocalSTT() {
+        try {
+            Class<?> type = Class.forName("com.simon.voiceime.LocalSTTHelper");
+            return (LocalSTT) type.getConstructor(Context.class).newInstance(this);
+        } catch (Throwable t) {
+            Log.i(TAG, "phone-only local STT unavailable");
+            return null;
+        }
+    }
+
+    /** Keep correction's sherpa-backed punctuation implementation phone-only as well. */
+    private OnDeviceCorrectionEngine createOnDeviceCorrectionEngine() {
+        try {
+            Class<?> type = Class.forName(
+                    "com.simon.voiceime.correct.PhoneOnDeviceCorrectionEngine");
+            return (OnDeviceCorrectionEngine) type.getConstructor(Context.class).newInstance(this);
+        } catch (Throwable t) {
+            Log.i(TAG, "phone-only correction unavailable");
+            return null;
+        }
+    }
+
     @Override
     public void onCreate() {
         super.onCreate();
@@ -284,8 +319,9 @@ public class SimonIMEService extends InputMethodService {
         }
         commandsHelper = new CommandsHelper(this);
         englishMapper = new EnglishMapper(this);
-        onDeviceCorrection = new OnDeviceCorrectionEngine(this);
+        onDeviceCorrection = createOnDeviceCorrectionEngine();
         new Thread(() -> {
+            if (onDeviceCorrection == null) return;
             onDeviceCorrection.init();
             if (onDeviceCorrection.isCorrectorReady()) {
                 Log.i(TAG, "端上 APPEND 校正就緒"
@@ -307,10 +343,13 @@ public class SimonIMEService extends InputMethodService {
         // v6.23: 背景載入英文預測字典
         englishDict = new EnglishDictionary(this);
         new Thread(() -> englishDict.loadAsync(), "EnglishDict-Load").start();
+        bopomofoDict = new BopomofoDictionary();
+        loadConfirmedBopomofoCandidates();
 
         // 背景初始化本機 STT
-        localSTT = new LocalSTTHelper(this);
+        localSTT = createLocalSTT();
         new Thread(() -> {
+            if (localSTT == null) return;
             localSTT.init();
             localSTTReady = localSTT.isReady();
             if (localSTTReady) {
@@ -404,6 +443,9 @@ public class SimonIMEService extends InputMethodService {
         View btnPeriod = rootView.findViewById(R.id.btnPeriod);
         setupPunctuationKey(btnPeriod, "。", ".");
 
+        setupSymbolLauncher(rootView.findViewById(R.id.btnFullWidth), SymbolPopupSpec.FULL_WIDTH, 5, "，");
+        setupSymbolLauncher(rootView.findViewById(R.id.btnHalfWidth), SymbolPopupSpec.HALF_WIDTH, 6, ",");
+
         // --- 退格（長按加速連刪） ---
         btnBackspace.setOnTouchListener((v, event) -> {
             switch (event.getAction()) {
@@ -476,7 +518,7 @@ public class SimonIMEService extends InputMethodService {
         // --- 常用指令 ---
         btnCommands.setOnClickListener(v -> togglePanel(Panel.COMMANDS));
 
-        // --- 切換英文鍵盤（短按）/ 跳轉輸入法（長按） ---
+        // --- 切換注音鍵盤（短按）/ 跳轉輸入法（長按） ---
         btnSwitchIME.setOnClickListener(v -> switchKeyboard(KeyboardMode.ENGLISH));
         btnSwitchIME.setOnLongClickListener(v -> {
             InputMethodManager imm = (InputMethodManager) getSystemService(INPUT_METHOD_SERVICE);
@@ -488,13 +530,15 @@ public class SimonIMEService extends InputMethodService {
 
         // --- 鍵盤切換設定 ---
         voiceKeyboard = rootView.findViewById(R.id.voiceKeyboard);
+        bopomofoKeyboard = rootView.findViewById(R.id.bopomofoKeyboard);
         englishKeyboard = rootView.findViewById(R.id.englishKeyboard);
         numbersKeyboard = rootView.findViewById(R.id.numbersKeyboard);
         setupKeyboardSwipe(voiceKeyboard);
+        setupKeyboardSwipe(bopomofoKeyboard);
         setupKeyboardSwipe(englishKeyboard);
-        setupKeyboardSwipe(numbersKeyboard);
 
-        // 設定英文鍵盤和數字鍵盤的按鍵處理
+        // 設定注音、英文鍵盤和數字鍵盤的按鍵處理
+        setupTypingKeyboard(bopomofoKeyboard);
         setupTypingKeyboard(englishKeyboard);
         setupTypingKeyboard(numbersKeyboard);
 
@@ -505,6 +549,13 @@ public class SimonIMEService extends InputMethodService {
         if (enSuggest0 != null) enSuggest0.setOnClickListener(v -> applyEnglishSuggestion(0));
         if (enSuggest1 != null) enSuggest1.setOnClickListener(v -> applyEnglishSuggestion(1));
         if (enSuggest2 != null) enSuggest2.setOnClickListener(v -> applyEnglishSuggestion(2));
+
+        boSuggest0 = rootView.findViewById(R.id.boSuggest0);
+        boSuggest1 = rootView.findViewById(R.id.boSuggest1);
+        boSuggest2 = rootView.findViewById(R.id.boSuggest2);
+        if (boSuggest0 != null) boSuggest0.setOnClickListener(v -> applyBopomofoSuggestion(0));
+        if (boSuggest1 != null) boSuggest1.setOnClickListener(v -> applyBopomofoSuggestion(1));
+        if (boSuggest2 != null) boSuggest2.setOnClickListener(v -> applyBopomofoSuggestion(2));
 
         updateModeUI();
         updateArmedIndicator();
@@ -518,6 +569,102 @@ public class SimonIMEService extends InputMethodService {
             commitPunctuation(halfWidth);
             return true;
         });
+    }
+
+    private void setupSymbolLauncher(View key, String[] symbols, int columns, String fallbackText) {
+        if (key == null) return;
+        key.setOnClickListener(v -> showSymbolPopupOrFallback(v, symbols, columns, fallbackText));
+        key.setOnLongClickListener(v -> {
+            dismissSymbolPopup();
+            commitTextSafely(fallbackText);
+            return true;
+        });
+    }
+
+    private void showSymbolPopupOrFallback(View anchor, String[] symbols, int columns, String fallbackText) {
+        try {
+            dismissSymbolPopup();
+            if (activePanel != Panel.NONE) closePanel();
+            View content = buildSymbolPopupContent(symbols, columns, fallbackText);
+            content.measure(View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED),
+                    View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED));
+            int popupWidth = content.getMeasuredWidth();
+            int popupHeight = content.getMeasuredHeight();
+            if (popupWidth <= 0 || popupHeight <= 0) throw new IllegalStateException("symbol popup measured empty");
+            symbolPopup = new PopupWindow(content, popupWidth, popupHeight, false);
+            symbolPopup.setBackgroundDrawable(new ColorDrawable(Color.TRANSPARENT));
+            symbolPopup.setOutsideTouchable(true);
+            symbolPopup.setClippingEnabled(false);
+            symbolPopup.setElevation(dp(8));
+            int xOffset = calculateSymbolPopupXOffset(anchor, popupWidth);
+            int yOffset = -(popupHeight + anchor.getHeight() + dp(6));
+            symbolPopup.showAsDropDown(anchor, xOffset, yOffset);
+        } catch (Exception e) {
+            Log.w(TAG, "Symbol popup failed; committing fallback punctuation", e);
+            dismissSymbolPopup();
+            commitTextSafely(fallbackText);
+        }
+    }
+
+    private View buildSymbolPopupContent(String[] symbols, int columns, String fallbackText) {
+        LinearLayout panel = new LinearLayout(this);
+        panel.setOrientation(LinearLayout.VERTICAL);
+        panel.setPadding(dp(6), dp(6), dp(6), dp(6));
+        panel.setBackgroundColor(0xFF1A1A2E);
+        GridLayout grid = new GridLayout(this);
+        grid.setColumnCount(columns);
+        grid.setRowCount((int) Math.ceil(symbols.length / (double) columns));
+        for (String symbol : symbols) {
+            TextView button = new TextView(this);
+            button.setText(symbol);
+            button.setTextColor(0xFFE0E0E0);
+            button.setTextSize(18);
+            button.setGravity(Gravity.CENTER);
+            button.setBackgroundColor(0xFF16213E);
+            button.setClickable(true);
+            button.setFocusable(true);
+            button.setOnClickListener(v -> {
+                commitSymbolFromPopup(symbol, fallbackText);
+                dismissSymbolPopup();
+            });
+            GridLayout.LayoutParams lp = new GridLayout.LayoutParams();
+            lp.width = dp(40);
+            lp.height = dp(38);
+            lp.setMargins(dp(2), dp(2), dp(2), dp(2));
+            grid.addView(button, lp);
+        }
+        panel.addView(grid);
+        return panel;
+    }
+
+    private int calculateSymbolPopupXOffset(View anchor, int popupWidth) {
+        if (rootView == null || rootView.getWidth() <= 0) return -Math.max(0, popupWidth - anchor.getWidth()) / 2;
+        int[] anchorLocation = new int[2];
+        int[] rootLocation = new int[2];
+        anchor.getLocationOnScreen(anchorLocation);
+        rootView.getLocationOnScreen(rootLocation);
+        int margin = dp(4);
+        int anchorLeft = anchorLocation[0] - rootLocation[0];
+        int desiredLeft = anchorLeft + anchor.getWidth() / 2 - popupWidth / 2;
+        int maxLeft = Math.max(margin, rootView.getWidth() - popupWidth - margin);
+        return Math.max(margin, Math.min(desiredLeft, maxLeft)) - anchorLeft;
+    }
+
+    private void commitSymbolFromPopup(String symbol, String fallbackText) {
+        try {
+            InputConnection ic = getCurrentInputConnection();
+            if (ic != null) commitTextProgrammatically(ic, symbol);
+        } catch (Exception e) {
+            Log.w(TAG, "Symbol commit failed; committing fallback punctuation", e);
+            commitTextSafely(fallbackText);
+        }
+    }
+
+    private void dismissSymbolPopup() {
+        if (symbolPopup != null) {
+            if (symbolPopup.isShowing()) symbolPopup.dismiss();
+            symbolPopup = null;
+        }
     }
 
     private void commitPunctuation(String text) {
@@ -1576,7 +1723,7 @@ public class SimonIMEService extends InputMethodService {
 
     private void rescueReplaceAudio(int gen, boolean shortResult) {
         final byte[] pcm = fullPcmByGeneration.get(gen);
-        final LocalSTTHelper recognizer = localSTT;
+        final LocalSTT recognizer = localSTT;
         final String retained = shortResult ? "換字結果偏短，錄音已保留，請再按一次換"
                 : "換字逾時，錄音已保留，請再按一次換";
         if (pcm == null || pcm.length == 0) {
@@ -2994,6 +3141,7 @@ public class SimonIMEService extends InputMethodService {
         KeyboardMode mode = KeyboardPager.next(currentKeyboardMode, direction);
         switchKeyboard(mode);
         View page = mode == KeyboardMode.VOICE ? voiceKeyboard
+                : mode == KeyboardMode.BOPOMOFO ? bopomofoKeyboard
                 : mode == KeyboardMode.ENGLISH ? englishKeyboard : numbersKeyboard;
         try {
             page.setTranslationX((direction == KeyboardPager.Direction.LEFT ? 1f : -1f)
@@ -3018,15 +3166,19 @@ public class SimonIMEService extends InputMethodService {
     }
 
     private void switchKeyboard(KeyboardMode mode) {
-        for (View page : new View[] { voiceKeyboard, englishKeyboard, numbersKeyboard }) {
+        for (View page : new View[] { voiceKeyboard, bopomofoKeyboard, englishKeyboard, numbersKeyboard }) {
             resetKeyboardAnimation(page);
         }
         // v6.23: clear English buffer when leaving English keyboard
         if (currentKeyboardMode == KeyboardMode.ENGLISH && mode != KeyboardMode.ENGLISH) {
             clearEnWordBuffer();
         }
+        if (currentKeyboardMode == KeyboardMode.BOPOMOFO && mode != KeyboardMode.BOPOMOFO) {
+            clearBopomofoBuffer();
+        }
         currentKeyboardMode = mode;
         voiceKeyboard.setVisibility(mode == KeyboardMode.VOICE ? View.VISIBLE : View.GONE);
+        bopomofoKeyboard.setVisibility(mode == KeyboardMode.BOPOMOFO ? View.VISIBLE : View.GONE);
         englishKeyboard.setVisibility(mode == KeyboardMode.ENGLISH ? View.VISIBLE : View.GONE);
         numbersKeyboard.setVisibility(mode == KeyboardMode.NUMBERS ? View.VISIBLE : View.GONE);
         // Close any open panel when switching keyboards
@@ -3069,6 +3221,9 @@ public class SimonIMEService extends InputMethodService {
                 if (currentKeyboardMode == KeyboardMode.ENGLISH) {
                     learnEnglishWord();
                     clearEnWordBuffer();
+                } else if (currentKeyboardMode == KeyboardMode.BOPOMOFO) {
+                    if (applyBopomofoSuggestion(0)) return;
+                    clearBopomofoBuffer();
                 }
                 commitTextProgrammatically(ic, " ");
                 break;
@@ -3077,6 +3232,8 @@ public class SimonIMEService extends InputMethodService {
                 if (currentKeyboardMode == KeyboardMode.ENGLISH) {
                     learnEnglishWord();
                     clearEnWordBuffer();
+                } else if (currentKeyboardMode == KeyboardMode.BOPOMOFO) {
+                    applyBopomofoSuggestion(0);
                 }
                 handleEnterKey();
                 break;
@@ -3089,7 +3246,15 @@ public class SimonIMEService extends InputMethodService {
             case "toEnglish":
                 switchKeyboard(KeyboardMode.ENGLISH);
                 break;
+            case "toBopomofo":
+                switchKeyboard(KeyboardMode.BOPOMOFO);
+                break;
             default:
+                if (currentKeyboardMode == KeyboardMode.BOPOMOFO && isBopomofoSymbol(key)) {
+                    bopomofoBuffer.append(key);
+                    refreshBopomofoSuggestions();
+                    break;
+                }
                 // Regular character — apply shift for letters only
                 String ch = key;
                 if (shiftActive && key.length() == 1 && Character.isLetter(key.charAt(0))) {
@@ -3209,6 +3374,12 @@ public class SimonIMEService extends InputMethodService {
                     backspaceRepeatCount = 0;
                     InputConnection ic0 = getCurrentInputConnection();
                     if (ic0 != null) {
+                        if (currentKeyboardMode == KeyboardMode.BOPOMOFO && bopomofoBuffer.length() > 0) {
+                            bopomofoBuffer.deleteCharAt(bopomofoBuffer.length() - 1);
+                            refreshBopomofoSuggestions();
+                            v.setPressed(true);
+                            return true;
+                        }
                         if (!deleteSelectionIfAny(ic0)) {
                             deleteSurroundingTextProgrammatically(ic0, 1, 0);
                             // v6.23: pop last char from enWordBuffer on English keyboard
@@ -3224,6 +3395,12 @@ public class SimonIMEService extends InputMethodService {
                             if (!backspacePressed) return;
                             InputConnection ic = getCurrentInputConnection();
                             if (ic != null) {
+                                if (currentKeyboardMode == KeyboardMode.BOPOMOFO && bopomofoBuffer.length() > 0) {
+                                    bopomofoBuffer.deleteCharAt(bopomofoBuffer.length() - 1);
+                                    refreshBopomofoSuggestions();
+                                    mainHandler.postDelayed(this, 120);
+                                    return;
+                                }
                                 backspaceRepeatCount++;
                                 int deleteCount = backspaceRepeatCount < 5 ? 1
                                         : backspaceRepeatCount < 15 ? 2 : 5;
@@ -3364,6 +3541,78 @@ public class SimonIMEService extends InputMethodService {
         enSuggest0.setText(enSuggestions[0] != null ? enSuggestions[0] : "");
         if (enSuggest1 != null) enSuggest1.setText(enSuggestions[1] != null ? enSuggestions[1] : "");
         if (enSuggest2 != null) enSuggest2.setText(enSuggestions[2] != null ? enSuggestions[2] : "");
+    }
+
+    // ==================== Bopomofo System-1 Input ====================
+
+    private static boolean isBopomofoSymbol(String key) {
+        return key != null && key.length() == 1
+                && "ㄅㄆㄇㄈㄉㄊㄋㄌㄍㄎㄏㄐㄑㄒㄓㄔㄕㄖㄗㄘㄙㄧㄨㄩㄚㄛㄜㄝㄞㄟㄠㄡㄢㄣㄤㄥㄦˊˇˋ˙".contains(key);
+    }
+
+    private void refreshBopomofoSuggestions() {
+        List<String> suggestions = (bopomofoDict == null)
+                ? Collections.<String>emptyList()
+                : bopomofoDict.suggest(bopomofoBuffer.toString(), 3);
+        for (int i = 0; i < bopomofoSuggestions.length; i++) {
+            bopomofoSuggestions[i] = i < suggestions.size() ? suggestions.get(i) : null;
+        }
+        updateBopomofoSuggestionBar();
+    }
+
+    private void updateBopomofoSuggestionBar() {
+        if (boSuggest0 != null) boSuggest0.setText(bopomofoSuggestions[0] == null ? "" : bopomofoSuggestions[0]);
+        if (boSuggest1 != null) boSuggest1.setText(bopomofoSuggestions[1] == null ? "" : bopomofoSuggestions[1]);
+        if (boSuggest2 != null) boSuggest2.setText(bopomofoSuggestions[2] == null ? "" : bopomofoSuggestions[2]);
+    }
+
+    /** Commits only an explicit candidate selection; raw Bopomofo is never sent through semantic correction. */
+    private boolean applyBopomofoSuggestion(int index) {
+        if (index < 0 || index >= bopomofoSuggestions.length || bopomofoBuffer.length() == 0) return false;
+        String text = bopomofoSuggestions[index];
+        InputConnection ic = getCurrentInputConnection();
+        if (text == null || text.isEmpty() || ic == null) return false;
+        String code = bopomofoBuffer.toString();
+        if (!commitTextProgrammatically(ic, text)) return false;
+        if (bopomofoDict != null) bopomofoDict.recordConfirmed(code, text);
+        persistConfirmedBopomofoCandidate(code, text);
+        clearBopomofoBuffer();
+        return true;
+    }
+
+    private void clearBopomofoBuffer() {
+        bopomofoBuffer.setLength(0);
+        Arrays.fill(bopomofoSuggestions, null);
+        updateBopomofoSuggestionBar();
+    }
+
+    private void loadConfirmedBopomofoCandidates() {
+        if (bopomofoDict == null) return;
+        try {
+            String raw = getSharedPreferences("simon_ime_prefs", MODE_PRIVATE)
+                    .getString(PREF_BOPOMOFO_CONFIRMED_KEY, "{}");
+            JSONObject saved = new JSONObject(raw == null ? "{}" : raw);
+            java.util.Iterator<String> keys = saved.keys();
+            while (keys.hasNext()) {
+                String code = keys.next();
+                String text = saved.optString(code, "");
+                if (!text.isEmpty()) bopomofoDict.recordConfirmed(code, text);
+            }
+        } catch (Exception e) {
+            Log.w(TAG, "Unable to load confirmed Bopomofo candidates", e);
+        }
+    }
+
+    private void persistConfirmedBopomofoCandidate(String code, String text) {
+        try {
+            SharedPreferences prefs = getSharedPreferences("simon_ime_prefs", MODE_PRIVATE);
+            JSONObject saved = new JSONObject(prefs.getString(PREF_BOPOMOFO_CONFIRMED_KEY, "{}"));
+            saved.put(code, text);
+            prefs.edit().putString(PREF_BOPOMOFO_CONFIRMED_KEY, saved.toString()).apply();
+        } catch (Exception e) {
+            // Candidate commitment already succeeded. Persistence may safely retry next selection.
+            Log.w(TAG, "Unable to persist confirmed Bopomofo candidate", e);
+        }
     }
 
     // ==================== Mode ====================
@@ -4226,6 +4475,7 @@ public class SimonIMEService extends InputMethodService {
 
     @Override
     public void onFinishInputView(boolean finishingInput) {
+        dismissSymbolPopup();
         if (mainHandler != null) {
             mainHandler.removeCallbacks(connectionWarmUpRunnable);
             clearServerWaitBudgetCallbacks();
@@ -4238,6 +4488,7 @@ public class SimonIMEService extends InputMethodService {
 
     @Override
     public void onDestroy() {
+        dismissSymbolPopup();
         if (isRecording) {
             isRecording = false;
             streamingMode = false;

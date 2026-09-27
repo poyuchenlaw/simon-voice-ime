@@ -183,6 +183,34 @@
                     android:focusable="true" />
 
                 <TextView
+                    android:id="@+id/btnFullWidth"
+                    android:layout_width="0dp"
+                    android:layout_height="38dp"
+                    android:layout_weight="1"
+                    android:gravity="center"
+                    android:text="全"
+                    android:textColor="@color/key_text"
+                    android:textSize="16sp"
+                    android:background="@color/key_bg"
+                    android:layout_marginEnd="2dp"
+                    android:clickable="true"
+                    android:focusable="true" />
+
+                <TextView
+                    android:id="@+id/btnHalfWidth"
+                    android:layout_width="0dp"
+                    android:layout_height="38dp"
+                    android:layout_weight="1"
+                    android:gravity="center"
+                    android:text="半"
+                    android:textColor="@color/key_text"
+                    android:textSize="16sp"
+                    android:background="@color/key_bg"
+                    android:layout_marginEnd="2dp"
+                    android:clickable="true"
+                    android:focusable="true" />
+
+                <TextView
                     android:id="@+id/btnBackspace"
                     android:layout_width="0dp"
                     android:layout_height="38dp"
@@ -230,6 +258,13 @@
     <!-- ========== 英文鍵盤（預設隱藏） ========== -->
     <include
         layout="@layout/keyboard_english"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:visibility="gone" />
+
+    <!-- ========== 注音鍵盤（手打為個人詞庫金標） ========== -->
+    <include
+        layout="@layout/keyboard_bopomofo"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:visibility="gone" />
