@@ -10,6 +10,9 @@
     <!-- Internal file backups -->
     <include domain="file" path="commands_backup.json" />
     <include domain="file" path="clipboard_backup.json" />
+    <include domain="file" path="chewing.dat" />
+    <include domain="file" path="uhash.dat" />
+    <include domain="file" path="chewing.sqlite3" />
 
     <!-- External file backups -->
     <include domain="external" path="backup/" />

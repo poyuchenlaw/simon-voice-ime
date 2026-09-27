@@ -28,6 +28,7 @@ import android.widget.Button;
 import android.widget.CheckBox;
 import android.widget.FrameLayout;
 import android.widget.GridLayout;
+import android.widget.HorizontalScrollView;
 import android.widget.LinearLayout;
 import android.widget.PopupWindow;
 import android.widget.TextView;
@@ -97,7 +98,6 @@ public class SimonIMEService extends InputMethodService {
     enum Mode { APPEND, REPLACE, SPELL, TRANSLATE }
 
     private static final String PREF_MODE_KEY = "last_mode";
-    private static final String PREF_BOPOMOFO_CONFIRMED_KEY = "bopomofo_confirmed_v1";
     private Mode currentMode = Mode.APPEND;
     private KeyboardMode currentKeyboardMode = KeyboardMode.VOICE;
     private volatile boolean isRecording = false;
@@ -156,11 +156,12 @@ public class SimonIMEService extends InputMethodService {
     private final String[] enSuggestions = new String[3];
     private TextView enSuggest0, enSuggest1, enSuggest2;
 
-    // 注音的手打內容屬使用者確認的金標；只走本機前綴索引，不送語意模型。
-    private BopomofoDictionary bopomofoDict;
-    private final StringBuilder bopomofoBuffer = new StringBuilder();
-    private final String[] bopomofoSuggestions = new String[3];
-    private TextView boSuggest0, boSuggest1, boSuggest2;
+    private ZhuyinInputController zhuyinInput;
+    private HorizontalScrollView boCandidateScroll;
+    private LinearLayout boCandidateItems;
+    private TextView boCursorLeft, boCursorRight;
+    private List<String> renderedZhuyinCandidates = Collections.emptyList();
+    private int renderedZhuyinCandidateCount = 0;
 
     // Streaming state (APPEND mode with VAD)
     private volatile boolean streamingMode = false;
@@ -343,8 +344,7 @@ public class SimonIMEService extends InputMethodService {
         // v6.23: 背景載入英文預測字典
         englishDict = new EnglishDictionary(this);
         new Thread(() -> englishDict.loadAsync(), "EnglishDict-Load").start();
-        bopomofoDict = new BopomofoDictionary();
-        loadConfirmedBopomofoCandidates();
+        zhuyinInput = new ZhuyinInputController(createZhuyinEngine());
 
         // 背景初始化本機 STT
         localSTT = createLocalSTT();
@@ -550,13 +550,20 @@ public class SimonIMEService extends InputMethodService {
         if (enSuggest1 != null) enSuggest1.setOnClickListener(v -> applyEnglishSuggestion(1));
         if (enSuggest2 != null) enSuggest2.setOnClickListener(v -> applyEnglishSuggestion(2));
 
-        boSuggest0 = rootView.findViewById(R.id.boSuggest0);
-        boSuggest1 = rootView.findViewById(R.id.boSuggest1);
-        boSuggest2 = rootView.findViewById(R.id.boSuggest2);
-        if (boSuggest0 != null) boSuggest0.setOnClickListener(v -> applyBopomofoSuggestion(0));
-        if (boSuggest1 != null) boSuggest1.setOnClickListener(v -> applyBopomofoSuggestion(1));
-        if (boSuggest2 != null) boSuggest2.setOnClickListener(v -> applyBopomofoSuggestion(2));
+        boCandidateScroll = rootView.findViewById(R.id.boCandidateScroll);
+        boCandidateItems = rootView.findViewById(R.id.boCandidateItems);
+        renderedZhuyinCandidates = Collections.emptyList();
+        renderedZhuyinCandidateCount = 0;
+        boCursorLeft = rootView.findViewById(R.id.boCursorLeft);
+        boCursorRight = rootView.findViewById(R.id.boCursorRight);
+        if (boCursorLeft != null) boCursorLeft.setOnClickListener(v -> applyZhuyinState(zhuyinInput.moveCursorLeft()));
+        if (boCursorRight != null) boCursorRight.setOnClickListener(v -> applyZhuyinState(zhuyinInput.moveCursorRight()));
+        if (boCandidateScroll != null) boCandidateScroll.setOnScrollChangeListener((View v, int x, int y, int oldX, int oldY) -> {
+            if (boCandidateItems != null && x + v.getWidth() >= boCandidateItems.getWidth() - dp(24))
+                appendZhuyinCandidateBatch();
+        });
 
+        applyZhuyinState(zhuyinInput.state());
         updateModeUI();
         updateArmedIndicator();
         return rootView;
@@ -3222,8 +3229,8 @@ public class SimonIMEService extends InputMethodService {
                     learnEnglishWord();
                     clearEnWordBuffer();
                 } else if (currentKeyboardMode == KeyboardMode.BOPOMOFO) {
-                    if (applyBopomofoSuggestion(0)) return;
-                    clearBopomofoBuffer();
+                    applyZhuyinState(zhuyinInput.press("space"));
+                    return;
                 }
                 commitTextProgrammatically(ic, " ");
                 break;
@@ -3233,7 +3240,10 @@ public class SimonIMEService extends InputMethodService {
                     learnEnglishWord();
                     clearEnWordBuffer();
                 } else if (currentKeyboardMode == KeyboardMode.BOPOMOFO) {
-                    applyBopomofoSuggestion(0);
+                    ZhuyinInputController.State state = zhuyinInput.press("enter");
+                    applyZhuyinState(state);
+                    if (state.commitText.isEmpty() && state.composingText.isEmpty()) handleEnterKey();
+                    return;
                 }
                 handleEnterKey();
                 break;
@@ -3251,8 +3261,7 @@ public class SimonIMEService extends InputMethodService {
                 break;
             default:
                 if (currentKeyboardMode == KeyboardMode.BOPOMOFO && isBopomofoSymbol(key)) {
-                    bopomofoBuffer.append(key);
-                    refreshBopomofoSuggestions();
+                    applyZhuyinState(zhuyinInput.press(key));
                     break;
                 }
                 // Regular character — apply shift for letters only
@@ -3374,9 +3383,8 @@ public class SimonIMEService extends InputMethodService {
                     backspaceRepeatCount = 0;
                     InputConnection ic0 = getCurrentInputConnection();
                     if (ic0 != null) {
-                        if (currentKeyboardMode == KeyboardMode.BOPOMOFO && bopomofoBuffer.length() > 0) {
-                            bopomofoBuffer.deleteCharAt(bopomofoBuffer.length() - 1);
-                            refreshBopomofoSuggestions();
+                        if (currentKeyboardMode == KeyboardMode.BOPOMOFO && !zhuyinInput.state().composingText.isEmpty()) {
+                            applyZhuyinState(zhuyinInput.press("backspace"));
                             v.setPressed(true);
                             return true;
                         }
@@ -3395,9 +3403,8 @@ public class SimonIMEService extends InputMethodService {
                             if (!backspacePressed) return;
                             InputConnection ic = getCurrentInputConnection();
                             if (ic != null) {
-                                if (currentKeyboardMode == KeyboardMode.BOPOMOFO && bopomofoBuffer.length() > 0) {
-                                    bopomofoBuffer.deleteCharAt(bopomofoBuffer.length() - 1);
-                                    refreshBopomofoSuggestions();
+                                if (currentKeyboardMode == KeyboardMode.BOPOMOFO && !zhuyinInput.state().composingText.isEmpty()) {
+                                    applyZhuyinState(zhuyinInput.press("backspace"));
                                     mainHandler.postDelayed(this, 120);
                                     return;
                                 }
@@ -3550,69 +3557,83 @@ public class SimonIMEService extends InputMethodService {
                 && "ㄅㄆㄇㄈㄉㄊㄋㄌㄍㄎㄏㄐㄑㄒㄓㄔㄕㄖㄗㄘㄙㄧㄨㄩㄚㄛㄜㄝㄞㄟㄠㄡㄢㄣㄤㄥㄦˊˇˋ˙".contains(key);
     }
 
-    private void refreshBopomofoSuggestions() {
-        List<String> suggestions = (bopomofoDict == null)
-                ? Collections.<String>emptyList()
-                : bopomofoDict.suggest(bopomofoBuffer.toString(), 3);
-        for (int i = 0; i < bopomofoSuggestions.length; i++) {
-            bopomofoSuggestions[i] = i < suggestions.size() ? suggestions.get(i) : null;
-        }
-        updateBopomofoSuggestionBar();
-    }
-
-    private void updateBopomofoSuggestionBar() {
-        if (boSuggest0 != null) boSuggest0.setText(bopomofoSuggestions[0] == null ? "" : bopomofoSuggestions[0]);
-        if (boSuggest1 != null) boSuggest1.setText(bopomofoSuggestions[1] == null ? "" : bopomofoSuggestions[1]);
-        if (boSuggest2 != null) boSuggest2.setText(bopomofoSuggestions[2] == null ? "" : bopomofoSuggestions[2]);
-    }
-
-    /** Commits only an explicit candidate selection; raw Bopomofo is never sent through semantic correction. */
-    private boolean applyBopomofoSuggestion(int index) {
-        if (index < 0 || index >= bopomofoSuggestions.length || bopomofoBuffer.length() == 0) return false;
-        String text = bopomofoSuggestions[index];
+    private void applyZhuyinState(ZhuyinInputController.State state) {
+        if (state == null) return;
         InputConnection ic = getCurrentInputConnection();
-        if (text == null || text.isEmpty() || ic == null) return false;
-        String code = bopomofoBuffer.toString();
-        if (!commitTextProgrammatically(ic, text)) return false;
-        if (bopomofoDict != null) bopomofoDict.recordConfirmed(code, text);
-        persistConfirmedBopomofoCandidate(code, text);
-        clearBopomofoBuffer();
-        return true;
-    }
-
-    private void clearBopomofoBuffer() {
-        bopomofoBuffer.setLength(0);
-        Arrays.fill(bopomofoSuggestions, null);
-        updateBopomofoSuggestionBar();
-    }
-
-    private void loadConfirmedBopomofoCandidates() {
-        if (bopomofoDict == null) return;
-        try {
-            String raw = getSharedPreferences("simon_ime_prefs", MODE_PRIVATE)
-                    .getString(PREF_BOPOMOFO_CONFIRMED_KEY, "{}");
-            JSONObject saved = new JSONObject(raw == null ? "{}" : raw);
-            java.util.Iterator<String> keys = saved.keys();
-            while (keys.hasNext()) {
-                String code = keys.next();
-                String text = saved.optString(code, "");
-                if (!text.isEmpty()) bopomofoDict.recordConfirmed(code, text);
+        if (ic != null) {
+            if (!state.commitText.isEmpty()) commitTextProgrammatically(ic, state.commitText);
+            if (state.composingText.isEmpty()) ic.finishComposingText();
+            else {
+                ic.setComposingText(state.composingText, 1);
+                moveEditorCursorWithinComposition(ic, state.composingText, state.cursorPosition);
             }
-        } catch (Exception e) {
-            Log.w(TAG, "Unable to load confirmed Bopomofo candidates", e);
+        }
+        if (boCursorLeft != null) boCursorLeft.setVisibility(state.composingText.isEmpty() ? View.INVISIBLE : View.VISIBLE);
+        if (boCursorRight != null) boCursorRight.setVisibility(state.composingText.isEmpty() ? View.INVISIBLE : View.VISIBLE);
+        renderZhuyinCandidates(state.candidates);
+    }
+
+    private void moveEditorCursorWithinComposition(InputConnection ic, String composing, int cursor) {
+        if (cursor < 0 || cursor > composing.length()) return;
+        try {
+            android.view.inputmethod.ExtractedText extracted = ic.getExtractedText(
+                    new android.view.inputmethod.ExtractedTextRequest(), 0);
+            if (extracted == null || extracted.selectionStart < composing.length()) return;
+            int start = extracted.selectionStart - composing.length();
+            int target = start + cursor;
+            ic.setSelection(target, target);
+        } catch (RuntimeException error) {
+            Log.w(TAG, "Could not place cursor inside Zhuyin composition", error);
         }
     }
 
-    private void persistConfirmedBopomofoCandidate(String code, String text) {
-        try {
-            SharedPreferences prefs = getSharedPreferences("simon_ime_prefs", MODE_PRIVATE);
-            JSONObject saved = new JSONObject(prefs.getString(PREF_BOPOMOFO_CONFIRMED_KEY, "{}"));
-            saved.put(code, text);
-            prefs.edit().putString(PREF_BOPOMOFO_CONFIRMED_KEY, saved.toString()).apply();
-        } catch (Exception e) {
-            // Candidate commitment already succeeded. Persistence may safely retry next selection.
-            Log.w(TAG, "Unable to persist confirmed Bopomofo candidate", e);
+    private void renderZhuyinCandidates(List<String> candidates) {
+        if (boCandidateItems == null || candidates == null || candidates.equals(renderedZhuyinCandidates)) return;
+        boCandidateItems.removeAllViews();
+        renderedZhuyinCandidateCount = 0;
+        renderedZhuyinCandidates = new ArrayList<>(candidates);
+        appendZhuyinCandidateBatch();
+        if (boCandidateScroll != null) boCandidateScroll.scrollTo(0, 0);
+    }
+
+    private void appendZhuyinCandidateBatch() {
+        if (boCandidateItems == null || renderedZhuyinCandidateCount >= renderedZhuyinCandidates.size()) return;
+        int end = Math.min(renderedZhuyinCandidates.size(), renderedZhuyinCandidateCount + 100);
+        for (int i = renderedZhuyinCandidateCount; i < end; i++) {
+            final int candidateIndex = i;
+            TextView candidate = new TextView(this);
+            candidate.setGravity(Gravity.CENTER);
+            candidate.setTextSize(15f);
+            candidate.setTextColor(getColor(R.color.key_text));
+            candidate.setBackgroundResource(R.color.key_bg);
+            candidate.setSingleLine(true);
+            candidate.setEllipsize(android.text.TextUtils.TruncateAt.END);
+            candidate.setPadding(dp(12), 0, dp(12), 0);
+            candidate.setText(renderedZhuyinCandidates.get(i));
+            candidate.setOnClickListener(v -> applyZhuyinState(zhuyinInput.chooseCandidate(candidateIndex)));
+            boCandidateItems.addView(candidate, new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.MATCH_PARENT));
         }
+        renderedZhuyinCandidateCount = end;
+    }
+
+    /** The native engine class lives only in the phone flavor; watch never resolves or packages it. */
+    private ZhuyinInputController.Engine createZhuyinEngine() {
+        try {
+            Class<?> type = Class.forName("com.simon.voiceime.ChewingEngine");
+            return (ZhuyinInputController.Engine) type
+                    .getDeclaredConstructor(android.content.Context.class).newInstance(this);
+        } catch (Throwable error) {
+            Log.e(TAG, "Phone Zhuyin engine could not be created", error);
+            return null;
+        }
+    }
+
+    /** Leaving the Zhuyin page discards unfinished composition and clears the editor underline. */
+    private void clearBopomofoBuffer() {
+        if (zhuyinInput != null) applyZhuyinState(zhuyinInput.clear());
+        InputConnection ic = getCurrentInputConnection();
+        if (ic != null) ic.finishComposingText();
     }
 
     // ==================== Mode ====================
@@ -4476,6 +4497,7 @@ public class SimonIMEService extends InputMethodService {
     @Override
     public void onFinishInputView(boolean finishingInput) {
         dismissSymbolPopup();
+        if (!isWatchService() && zhuyinInput != null) clearBopomofoBuffer();
         if (mainHandler != null) {
             mainHandler.removeCallbacks(connectionWarmUpRunnable);
             clearServerWaitBudgetCallbacks();
@@ -4489,6 +4511,7 @@ public class SimonIMEService extends InputMethodService {
     @Override
     public void onDestroy() {
         dismissSymbolPopup();
+        if (zhuyinInput != null) zhuyinInput.close();
         if (isRecording) {
             isRecording = false;
             streamingMode = false;

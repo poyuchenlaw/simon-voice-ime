@@ -40,6 +40,13 @@ public class SwipeInterceptLayout extends LinearLayout {
             offsetDescendantRectToMyCoords(mic, bounds);
             excluded |= bounds.contains((int) downX, (int) downY);
         }
+        View candidates = findViewById(R.id.boCandidateBar);
+        if (candidates != null && candidates.getVisibility() == VISIBLE) {
+            Rect bounds = new Rect();
+            candidates.getDrawingRect(bounds);
+            offsetDescendantRectToMyCoords(candidates, bounds);
+            excluded |= bounds.contains((int) downX, (int) downY);
+        }
     }
 
     @Override
@@ -75,7 +82,7 @@ public class SwipeInterceptLayout extends LinearLayout {
                 float minDistance = Math.max(56f * getResources().getDisplayMetrics().density,
                         0.22f * getWidth());
                 SwipeGestureJudge.Result result = SwipeGestureJudge.judge(
-                        event.getX() - downX, event.getY() - downY, minDistance, touchSlop);
+                        event.getX() - downX, event.getY() - downY, minDistance, touchSlop, excluded);
                 if (result != SwipeGestureJudge.Result.NONE && listener != null) {
                     listener.onSwipe(result == SwipeGestureJudge.Result.LEFT
                             ? KeyboardPager.Direction.LEFT : KeyboardPager.Direction.RIGHT);

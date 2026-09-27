@@ -7,6 +7,13 @@ public final class SwipeGestureJudge {
     private SwipeGestureJudge() {}
 
     public static Result judge(float dx, float dy, float minDistancePx, float touchSlopPx) {
+        return judge(dx, dy, minDistancePx, touchSlopPx, false);
+    }
+
+    /** Gestures beginning over a nested horizontally scrolling region belong to that region. */
+    public static Result judge(float dx, float dy, float minDistancePx, float touchSlopPx,
+                               boolean startedInExcludedRegion) {
+        if (startedInExcludedRegion) return Result.NONE;
         float distance = Math.abs(dx);
         if (distance <= touchSlopPx || distance < minDistancePx
                 || distance < 1.5f * Math.abs(dy)) {
