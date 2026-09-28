@@ -7,6 +7,7 @@
 
 typedef struct {
     struct ChewingContext *ctx;
+    int candidate_window_for_display;
     int user_selected;
     char selected_text[512];
     char selected_zhuyin[1024];
@@ -92,6 +93,7 @@ JNIEXPORT void JNICALL Java_com_simon_voiceime_ChewingEngine_nativeKey(JNIEnv *e
     struct ChewingContext *ctx = ctx_of(handle);
     if (ctx != NULL && key >= 0 && key <= 127) {
         if (chewing_cand_TotalChoice(ctx) > 0) chewing_cand_close(ctx);
+        state_of(handle)->candidate_window_for_display = 0;
         chewing_handle_Default(ctx, key);
         track_zhuyin_key(state_of(handle), key);
     }
@@ -101,6 +103,7 @@ JNIEXPORT void JNICALL Java_com_simon_voiceime_ChewingEngine_nativeBackspace(JNI
     (void)env; (void)type; struct ChewingContext *ctx = ctx_of(handle);
     if (ctx != NULL) {
         if (chewing_cand_TotalChoice(ctx) > 0) chewing_cand_close(ctx);
+        state_of(handle)->candidate_window_for_display = 0;
         chewing_handle_Backspace(ctx);
         NativeChewing *state = state_of(handle); state->user_selected = 0;
         state->selected_text[0] = '\0'; state->selected_zhuyin[0] = '\0'; state->pending_zhuyin[0] = '\0';
@@ -109,9 +112,15 @@ JNIEXPORT void JNICALL Java_com_simon_voiceime_ChewingEngine_nativeBackspace(JNI
 JNIEXPORT void JNICALL Java_com_simon_voiceime_ChewingEngine_nativeSpace(JNIEnv *env, jclass type, jlong handle) {
     (void)env; (void)type; struct ChewingContext *ctx = ctx_of(handle);
     if (ctx != NULL) {
-        if (chewing_cand_TotalChoice(ctx) > 0) {
+        NativeChewing *state = state_of(handle);
+        if (chewing_cand_TotalChoice(ctx) > 0 && state->candidate_window_for_display) {
+            chewing_cand_close(ctx);
+            state->candidate_window_for_display = 0;
+            chewing_handle_Space(ctx);
+        } else if (chewing_cand_TotalChoice(ctx) > 0) {
             if (chewing_cand_choose_by_index(ctx, 0) == 0) {
-                NativeChewing *state = state_of(handle); state->user_selected = 1; accept_pending_zhuyin(state);
+                state->candidate_window_for_display = 0;
+                state->user_selected = 1; accept_pending_zhuyin(state);
             }
         }
         else chewing_handle_Space(ctx);
@@ -120,7 +129,13 @@ JNIEXPORT void JNICALL Java_com_simon_voiceime_ChewingEngine_nativeSpace(JNIEnv 
 JNIEXPORT void JNICALL Java_com_simon_voiceime_ChewingEngine_nativeEnter(JNIEnv *env, jclass type, jlong handle) {
     (void)env; (void)type; struct ChewingContext *ctx = ctx_of(handle);
     if (ctx != NULL) {
-        if (chewing_cand_TotalChoice(ctx) > 0) chewing_cand_choose_by_index(ctx, 0);
+        NativeChewing *state = state_of(handle);
+        if (chewing_cand_TotalChoice(ctx) > 0 && state->candidate_window_for_display) {
+            chewing_cand_close(ctx);
+            state->candidate_window_for_display = 0;
+        } else if (chewing_cand_TotalChoice(ctx) > 0) {
+            chewing_cand_choose_by_index(ctx, 0);
+        }
         chewing_handle_Enter(ctx);
     }
 }
@@ -130,6 +145,7 @@ JNIEXPORT void JNICALL Java_com_simon_voiceime_ChewingEngine_nativeChoose(JNIEnv
         NativeChewing *state = state_of(handle);
         const char *candidate = chewing_cand_string_by_index_static(ctx, index);
         if (candidate != NULL && chewing_cand_choose_by_index(ctx, index) == 0) {
+            state->candidate_window_for_display = 0;
             size_t text_len = strlen(state->selected_text);
             if (text_len + strlen(candidate) < sizeof(state->selected_text)) {
                 memcpy(state->selected_text + text_len, candidate, strlen(candidate) + 1);
@@ -218,9 +234,12 @@ JNIEXPORT void JNICALL Java_com_simon_voiceime_ChewingEngine_nativeMoveCursor(JN
     struct ChewingContext *ctx = ctx_of(handle);
     if (ctx == NULL || !chewing_buffer_Check(ctx)) return;
     if (chewing_cand_TotalChoice(ctx) > 0) chewing_cand_close(ctx);
+    state_of(handle)->candidate_window_for_display = 0;
     if (right) chewing_handle_Right(ctx); else chewing_handle_Left(ctx);
-    if (chewing_buffer_Check(ctx) && chewing_cand_TotalChoice(ctx) <= 0)
+    if (chewing_buffer_Check(ctx) && chewing_cand_TotalChoice(ctx) <= 0) {
         chewing_handle_Down(ctx);
+        if (chewing_cand_TotalChoice(ctx) > 0) state_of(handle)->candidate_window_for_display = 1;
+    }
 }
 
 JNIEXPORT jint JNICALL Java_com_simon_voiceime_ChewingEngine_nativeCursor(JNIEnv *env, jclass type, jlong handle) {
@@ -263,6 +282,7 @@ JNIEXPORT jobjectArray JNICALL Java_com_simon_voiceime_ChewingEngine_nativeCandi
     if (ctx != NULL && count <= 0 && chewing_zuin_Check(ctx) != 0 && chewing_buffer_Check(ctx)) {
         chewing_handle_Down(ctx);
         count = chewing_cand_TotalChoice(ctx);
+        if (count > 0) state_of(handle)->candidate_window_for_display = 1;
     }
     if (count < 0) count = 0;
     jobjectArray result = (*env)->NewObjectArray(env, count, byte_array_class, NULL);
@@ -300,6 +320,7 @@ JNIEXPORT void JNICALL Java_com_simon_voiceime_ChewingEngine_nativeClear(JNIEnv 
     (void)env; (void)type; struct ChewingContext *ctx = ctx_of(handle);
     if (ctx != NULL) {
         if (chewing_cand_TotalChoice(ctx) > 0) chewing_cand_close(ctx);
+        state_of(handle)->candidate_window_for_display = 0;
         chewing_clean_preedit_buf(ctx); chewing_clean_bopomofo_buf(ctx);
         NativeChewing *state = state_of(handle); state->user_selected = 0;
         state->selected_text[0] = '\0'; state->selected_zhuyin[0] = '\0'; state->pending_zhuyin[0] = '\0';

@@ -214,10 +214,10 @@ public class ZhuyinInputControllerTest {
     @Test public void candidate_choice_updates_composing_state_and_commit_is_drained() {
         FakeEngine engine = new FakeEngine();
         ZhuyinInputController controller = new ZhuyinInputController(engine);
-        assertTrue(controller.chooseCandidate(0).accepted);
-        assertEquals("你好", controller.state().composingText);
+        assertTrue(controller.chooseCandidate(1).accepted);
+        assertEquals("你號", controller.state().composingText);
         assertFalse(controller.chooseCandidate(9).accepted);
-        assertEquals("你好", controller.press("enter").commitText);
+        assertEquals("你號", controller.press("enter").commitText);
     }
 
     @Test public void tone_symbol_is_forwarded_as_input_not_committed_raw() {
