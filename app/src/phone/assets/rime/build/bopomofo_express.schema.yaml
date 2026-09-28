@@ -3,11 +3,11 @@ __build_info:
   timestamps:
     bopomofo.custom: 0
     bopomofo.schema: 1790572749
-    bopomofo_express.custom: 0
-    bopomofo_express.schema: 1790572749
+    bopomofo_express.schema: 1790621750
     default: 1790572763
     default.custom: 0
-    grammar: 0
+    grammar: 1790622765
+    grammar.custom: 0
     key_bindings: 1790572749
     key_bindings.custom: 0
     punctuation: 1790572749
@@ -51,6 +51,8 @@ engine:
     - "table_translator@custom_phrase"
     - reverse_lookup_translator
     - script_translator
+grammar:
+  language: "zh-hant-t-essay-bgw"
 key_binder:
   bindings:
     - {accept: "Control+p", send: Up, when: composing}
@@ -289,7 +291,12 @@ switches:
   - name: ascii_punct
     states: ["。，", "．，"]
 translator:
+  contextual_suggestions: true
   dictionary: terra_pinyin
+  enable_sentence: true
+  enable_user_dict: true
+  max_homographs: 7
+  max_homophones: 7
   preedit_format:
     - "xlit|1qaz2wsxedcrfv5tgbyhnujm8ik,9ol.0p;/- 6347'|ㄅㄆㄇㄈㄉㄊㄋㄌㄍㄎㄏㄐㄑㄒㄓㄔㄕㄖㄗㄘㄙㄧㄨㄩㄚㄛㄜㄝㄞㄟㄠㄡㄢㄣㄤㄥㄦˉˊˇˋ˙ |"
   prism: bopomofo_express

@@ -76,7 +76,7 @@ final class T9RimeEngine implements T9Engine {
         }
         finally { initialized = true; }
     }
-    private static void copyTree(Context c, String asset, File dir, boolean overwrite) throws IOException {
+    static void copyTree(Context c, String asset, File dir, boolean overwrite) throws IOException {
         if (!dir.exists() && !dir.mkdirs()) throw new IOException("cannot create " + dir);
         String[] children = c.getAssets().list(asset);
         if (children == null || children.length == 0) {
@@ -96,7 +96,7 @@ final class T9RimeEngine implements T9Engine {
             }
         }
     }
-    private static String assetVersion(Context context) throws IOException {
+    static String assetVersion(Context context) throws IOException {
         try {
             android.content.pm.PackageInfo info=context.getPackageManager().getPackageInfo(context.getPackageName(),0);
             long code=android.os.Build.VERSION.SDK_INT>=28?info.getLongVersionCode():info.versionCode;

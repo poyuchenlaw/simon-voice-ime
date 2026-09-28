@@ -164,6 +164,7 @@ public class SimonIMEService extends InputMethodService {
     private String renderedZhuyinCandidateKind = "engine";
     private HorizontalScrollView boCandidateScroll;
     private LinearLayout boCandidateItems;
+    private TextView boStreamPreview;
     private TextView boCursorLeft, boCursorRight;
     private List<String> renderedZhuyinCandidates = Collections.emptyList();
     private int renderedZhuyinCandidateCount = 0;
@@ -596,6 +597,8 @@ public class SimonIMEService extends InputMethodService {
 
         boCandidateScroll = rootView.findViewById(R.id.boCandidateScroll);
         boCandidateItems = rootView.findViewById(R.id.boCandidateItems);
+        boStreamPreview = rootView.findViewById(R.id.boStreamPreview);
+        if (boStreamPreview != null) boStreamPreview.setMovementMethod(android.text.method.LinkMovementMethod.getInstance());
         renderedZhuyinCandidates = Collections.emptyList();
         renderedZhuyinCandidateCount = 0;
         boCursorLeft = rootView.findViewById(R.id.boCursorLeft);
@@ -3808,6 +3811,7 @@ public class SimonIMEService extends InputMethodService {
 
     private void applyZhuyinState(ZhuyinInputController.State state) {
         if (state == null) return;
+        renderZhuyinStreamPreview(state.composingText);
         InputConnection ic = getCurrentInputConnection();
         if (ic != null) {
             if (!state.commitText.isEmpty()) {
@@ -3832,6 +3836,61 @@ public class SimonIMEService extends InputMethodService {
         if (boCursorLeft != null) boCursorLeft.setVisibility(state.composingText.isEmpty() ? View.INVISIBLE : View.VISIBLE);
         if (boCursorRight != null) boCursorRight.setVisibility(state.composingText.isEmpty() ? View.INVISIBLE : View.VISIBLE);
         renderZhuyinCandidates(state.candidates, state.candidateKind);
+    }
+
+    private void renderZhuyinStreamPreview(String text) {
+        if (boStreamPreview == null) return;
+        if (text == null || text.isEmpty()) {
+            boStreamPreview.setText("");
+            return;
+        }
+        android.text.SpannableString preview = new android.text.SpannableString(text);
+        for (int i = 0; i < text.length();) {
+            int end = i + Character.charCount(text.codePointAt(i));
+            preview.setSpan(new android.text.style.ClickableSpan() {
+                @Override public void onClick(View widget) { showZhuyinReplaceBubble(); }
+                @Override public void updateDrawState(android.text.TextPaint paint) {
+                    paint.setUnderlineText(false);
+                    paint.setColor(getColor(R.color.key_text));
+                }
+            }, i, end, android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+            i = end;
+        }
+        boStreamPreview.setText(preview);
+        boStreamPreview.post(() -> {
+            android.view.ViewParent parent = boStreamPreview.getParent();
+            if (parent instanceof HorizontalScrollView)
+                ((HorizontalScrollView) parent).fullScroll(View.FOCUS_RIGHT);
+        });
+    }
+
+    private void showZhuyinReplaceBubble() {
+        if (boStreamPreview == null || zhuyinInput == null) return;
+        List<String> candidates = zhuyinInput.state().candidates;
+        if (candidates.isEmpty()) return;
+        LinearLayout box = new LinearLayout(this);
+        box.setOrientation(LinearLayout.HORIZONTAL);
+        for (String value : candidates) {
+            TextView item = new TextView(this);
+            item.setText(value);
+            item.setTextColor(Color.WHITE);
+            item.setTextSize(16);
+            item.setGravity(Gravity.CENTER);
+            item.setPadding(dp(12), 0, dp(12), 0);
+            box.addView(item, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(48)));
+        }
+        PopupWindow popup = new PopupWindow(box, ViewGroup.LayoutParams.WRAP_CONTENT, dp(48), true);
+        popup.setOutsideTouchable(true);
+        popup.setBackgroundDrawable(new ColorDrawable(0xff303746));
+        popup.showAsDropDown(boStreamPreview);
+        for (int i = 0; i < box.getChildCount(); i++) {
+            View item = box.getChildAt(i);
+            item.setOnClickListener(view -> {
+                int index = box.indexOfChild(view);
+                applyZhuyinState(zhuyinInput.chooseCandidate(index));
+                popup.dismiss();
+            });
+        }
     }
 
     private static android.text.SpannableString highlightZhuyinTarget(String value,int cursorCodePoints){
@@ -3903,12 +3962,19 @@ public class SimonIMEService extends InputMethodService {
     /** The native engine class lives only in the phone flavor; watch never resolves or packages it. */
     private ZhuyinInputController.Engine createZhuyinEngine() {
         try {
-            Class<?> type = Class.forName("com.simon.voiceime.ChewingEngine");
+            Class<?> type = Class.forName("com.simon.voiceime.RimeZhuyinEngine");
             return (ZhuyinInputController.Engine) type
                     .getDeclaredConstructor(android.content.Context.class).newInstance(this);
         } catch (Throwable error) {
-            Log.e(TAG, "Phone Zhuyin engine could not be created", error);
-            return null;
+            Log.e(TAG, "Traditional-page Rime unavailable; falling back to libchewing", error);
+            try {
+                Class<?> fallback = Class.forName("com.simon.voiceime.ChewingEngine");
+                return (ZhuyinInputController.Engine) fallback
+                        .getDeclaredConstructor(android.content.Context.class).newInstance(this);
+            } catch (Throwable fallbackError) {
+                Log.e(TAG, "Phone Zhuyin fallback could not be created", fallbackError);
+                return null;
+            }
         }
     }
 

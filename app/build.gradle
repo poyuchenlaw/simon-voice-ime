@@ -85,9 +85,12 @@ def buildZhuyinIndex = tasks.register("buildPhoneZhuyinIndex", Exec) {
 }
 def buildPhoneRime = tasks.register("buildPhoneRime", Exec) {
     workingDir rootProject.projectDir
-    inputs.files(file("src/phone/cpp/rime_jni.cpp"), file("../evidence/rime_spike/android-prefix/lib/librime.so"), file("../scripts/build_phone_rime_jni.sh"), file("../scripts/prepare_t9_rime_assets.py"))
-    outputs.files(file("src/phone/jniLibs/arm64-v8a/librime.so"), file("src/phone/jniLibs/arm64-v8a/librime_jni.so"))
-    commandLine "bash", "-c", "python3 scripts/prepare_t9_rime_assets.py && bash scripts/build_phone_rime_jni.sh"
+    inputs.files(file("src/phone/cpp/rime_jni.cpp"), file("../evidence/rime_spike/android-prefix/lib/librime.so"),
+            file("../scripts/build_phone_rime_jni.sh"), file("../scripts/prepare_t9_rime_assets.py"),
+            file("../scripts/check_phone_rime_assets.py"), fileTree("src/phone/assets/rime") { include "*.schema.yaml", "*.yaml", "*.gram" })
+    outputs.files(file("src/phone/jniLibs/arm64-v8a/librime.so"), file("src/phone/jniLibs/arm64-v8a/librime_jni.so"),
+            file("src/phone/assets/rime/build/bopomofo_express.schema.yaml"))
+    commandLine "bash", "-c", "python3 scripts/prepare_t9_rime_assets.py && python3 scripts/check_phone_rime_assets.py && bash scripts/build_phone_rime_jni.sh"
 }
 def ndkRoot = System.getenv("ANDROID_NDK_HOME") ?: "/home/simon/android-sdk/ndk/26.3.11579264"
 def buildPhoneChewingJni = tasks.register("buildPhoneChewingJni", Exec) {

@@ -3,6 +3,8 @@
 from pathlib import Path
 import re
 import shutil
+import os
+import subprocess
 import tempfile
 
 
@@ -93,11 +95,56 @@ def prepare_assets(src: Path, build: Path, dst: Path, gram: str,
     return sum(path.stat().st_size for path in dst.rglob("*") if path.is_file())
 
 
+def compile_express_schema(root: Path, build: Path) -> None:
+    """Compile the traditional page schema from source before packaging assets."""
+    upstream = root / "evidence/rime_spike/octagram-data"
+    deployer = Path(os.environ.get(
+        "RIME_DEPLOYER",
+        str(root / "evidence/rime_spike/host-install-octagram/bin/rime_deployer"),
+    ))
+    if not deployer.is_file():
+        raise FileNotFoundError(f"Rime schema compiler not found: {deployer}")
+    if not (upstream / "bopomofo.schema.yaml").is_file() or not (upstream / "terra_pinyin.dict.yaml").is_file():
+        raise FileNotFoundError(f"Rime source schema/dictionary inputs missing: {upstream}")
+
+    build.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix="rime-express-") as directory:
+        work = Path(directory)
+        shared, user = work / "shared", work / "user"
+        shared.mkdir(); user.mkdir()
+        for path in upstream.iterdir():
+            target = shared / path.name
+            if path.is_dir():
+                shutil.copytree(path, target)
+            elif path.is_file():
+                shutil.copy2(path, target)
+        source = root / "app/src/phone/assets/rime"
+        for name in ("bopomofo_express.schema.yaml", "grammar.yaml", "key_bindings.yaml",
+                     "punctuation.yaml", "symbols.yaml", "zh-hant-t-essay-bgw.gram"):
+            shutil.copy2(source / name, shared / name)
+        environment = os.environ.copy()
+        environment["LD_LIBRARY_PATH"] = str(deployer.parent.parent / "lib")
+        subprocess.run(
+            [str(deployer), "--compile", str(shared / "bopomofo_express.schema.yaml"),
+             str(user), str(shared), str(build)],
+            cwd=work, env=environment, check=True,
+        )
+    compiled = build / "bopomofo_express.schema.yaml"
+    if not compiled.is_file():
+        raise RuntimeError("Rime compiler completed without producing bopomofo_express.schema.yaml")
+    text = compiled.read_text(encoding="utf-8")
+    if re.search(r"(?m)^\s+grammar:\s*0\s*$", text) or "zh-hant-t-essay-bgw" not in text or "enable_user_dict: true" not in text:
+        raise RuntimeError("compiled traditional Rime schema is missing Octagram or personal learning")
+
+
 if __name__ == "__main__":
     root = Path(__file__).resolve().parents[1]
-    size = prepare_assets(root / "evidence/rime_spike/schema-data",
-                          root / "evidence/rime_spike/userdata/build",
-                          root / "app/src/phone/assets/rime", "bgw",
-                          root / "evidence/rime_spike/octagram-data",
-                          root / "evidence/rime_spike/octagram-userdata/build/bopomofo_t9_simon.schema.yaml")
+    with tempfile.TemporaryDirectory(prefix="rime-build-") as directory:
+        build = Path(directory) / "build"
+        shutil.copytree(root / "app/src/phone/assets/rime/build", build)
+        compile_express_schema(root, build)
+        size = prepare_assets(root / "app/src/phone/assets/rime", build,
+                              root / "app/src/phone/assets/rime", "bgw",
+                              root / "app/src/phone/assets/rime",
+                              root / "app/src/phone/assets/rime/build/bopomofo_t9_simon.schema.yaml")
     print(f"prepared {size} bytes of prebuilt Rime data")

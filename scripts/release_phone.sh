@@ -13,6 +13,7 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 SDK="${ANDROID_HOME:-/home/simon/Android/Sdk}"
 BUILD_TOOLS="${ANDROID_BUILD_TOOLS:-$SDK/build-tools/35.0.0}"
 GRADLE_HOME="${GRADLE_USER_HOME:-/home/simon/.gradle}"
+PROJECT_CACHE_DIR="${GRADLE_PROJECT_CACHE_DIR:-$ROOT/.gradle_user}"
 APK_NORMALIZED="$ROOT/third_party/ApkDiffPatch/ApkNormalized"
 ZIP_DIFF="$ROOT/third_party/ApkDiffPatch/ZipDiff"
 ZIP_PATCH="$ROOT/third_party/ApkDiffPatch/ZipPatch"
@@ -61,7 +62,7 @@ if [[ -n "$LATEST_TAG" ]]; then
   if [[ -f "$LATEST_LOCAL" && "$LATEST_DIGEST" == "sha256:$(sha256sum "$LATEST_LOCAL" | cut -d' ' -f1)" ]]; then
     cp "$LATEST_LOCAL" "$LATEST_DIR/$LATEST_ASSET"
   else
-    gh release download "v$LATEST_TAG" --repo poyuchenlaw/simon-voice-ime --pattern "$LATEST_ASSET" --dir "$LATEST_DIR"
+    gh release download "v$LATEST_TAG" --repo poyuchenlaw/simon-voice-ime --pattern "$LATEST_ASSET" --dir "$LATEST_DIR" --clobber
   fi
   LATEST_CODE="$("$AAPT" dump badging "$LATEST_DIR/$LATEST_ASSET" | sed -n "s/.*versionCode='\([0-9][0-9]*\)'.*/\1/p" | head -1)"
 else
@@ -77,11 +78,15 @@ fi
 
 scripts/build_apkdiffpatch_android.sh > "$EVIDENCE/native-build.log" 2>&1
 make -C "$ROOT/third_party/ApkDiffPatch" -j2 > "$EVIDENCE/host-tools-build.log" 2>&1
-GRADLE_USER_HOME="$GRADLE_HOME" "$ROOT/gradlew" --project-cache-dir "$ROOT/out/v635-gradle-cache" --no-daemon \
+GRADLE_USER_HOME="$GRADLE_HOME" "$ROOT/gradlew" --project-cache-dir "$PROJECT_CACHE_DIR" --no-daemon \
   -PphoneVersionName="$VERSION" -PphoneVersionCode="$PHONE_VERSION_CODE" \
   testPhoneReleaseUnitTest assemblePhoneRelease > "$EVIDENCE/gradle-build.log" 2>&1
 BUILT="$ROOT/app/build/outputs/apk/phone/release/app-phone-release.apk"
 [[ -s "$BUILT" ]] || { echo "Gradle phone APK missing" >&2; exit 2; }
+RIME_TMP="$WORK/rime-assets"
+rm -rf "$RIME_TMP"; mkdir -p "$RIME_TMP"
+unzip -q "$BUILT" 'assets/rime/build/*.schema.yaml' -d "$RIME_TMP"
+python3 "$ROOT/scripts/check_phone_rime_assets.py" "$RIME_TMP/assets/rime" --compiled-only
 # Verify repo-built ARM64 libraries are the exact current artifacts and newer than
 # their native source inputs. This catches stale prebuilt JNI binaries in the APK.
 NATIVE_TMP="$WORK/native-check"
@@ -168,7 +173,7 @@ for old_version in "${PREVIOUS_TAGS[@]}"; do
   if ! printf '%s\n' "$OLD_ASSETS" | rg -qx 'update-manifest\.json'; then
     continue
   fi
-  gh release download "v$old_version" --repo poyuchenlaw/simon-voice-ime --pattern update-manifest.json --dir "$OLD_DIR" >/dev/null
+  gh release download "v$old_version" --repo poyuchenlaw/simon-voice-ime --pattern update-manifest.json --dir "$OLD_DIR" --clobber >/dev/null
   if [[ "$old_version" == "$LATEST_TAG" ]]; then
     OLD_APK="$OLD_DIR/$LATEST_ASSET"
   else
@@ -184,7 +189,7 @@ PY
     then
       cp "$OLD_LOCAL" "$OLD_APK"
     else
-      gh release download "v$old_version" --repo poyuchenlaw/simon-voice-ime --pattern "$OLD_META" --dir "$OLD_DIR"
+      gh release download "v$old_version" --repo poyuchenlaw/simon-voice-ime --pattern "$OLD_META" --dir "$OLD_DIR" --clobber
     fi
   fi
   OLD_MANIFEST="$OLD_DIR/update-manifest.json"

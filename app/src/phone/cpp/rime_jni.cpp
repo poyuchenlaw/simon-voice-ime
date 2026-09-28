@@ -62,6 +62,29 @@ extern "C" JNIEXPORT jlong JNICALL Java_com_simon_voiceime_T9RimeEngine_nativeCr
     if(!selected){api->destroy_session(id);if(--g_users==0)api->finalize();return 0;}
     return (jlong)(intptr_t)new Session{api,id};
 }
+extern "C" JNIEXPORT jlong JNICALL Java_com_simon_voiceime_RimeZhuyinNative_nativeCreate(JNIEnv* env,jclass,jstring shared,jstring user){
+    std::lock_guard<std::mutex> lock(g_mutex);
+    RimeTraits t{}; RIME_STRUCT_INIT(RimeTraits,t);
+    std::string sh=jstr(env,shared), us=jstr(env,user);
+    t.shared_data_dir=sh.c_str(); t.user_data_dir=us.c_str(); t.app_name="rime.simon.voiceime"; t.min_log_level=2; t.log_dir="";
+    const RimeApi* api=rime_get_api(); if(!api)return 0;
+    if(g_users++==0){api->setup(&t);api->initialize(&t);}
+    RimeSessionId id=api->create_session();
+    if(!id){if(--g_users==0)api->finalize();return 0;}
+    if(!api->select_schema(id,"bopomofo_express")){api->destroy_session(id);if(--g_users==0)api->finalize();return 0;}
+    return (jlong)(intptr_t)new Session{api,id};
+}
+extern "C" JNIEXPORT void JNICALL Java_com_simon_voiceime_RimeZhuyinNative_nativeDestroy(JNIEnv*,jclass,jlong h){
+    Session*s=state(h);if(!s)return;std::lock_guard<std::mutex> lock(g_mutex);s->api->destroy_session(s->id);if(--g_users==0)s->api->finalize();delete s;
+}
+extern "C" JNIEXPORT void JNICALL Java_com_simon_voiceime_RimeZhuyinNative_nativeProcessKey(JNIEnv*,jclass,jlong h,jint key){Session*s=state(h);if(s)s->api->process_key(s->id,key,0);}
+extern "C" JNIEXPORT void JNICALL Java_com_simon_voiceime_RimeZhuyinNative_nativeSelect(JNIEnv*,jclass,jlong h,jint index){Session*s=state(h);if(s&&index>=0)s->api->select_candidate(s->id,(size_t)index);}
+extern "C" JNIEXPORT void JNICALL Java_com_simon_voiceime_RimeZhuyinNative_nativeClear(JNIEnv*,jclass,jlong h){Session*s=state(h);if(s)s->api->clear_composition(s->id);}
+extern "C" JNIEXPORT jint JNICALL Java_com_simon_voiceime_RimeZhuyinNative_nativeCursor(JNIEnv*,jclass,jlong h){Session*s=state(h);return s?(jint)s->api->get_caret_pos(s->id):0;}
+extern "C" JNIEXPORT void JNICALL Java_com_simon_voiceime_RimeZhuyinNative_nativeMoveCursor(JNIEnv*,jclass,jlong h,jboolean right){Session*s=state(h);if(!s)return;size_t p=s->api->get_caret_pos(s->id);if(right)++p;else if(p)--p;s->api->set_caret_pos(s->id,p);}
+extern "C" JNIEXPORT jbyteArray JNICALL Java_com_simon_voiceime_RimeZhuyinNative_nativeComposing(JNIEnv*e,jclass,jlong h){Session*s=state(h);if(!s)return bytes(e,"");RIME_STRUCT(RimeContext,c);if(!s->api->get_context(s->id,&c))return bytes(e,"");std::string v=c.composition.preedit?c.composition.preedit:"";s->api->free_context(&c);return bytes(e,v);}
+extern "C" JNIEXPORT jobjectArray JNICALL Java_com_simon_voiceime_RimeZhuyinNative_nativeCandidates(JNIEnv*e,jclass,jlong h){Session*s=state(h);jclass b=e->FindClass("[B");if(!b)return nullptr;std::vector<std::string> values;if(s){RimeCandidateListIterator iterator{};if(s->api->candidate_list_begin(s->id,&iterator)){do{if(iterator.candidate.text)values.emplace_back(iterator.candidate.text);}while(values.size()<200&&s->api->candidate_list_next(&iterator));s->api->candidate_list_end(&iterator);}}jobjectArray out=e->NewObjectArray((jsize)values.size(),b,nullptr);for(size_t i=0;i<values.size();i++){jbyteArray v=bytes(e,values[i]);e->SetObjectArrayElement(out,(jsize)i,v);e->DeleteLocalRef(v);}return out;}
+extern "C" JNIEXPORT jbyteArray JNICALL Java_com_simon_voiceime_RimeZhuyinNative_nativeTakeCommit(JNIEnv*e,jclass,jlong h){Session*s=state(h);if(!s)return bytes(e,"");RIME_STRUCT(RimeCommit,c);if(!s->api->get_commit(s->id,&c))return bytes(e,"");std::string v=c.text?c.text:"";s->api->free_commit(&c);return bytes(e,v);}
 extern "C" JNIEXPORT void JNICALL Java_com_simon_voiceime_T9RimeEngine_nativeDestroy(JNIEnv*,jclass,jlong h){
     Session*s=state(h);if(!s)return;std::lock_guard<std::mutex> lock(g_mutex);s->api->destroy_session(s->id);if(--g_users==0)s->api->finalize();delete s;
 }
