@@ -161,7 +161,8 @@ public class SettingsActivity extends Activity {
 
         updateHelper.checkForUpdate(new UpdateHelper.UpdateCallback() {
             @Override
-            public void onUpdateAvailable(String version, String downloadUrl, String releaseNotes) {
+            public void onUpdateAvailable(String version, String downloadUrl, String manifestUrl,
+                                          String expectedFullSha256, String releaseNotes) {
                 btnCheckUpdate.setEnabled(true);
                 btnCheckUpdate.setText("檢查更新");
                 tvUpdateStatus.setText("發現新版本 v" + version);
@@ -171,7 +172,8 @@ public class SettingsActivity extends Activity {
                         .setTitle("發現新版本 v" + version)
                         .setMessage("目前版本：v" + getAppVersion() + "\n最新版本：v" + version
                                 + (releaseNotes.isEmpty() ? "" : "\n\n" + releaseNotes))
-                        .setPositiveButton("下載更新", (d, w) -> downloadUpdate(downloadUrl))
+                        .setPositiveButton("下載更新", (d, w) -> downloadUpdate(
+                                downloadUrl, manifestUrl, expectedFullSha256))
                         .setNegativeButton("稍後", null)
                         .show();
             }
@@ -200,15 +202,17 @@ public class SettingsActivity extends Activity {
         });
     }
 
-    private void downloadUpdate(String downloadUrl) {
+    private void downloadUpdate(String downloadUrl, String manifestUrl, String expectedFullSha256) {
+        final String[] downloadMode = {"下載中"};
         btnCheckUpdate.setEnabled(false);
         btnCheckUpdate.setText("下載中...");
         tvUpdateStatus.setText("下載中 0%...");
         tvUpdateStatus.setTextColor(0xFF6bc5f0);
 
-        updateHelper.downloadAndInstall(downloadUrl, new UpdateHelper.UpdateCallback() {
+        updateHelper.downloadAndInstall(downloadUrl, manifestUrl, expectedFullSha256,
+                new UpdateHelper.UpdateCallback() {
             @Override
-            public void onUpdateAvailable(String v, String u, String n) { }
+            public void onUpdateAvailable(String v, String u, String m, String h, String n) { }
 
             @Override
             public void onNoUpdate(String v) { }
@@ -223,7 +227,14 @@ public class SettingsActivity extends Activity {
 
             @Override
             public void onDownloadProgress(int percent) {
-                tvUpdateStatus.setText("下載中 " + percent + "%...");
+                tvUpdateStatus.setText(downloadMode[0] + " " + percent + "%...");
+            }
+
+            @Override
+            public void onDownloadMode(String mode, long bytes) {
+                downloadMode[0] = mode + " " + String.format(java.util.Locale.US,
+                        "%.1f MB", bytes / (1024.0 * 1024.0));
+                tvUpdateStatus.setText(downloadMode[0] + " 0%...");
             }
 
             @Override

@@ -1,3 +1,6 @@
 [submodule "third_party/libchewing"]
 	path = third_party/libchewing
 	url = https://github.com/chewing/libchewing.git
+[submodule "third_party/ApkDiffPatch"]
+	path = third_party/ApkDiffPatch
+	url = https://github.com/sisong/ApkDiffPatch.git
