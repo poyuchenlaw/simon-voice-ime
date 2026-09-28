@@ -92,6 +92,42 @@ public class SettingsActivity extends Activity {
                     prefs.edit().putBoolean("auto_vocab_enabled", isChecked).apply());
         }
 
+        CheckBox checkT9Ai = findViewById(R.id.checkT9Ai);
+        CheckBox checkT9Learning = findViewById(R.id.checkT9Learning);
+        CheckBox checkImeAutoUpload = findViewById(R.id.checkImeAutoUpload);
+        ImeTelemetry telemetry=ImeTelemetry.install(this);
+        TextView uploadStatus=findViewById(R.id.tvImeUploadStatus);
+        if(checkImeAutoUpload!=null){checkImeAutoUpload.setChecked(prefs.getBoolean("ime_auto_upload",true));checkImeAutoUpload.setOnCheckedChangeListener((button,checked)->prefs.edit().putBoolean("ime_auto_upload",checked).apply());}
+        Button uploadNow=findViewById(R.id.btnImeUploadNow);
+        if(uploadNow!=null){uploadNow.setOnClickListener(v->{uploadStatus.setText("正在背景上傳…");telemetry.uploadNow();new android.os.Handler().postDelayed(()->{
+                    long when=prefs.getLong("ime_last_upload_ms",0);String result=prefs.getString("ime_last_upload_result",telemetry.lastResult());
+                    uploadStatus.setText((when==0?"尚無成功上傳":new java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss",java.util.Locale.getDefault()).format(new java.util.Date(when)))+"｜"+result);
+                },1500);});}
+        long uploaded=prefs.getLong("ime_last_upload_ms",0);
+        uploadStatus.setText((uploaded==0?"最後上傳：尚未成功":("最後上傳："+new java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss",java.util.Locale.getDefault()).format(new java.util.Date(uploaded))))+"｜"+prefs.getString("ime_last_upload_result","尚未上傳"));
+        if (checkT9Ai != null) {
+            checkT9Ai.setChecked(prefs.getBoolean("t9_ai_enabled", true));
+            checkT9Ai.setOnCheckedChangeListener((button, checked) -> prefs.edit().putBoolean("t9_ai_enabled", checked).apply());
+        }
+        if (checkT9Learning != null) {
+            checkT9Learning.setChecked(prefs.getBoolean("t9_learning_enabled", true));
+            checkT9Learning.setOnCheckedChangeListener((button, checked) -> prefs.edit().putBoolean("t9_learning_enabled", checked).apply());
+        }
+        Button btnT9Help = findViewById(R.id.btnT9Help);
+        if (btnT9Help != null) btnT9Help.setOnClickListener(v -> new AlertDialog.Builder(this).setTitle("注音九宮格")
+                .setMessage("每字按兩下就好（聲母那格＋韻母那格）；不用打聲調。句子越長越準。選錯了點一下預覽列的字就能換。打字停一下，AI 會給整句建議，點它就採用。")
+                .setPositiveButton("知道了", null).show());
+        Button btnReenableT9 = findViewById(R.id.btnReenableT9);
+        if (btnReenableT9 != null) btnReenableT9.setOnClickListener(v -> {
+            boolean enabled = T9InitGuard.reenable(T9InitGuard.adapt(prefs));
+            Toast.makeText(this, enabled ? "九宮格已重新啟用" : "設定未能儲存，請稍後重試",
+                    Toast.LENGTH_SHORT).show();
+        });
+        Button btnClearT9 = findViewById(R.id.btnClearT9Learning);
+        if (btnClearT9 != null) btnClearT9.setOnClickListener(v -> new AlertDialog.Builder(this).setTitle("清除輸入學習資料？")
+                .setMessage("會刪除本機觸控記錄、送出紀錄及九宮格常用詞。")
+                .setNegativeButton("取消", null).setPositiveButton("清除", (d,w) -> { new T9LearningStore(this).clearLearning(); Toast.makeText(this,"已清除輸入學習資料",Toast.LENGTH_SHORT).show(); }).show());
+
         // Save
         btnSave.setOnClickListener(v -> {
             String url = editServerUrl.getText().toString().trim();

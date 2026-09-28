@@ -1,0 +1,242 @@
+__build_info:
+  rime_version: 1.17.0
+  timestamps:
+    bopomofo_t9_simon.schema: 1790583958
+    default: 1790572763
+    default.custom: 0
+    grammar: 1790583958
+    grammar.custom: 0
+    key_bindings: 1790572749
+    key_bindings.custom: 0
+    punctuation: 1790572749
+    punctuation.custom: 0
+custom_phrase:
+  db_class: stabledb
+  dictionary: ""
+  enable_completion: false
+  enable_sentence: false
+  initial_quality: 1
+  user_dict: custom_phrase
+engine:
+  filters:
+    - "simplifier@zh_hant_tw"
+    - uniquifier
+  processors:
+    - ascii_composer
+    - recognizer
+    - key_binder
+    - speller
+    - punctuator
+    - selector
+    - navigator
+    - fluency_editor
+  segmentors:
+    - ascii_segmentor
+    - matcher
+    - abc_segmentor
+    - punct_segmentor
+    - fallback_segmentor
+  translators:
+    - punct_translator
+    - "table_translator@custom_phrase"
+    - script_translator
+grammar:
+  language: "zh-hant-t-essay-bgw"
+key_binder:
+  bindings:
+    - {accept: "Control+p", send: Up, when: composing}
+    - {accept: "Control+n", send: Down, when: composing}
+    - {accept: "Control+b", send: Left, when: composing}
+    - {accept: "Control+f", send: Right, when: composing}
+    - {accept: "Control+a", send: Home, when: composing}
+    - {accept: "Control+e", send: End, when: composing}
+    - {accept: "Control+d", send: Delete, when: composing}
+    - {accept: "Control+k", send: "Shift+Delete", when: composing}
+    - {accept: "Control+h", send: BackSpace, when: composing}
+    - {accept: "Control+g", send: Escape, when: composing}
+    - {accept: "Control+bracketleft", send: Escape, when: composing}
+    - {accept: "Control+y", send: Page_Up, when: composing}
+    - {accept: "Alt+v", send: Page_Up, when: composing}
+    - {accept: "Control+v", send: Page_Down, when: composing}
+    - {accept: minus, send: Page_Up, when: has_menu}
+    - {accept: equal, send: Page_Down, when: has_menu}
+    - {accept: comma, send: Page_Up, when: paging}
+    - {accept: period, send: Page_Down, when: has_menu}
+    - {accept: "Control+Shift+1", select: .next, when: always}
+    - {accept: "Control+Shift+2", toggle: ascii_mode, when: always}
+    - {accept: "Control+Shift+3", toggle: full_shape, when: always}
+    - {accept: "Control+Shift+4", toggle: simplification, when: always}
+    - {accept: "Control+Shift+5", toggle: extended_charset, when: always}
+    - {accept: "Control+Shift+exclam", select: .next, when: always}
+    - {accept: "Control+Shift+at", toggle: ascii_mode, when: always}
+    - {accept: "Control+Shift+numbersign", toggle: full_shape, when: always}
+    - {accept: "Control+Shift+dollar", toggle: simplification, when: always}
+    - {accept: "Control+Shift+percent", toggle: extended_charset, when: always}
+  import_preset: default
+menu:
+  page_size: 9
+punctuator:
+  full_shape:
+    " ": {commit: "　"}
+    "!": {commit: "！"}
+    "\"": {pair: ["“", "”"]}
+    "#": ["＃", "⌘"]
+    "$": ["￥", "$", "€", "£", "¥", "¢", "¤"]
+    "%": ["％", "°", "℃"]
+    "&": "＆"
+    "'": {pair: ["‘", "’"]}
+    "(": "（"
+    ")": "）"
+    "*": ["＊", "·", "・", "×", "※", "❂"]
+    "+": "＋"
+    ",": {commit: "，"}
+    "-": "－"
+    .: {commit: "。"}
+    "/": ["／", "÷"]
+    ":": {commit: "："}
+    ";": {commit: "；"}
+    "<": ["《", "〈", "«", "‹"]
+    "=": "＝"
+    ">": ["》", "〉", "»", "›"]
+    "?": {commit: "？"}
+    "@": ["＠", "☯"]
+    "[": ["「", "【", "〔", "［"]
+    "\\": ["、", "＼"]
+    "]": ["」", "】", "〕", "］"]
+    "^": {commit: "……"}
+    _: "——"
+    "`": "｀"
+    "{": ["『", "〖", "｛"]
+    "|": ["·", "｜", "§", "¦"]
+    "}": ["』", "〗", "｝"]
+    "~": "～"
+  half_shape:
+    "!": {commit: "！"}
+    "\"": {pair: ["“", "”"]}
+    "#": "#"
+    "$": ["￥", "$", "€", "£", "¥", "¢", "¤"]
+    "%": ["%", "％", "°", "℃"]
+    "&": "&"
+    "'": {pair: ["‘", "’"]}
+    "(": "（"
+    ")": "）"
+    "*": ["*", "＊", "·", "・", "×", "※", "❂"]
+    "+": "+"
+    ",": {commit: "，"}
+    "-": "-"
+    .: {commit: "。"}
+    "/": ["、", "/", "／", "÷"]
+    ":": {commit: "："}
+    ";": {commit: "；"}
+    "<": ["《", "〈", "«", "‹"]
+    "=": "="
+    ">": ["》", "〉", "»", "›"]
+    "?": {commit: "？"}
+    "@": "@"
+    "[": ["「", "【", "〔", "［"]
+    "\\": ["、", "\\", "＼"]
+    "]": ["」", "】", "〕", "］"]
+    "^": {commit: "……"}
+    _: "——"
+    "`": "`"
+    "{": ["『", "〖", "｛"]
+    "|": ["·", "|", "｜", "§", "¦"]
+    "}": ["』", "〗", "｝"]
+    "~": ["~", "～"]
+  import_preset: default
+recognizer:
+  import_preset: default
+  patterns:
+    email: "^[A-Za-z][-_.0-9A-Za-z]*@.*$"
+    uppercase: "^[A-Z][-_+.'0-9A-Za-z]*$"
+    url: "^(www[.]|https?:|ftp:|mailto:).*$"
+schema:
+  author:
+    - "RIME spike"
+  description: |
+    1 ㄅㄆㄇㄈ / 2 ㄉㄊㄋㄌ / 3 ㄍㄎㄏ / 4 ㄐㄑㄒ /
+    5 ㄓㄔㄕㄖ / 6 ㄗㄘㄙ / 7 ㄧㄨㄩ /
+    8 ㄚㄛㄜㄝㄞㄟㄠㄡ / 9 ㄢㄣㄤㄥㄦ
+
+  name: "注音九宮格（Simon 分組）"
+  schema_id: bopomofo_t9_simon
+  version: 0.2
+selector:
+  bindings:
+    ISO_Left_Tab: previous_candidate
+    "Shift+Tab": previous_candidate
+    Tab: next_candidate
+  linear:
+    bindings: {ISO_Left_Tab: previous_candidate, "Shift+Tab": previous_candidate, Tab: next_candidate}
+  vertical:
+    bindings: {ISO_Left_Tab: previous_candidate, "Shift+Tab": previous_candidate, Tab: next_candidate}
+    linear: {bindings: {ISO_Left_Tab: previous_candidate, "Shift+Tab": previous_candidate, Tab: next_candidate}}
+speller:
+  algebra:
+    - "xform/^m(\\d)$/mu$1/"
+    - "xform/^r5$/er5/"
+    - "xform/iu/iou/"
+    - "xform/ui/uei/"
+    - "xform/ong/ung/"
+    - "xform/^yi?/i/"
+    - "xform/^wu?/u/"
+    - "xform/iu/v/"
+    - "xform/^([jqx])u/$1v/"
+    - "xform/([iuv])n/$1en/"
+    - "xform/^zhi?/Z/"
+    - "xform/^chi?/C/"
+    - "xform/^shi?/S/"
+    - "xform/^([zcsr])i/$1/"
+    - "xform/ai/A/"
+    - "xform/ei/I/"
+    - "xform/ao/O/"
+    - "xform/ou/U/"
+    - "xform/ang/K/"
+    - "xform/eng/G/"
+    - "xform/an/M/"
+    - "xform/en/N/"
+    - "xform/er/R/"
+    - "xform/eh/E/"
+    - "xform/([iv])e/$1E/"
+    - "derive/[bpmf]/1/"
+    - "derive/[dtnl]/2/"
+    - "derive/[gkh]/3/"
+    - "derive/[jqx]/4/"
+    - "derive/[ZCSr]/5/"
+    - "derive/[zcs]/6/"
+    - "derive/[iuv]/7/"
+    - "derive/[aoeEAIOU]/8/"
+    - "derive/[MNKGR]/9/"
+    - "derive/[1-5]$//"
+  alphabet: 123456789
+  delimiter: "'"
+  finals: ""
+  initials: 123456789
+  use_space: false
+switches:
+  - name: ascii_mode
+    reset: 0
+    states: ["中文", "西文"]
+  - name: full_shape
+    states: ["半角", "全角"]
+  - name: zh_hant_tw
+    reset: 1
+    states: ["臺灣正體", "臺灣正體"]
+  - name: ascii_punct
+    states: ["。，", "．，"]
+translator:
+  contextual_suggestions: true
+  dictionary: terra_pinyin
+  enable_sentence: true
+  enable_user_dict: false
+  max_homographs: 7
+  max_homophones: 7
+  preedit_format:
+    - "xform/([1-9])/$1/"
+  prism: bopomofo_t9_simon
+zh_hant_tw:
+  excluded_types:
+    - reverse_lookup
+  opencc_config: t2tw.json
+  option_name: zh_hant_tw
+  tips: none

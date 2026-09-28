@@ -46,6 +46,7 @@ import com.simon.voiceime.correct.OnDeviceCorrectionEngine;
 import com.simon.voiceime.correct.TimeoutWall;
 
 import org.json.JSONObject;
+import org.json.JSONArray;
 
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
@@ -166,6 +167,27 @@ public class SimonIMEService extends InputMethodService {
     private TextView boCursorLeft, boCursorRight;
     private List<String> renderedZhuyinCandidates = Collections.emptyList();
     private int renderedZhuyinCandidateCount = 0;
+
+    // Private T9 prototype remains a subpage of the traditional Zhuyin swipe page.
+    private View t9Keyboard;
+    private TextView t9PreviewView, t9AiView;
+    private LinearLayout t9CandidateItems;
+    private T9Engine t9Engine;
+    private boolean t9KeyboardConfigured = false;
+    private T9LearningStore t9Learning;
+    private ImeTelemetry imeTelemetry;
+    private final StringBuilder t9Punctuation = new StringBuilder();
+    private String t9AiSuggestion = "";
+    private String t9AdoptedSuggestion = "";
+    private String t9FirstCandidate = "";
+    private String t9SentenceId = java.util.UUID.randomUUID().toString();
+    private boolean t9BubbleChanged = false;
+    private int t9ChangedSegment = -1;
+    private boolean t9PrivateField = false;
+    private final Handler t9Handler = new Handler(Looper.getMainLooper());
+    private final Runnable t9AiRunnable = this::requestT9AiSuggestion;
+    private final T9AiReranker t9AiReranker = new T9AiReranker();
+    private volatile int t9Generation = 0;
 
     // Streaming state (APPEND mode with VAD)
     private volatile boolean streamingMode = false;
@@ -322,6 +344,9 @@ public class SimonIMEService extends InputMethodService {
             currentMode = Mode.REPLACE; // Watch owns its mode and HTTP dispatch; no phone streaming.
             return;
         }
+        imeTelemetry = ImeTelemetry.install(this);
+        SharedPreferences t9Prefs = getSharedPreferences("simon_ime_prefs", MODE_PRIVATE);
+        T9InitGuard.onImeStartup(T9InitGuard.adapt(t9Prefs));
         commandsHelper = new CommandsHelper(this);
         englishMapper = new EnglishMapper(this);
         onDeviceCorrection = createOnDeviceCorrectionEngine();
@@ -352,6 +377,9 @@ public class SimonIMEService extends InputMethodService {
         catch (Exception error) { Log.e(TAG, "Initial-symbol dictionary unavailable", error); }
         zhuyinAssociationHistory = new ZhuyinAssociationHistory(new java.io.File(getFilesDir(), "zhuyin_associations.tsv"));
         zhuyinInput = new ZhuyinInputController(createZhuyinEngine(), zhuyinWordIndex);
+        if (!isWatchService()) {
+        t9Learning = new T9LearningStore(this);
+        }
 
         // 背景初始化本機 STT
         localSTT = createLocalSTT();
@@ -388,6 +416,8 @@ public class SimonIMEService extends InputMethodService {
     @Override
     public void onStartInput(EditorInfo attribute, boolean restarting) {
         super.onStartInput(attribute, restarting);
+        t9PrivateField = isProtectedT9Field(attribute);
+        if (!restarting) { t9Generation++; t9Handler.removeCallbacks(t9AiRunnable); }
         // v6.20: only treat a genuinely new field (not an internal restart) as a field switch.
         // On a real switch, bump the generation guard and disarm any pending AI material so it
         // never leaks into an unrelated field. Keep state on restarting==true.
@@ -427,6 +457,8 @@ public class SimonIMEService extends InputMethodService {
                     return true;
                 case MotionEvent.ACTION_UP:
                 case MotionEvent.ACTION_CANCEL:
+                    if(event.getAction()==MotionEvent.ACTION_UP && currentKeyboardMode==KeyboardMode.BOPOMOFO)
+                        recordBopomofoTouch(v,"backspace",event);
                     handleTouchUp();
                     return true;
             }
@@ -543,6 +575,11 @@ public class SimonIMEService extends InputMethodService {
         setupKeyboardSwipe(voiceKeyboard);
         setupKeyboardSwipe(bopomofoKeyboard);
         setupKeyboardSwipe(englishKeyboard);
+        t9Keyboard = rootView.findViewById(R.id.t9Keyboard);
+        t9PreviewView = rootView.findViewById(R.id.t9Preview);
+        t9CandidateItems = rootView.findViewById(R.id.t9Candidates);
+        t9AiView = rootView.findViewById(R.id.t9AiSuggestion);
+        setupKeyboardSwipe(t9Keyboard);
 
         // 設定注音、英文鍵盤和數字鍵盤的按鍵處理
         setupTypingKeyboard(bopomofoKeyboard);
@@ -3145,6 +3182,180 @@ public class SimonIMEService extends InputMethodService {
 
     // ==================== Keyboard Switching ====================
 
+    private T9Engine createT9Engine() {
+        if (T9InitGuard.isDisabled(T9InitGuard.adapt(
+                getSharedPreferences("simon_ime_prefs", MODE_PRIVATE)))) return null;
+        try { return (T9Engine) Class.forName("com.simon.voiceime.T9RimeEngine")
+                .getDeclaredConstructor(android.content.Context.class).newInstance(this); }
+        catch (Throwable e) { Log.e(TAG, "Phone T9 engine unavailable", e); return null; }
+    }
+
+    private void showT9Keyboard() {
+        if (t9Keyboard == null) return;
+        T9InitGuard.Preferences prefs = T9InitGuard.adapt(
+                getSharedPreferences("simon_ime_prefs", MODE_PRIVATE));
+        if (T9InitGuard.isDisabled(prefs)) {
+            android.widget.Toast.makeText(this,
+                    "九宮格上次載入失敗已暫停，可在設定頁重新啟用",
+                    android.widget.Toast.LENGTH_LONG).show();
+            return;
+        }
+        if (t9Engine == null) t9Engine = createT9Engine();
+        if (t9Engine == null || !t9Engine.available()) {
+            String message=t9Engine==null?"九宮格初始化失敗：建立引擎失敗"
+                    : !t9Engine.initializationError().isEmpty()?"九宮格初始化失敗："+t9Engine.initializationStep()+"，"+t9Engine.initializationError()
+                    : "九宮格準備中："+t9Engine.initializationStep()+"，已 "+(t9Engine.initializationElapsedMs()/1000)+" 秒";
+            android.widget.Toast.makeText(this,message,android.widget.Toast.LENGTH_SHORT).show();return;
+        }
+        setupT9Keyboard();
+        getSharedPreferences("simon_ime_prefs", MODE_PRIVATE).edit().putBoolean("t9_last_used", true).apply();
+        currentKeyboardMode = KeyboardMode.BOPOMOFO;
+        bopomofoKeyboard.setVisibility(View.GONE); t9Keyboard.setVisibility(View.VISIBLE);
+        if (!getSharedPreferences("simon_ime_prefs", MODE_PRIVATE).getBoolean("t9_help_seen", false)) showT9Help();
+        renderT9();
+    }
+
+    private void showTraditionalZhuyin() {
+        getSharedPreferences("simon_ime_prefs", MODE_PRIVATE).edit().putBoolean("t9_last_used", false).apply();
+        if (t9Keyboard != null) t9Keyboard.setVisibility(View.GONE);
+        if (bopomofoKeyboard != null) bopomofoKeyboard.setVisibility(View.VISIBLE);
+        currentKeyboardMode = KeyboardMode.BOPOMOFO;
+    }
+
+    private void showT9Help() {
+        getSharedPreferences("simon_ime_prefs", MODE_PRIVATE).edit().putBoolean("t9_help_seen", true).apply();
+        new android.app.AlertDialog.Builder(this).setTitle("注音九宮格")
+                .setMessage("預設每字按兩下（聲母那格＋韻母那格），不用打聲調；也可點預覽列旁的「兩按」切換「全碼」，按完整注音符號群，再按空白選字分段。句子越長越準。選錯了點一下預覽列的字就能換。打字停一下，AI 會給整句建議，點它就採用。")
+                .setPositiveButton("開始試用", null).show();
+    }
+
+    private void setupT9Keyboard() {
+        if (t9Keyboard == null || t9Engine == null || t9KeyboardConfigured) return;
+        t9KeyboardConfigured = true;
+        setupT9Keys(t9Keyboard);
+        boolean twoPress = getSharedPreferences("simon_ime_prefs", MODE_PRIVATE).getBoolean("t9_two_press_mode", true);
+        t9Engine.setTwoPressMode(twoPress);
+        TextView modeButton=t9Keyboard.findViewById(R.id.t9Mode); modeButton.setText(twoPress?"兩按":"全碼");
+        modeButton.setOnClickListener(v->{boolean next=!t9Engine.twoPressMode();if(t9Engine.keySequence().isEmpty()&&t9Engine.setTwoPressMode(next)){getSharedPreferences("simon_ime_prefs",MODE_PRIVATE).edit().putBoolean("t9_two_press_mode",next).apply();modeButton.setText(next?"兩按":"全碼");}});
+        t9Keyboard.findViewById(R.id.t9Backspace).setOnClickListener(v -> {
+            String before=t9PreviewText(); if (t9Engine != null) t9Engine.backspace(); t9Punctuation.setLength(0); t9AdoptedSuggestion=""; t9Generation++;
+            String after=t9PreviewText();if(!before.equals(after))recordCorrectionEvent("t9","all",before,after,"backspace");
+            t9Handler.removeCallbacks(t9AiRunnable); renderT9(); scheduleT9Ai();
+        });
+        t9Keyboard.findViewById(R.id.t9To41).setOnClickListener(v -> showTraditionalZhuyin());
+        t9Keyboard.findViewById(R.id.t9Space).setOnClickListener(v -> {
+            List<String> c=t9NativeCandidates(-1); if(!c.isEmpty() && t9Engine!=null) {t9Engine.chooseCurrent(0);if(!t9Engine.twoPressMode())t9Engine.finishSegment();t9AdoptedSuggestion="";t9Generation++;renderT9();scheduleT9Ai();}
+        });
+        t9Keyboard.findViewById(R.id.t9Comma).setOnClickListener(v -> appendT9Punctuation("，"));
+        t9Keyboard.findViewById(R.id.t9Comma).setOnLongClickListener(v -> { appendT9Punctuation(","); return true; });
+        t9Keyboard.findViewById(R.id.t9Period).setOnClickListener(v -> appendT9Punctuation("。"));
+        t9Keyboard.findViewById(R.id.t9Period).setOnLongClickListener(v -> { appendT9Punctuation("."); return true; });
+        t9Keyboard.findViewById(R.id.t9Enter).setOnClickListener(v -> commitT9Preview());
+        t9AiView.setOnClickListener(v -> { if(!t9AiSuggestion.isEmpty()){t9AdoptedSuggestion=t9AiSuggestion;t9AiView.setBackgroundColor(0xff37546a);renderT9Preview(t9AiSuggestion,true);} });
+    }
+
+    private void setupT9Keys(View view) {
+        if(view instanceof ViewGroup) for(int i=0;i<((ViewGroup)view).getChildCount();i++) setupT9Keys(((ViewGroup)view).getChildAt(i));
+        Object tag=view.getTag(); if(tag==null||!tag.toString().startsWith("t9:"))return;
+        String key=tag.toString().substring(3);
+        view.setOnTouchListener((v,event)->{if(event.getAction()==MotionEvent.ACTION_UP)recordT9Touch(v,key,event);return false;});
+        view.setOnClickListener(v->onT9Key(key));
+    }
+
+    private void recordT9Touch(View v,String key,MotionEvent e) {
+        recordKeyTouch(v,key,e,"bopomofo");
+    }
+    private void recordBopomofoTouch(View v,String key,MotionEvent e){recordKeyTouch(v,key,e,"bopomofo");}
+    private void recordKeyTouch(View v,String key,MotionEvent e,String page){
+        boolean protectedField=t9PrivateField;
+        try{int[] p=new int[2];v.getLocationOnScreen(p);float cx=p[0]+v.getWidth()/2f,cy=p[1]+v.getHeight()/2f;
+            float dx=e.getRawX()-cx,dy=e.getRawY()-cy;EditorInfo info=getCurrentInputEditorInfo();
+            if(t9Learning!=null&&!protectedField&&getSharedPreferences("simon_ime_prefs",MODE_PRIVATE).getBoolean("t9_learning_enabled",true))
+                t9Learning.touch(System.currentTimeMillis(),page,key,dx,dy,cx,cy,info==null?"":info.packageName,t9SentenceId);
+            if(imeTelemetry!=null)imeTelemetry.key(page,key,dx,dy,cx,cy,protectedField);
+        }catch(Exception ignored){}
+    }
+
+    private void onT9Key(String key) {
+        if(t9Engine==null||!t9Engine.available())return;
+        t9Engine.key(key);t9AdoptedSuggestion="";t9AiView.setBackgroundColor(0x0023414f);
+        if(t9FirstCandidate.isEmpty()){List<String> c=t9NativeCandidates(-1);if(!c.isEmpty())t9FirstCandidate=c.get(0);}
+        t9Generation++;t9Handler.removeCallbacks(t9AiRunnable);renderT9();scheduleT9Ai();
+    }
+
+    private void appendT9Punctuation(String text){t9Punctuation.append(text);t9AdoptedSuggestion="";t9Generation++;renderT9();}
+
+    private JSONObject t9Snapshot(){try{return new JSONObject(t9Engine==null?"{}":t9Engine.snapshot());}catch(Exception e){return new JSONObject();}}
+    private String t9PreviewText(){JSONObject s=t9Snapshot();String p=s.optString("preview","");if(p.isEmpty())p=s.optString("preedit","");return t9AdoptedSuggestion.isEmpty()?p+t9Punctuation:t9AdoptedSuggestion;}
+
+    private List<String> t9NativeCandidates(int offset) {
+        ArrayList<String> out=new ArrayList<>();try{String json;if(offset<0){JSONArray a=t9Snapshot().optJSONArray("candidates");json=a==null?"[]":a.toString();}else json=t9Engine.candidatesAt(offset);JSONArray a=new JSONArray(json);for(int i=0;i<a.length();i++)out.add(a.getString(i));}catch(Exception ignored){}
+        return out;
+    }
+    private List<String> t9CurrentCandidates(int offset) {
+        ArrayList<String> out=new ArrayList<>(t9NativeCandidates(offset));
+        if(t9Learning!=null&&!t9PrivateField&&getSharedPreferences("simon_ime_prefs",MODE_PRIVATE).getBoolean("t9_learning_enabled",true))return t9Learning.rank(out);return out;
+    }
+
+    private void renderT9(){
+        if(t9PreviewView==null||t9Engine==null)return;
+        String full=t9PreviewText();renderT9Preview(full,false);t9CandidateItems.removeAllViews();
+        List<String> visible=t9CurrentCandidates(-1);recordCandidateEvent("t9",visible,-1);
+        for(String c:visible){TextView item=new TextView(this);item.setGravity(Gravity.CENTER);item.setText(c);item.setTextSize(16);item.setTextColor(getColor(R.color.key_text));item.setBackgroundResource(R.color.key_bg);item.setPadding(dp(12),0,dp(12),0);item.setOnClickListener(v->{int i=t9NativeCandidates(-1).indexOf(c);recordCandidateEvent("t9",visible,i);String before=t9PreviewText();if(i>=0)t9Engine.chooseCurrent(i);String after=t9PreviewText();if(!before.equals(after))recordCorrectionEvent("t9","current",before,after,"candidate");t9AdoptedSuggestion="";t9Generation++;renderT9();scheduleT9Ai();});t9CandidateItems.addView(item,new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT,ViewGroup.LayoutParams.MATCH_PARENT));}
+        if(t9AiSuggestion.isEmpty()){t9AiView.setVisibility(View.GONE);}else{t9AiView.setVisibility(View.VISIBLE);t9AiView.setText("AI 建議："+t9AiSuggestion);}
+    }
+
+    private void renderT9Preview(String text,boolean ai){
+        if(t9PreviewView==null)return;
+        t9PreviewView.setText(text.isEmpty()?"輸入預覽":text);t9PreviewView.setBackgroundColor(ai?0xff37546a:getColor(R.color.key_bg));
+        if(ai||text.isEmpty())return;
+        android.text.SpannableString span=new android.text.SpannableString(text);int cp=0;
+        for(int i=0;i<text.length();){int end=i+Character.charCount(text.codePointAt(i));final int segment=segmentForPreviewCodePoint(cp);if(segment>=0)span.setSpan(new android.text.style.ClickableSpan(){@Override public void onClick(View w){showT9Bubble(segment);}@Override public void updateDrawState(android.text.TextPaint ds){ds.setUnderlineText(false);ds.setColor(0xffe8e8e8);}},i,end,android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);i=end;cp++;}
+        t9PreviewView.setText(span);t9PreviewView.setMovementMethod(android.text.method.LinkMovementMethod.getInstance());
+    }
+
+    private int segmentForPreviewCodePoint(int codePointIndex){
+        try{JSONArray segments=t9Snapshot().optJSONArray("segments");if(segments==null)return -1;int remaining=codePointIndex;for(int i=0;i<segments.length();i++){String text=segments.getJSONObject(i).optString("text","");int count=text.codePointCount(0,text.length());if(remaining<count)return i;remaining-=count;}}catch(Exception ignored){}return -1;
+    }
+
+    private void showT9Bubble(int keyOffset){
+        List<String> candidates=t9CurrentCandidates(keyOffset);if(candidates.isEmpty())return;
+        LinearLayout box=new LinearLayout(this);box.setOrientation(LinearLayout.HORIZONTAL);box.setBackgroundColor(0xff303746);
+        final PopupWindow popup=new PopupWindow(box,ViewGroup.LayoutParams.WRAP_CONTENT,dp(48),true);popup.setOutsideTouchable(true);popup.setBackgroundDrawable(new ColorDrawable(0xff303746));
+        for(String value:candidates){TextView v=new TextView(this);v.setText(value);v.setTextColor(Color.WHITE);v.setTextSize(16);v.setGravity(Gravity.CENTER);v.setPadding(dp(12),0,dp(12),0);v.setOnClickListener(x->{String before=t9PreviewText();int index=t9NativeCandidates(keyOffset).indexOf(value);if(index>=0&&t9Engine.chooseAt(keyOffset,index)){recordCorrectionEvent("t9",Integer.toString(keyOffset),before,value,"bubble");t9BubbleChanged=true;t9ChangedSegment=keyOffset;t9AdoptedSuggestion="";t9Generation++;renderT9();scheduleT9Ai();}popup.dismiss();});box.addView(v,new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT,dp(48)));}
+        popup.showAsDropDown(t9PreviewView,0,-dp(52));
+    }
+
+    private void scheduleT9Ai(){if(t9Engine==null||t9PrivateField||t9Engine.keySequence().isEmpty())return;if(getSharedPreferences("simon_ime_prefs",MODE_PRIVATE).getBoolean("t9_ai_enabled",true))t9Handler.postDelayed(t9AiRunnable,800);}
+
+    private void requestT9AiSuggestion(){
+        if(t9PrivateField||t9Engine==null||!t9Engine.available()||!getSharedPreferences("simon_ime_prefs",MODE_PRIVATE).getBoolean("t9_ai_enabled",true))return;final String sequence=t9Engine.keySequence();final int generation=t9Generation;
+        InputConnection ic=getCurrentInputConnection();String before="",after="";if(ic!=null){CharSequence b=ic.getTextBeforeCursor(200,0),a=ic.getTextAfterCursor(200,0);if(b!=null)before=b.toString();if(a!=null)after=a.toString();}
+        final String contextBefore=before.length()>200?before.substring(before.length()-200):before,contextAfter=after.length()>200?after.substring(0,200):after;
+        new Thread(()->{try{JSONArray segments=new JSONArray();for(String keys:t9Engine.segmentKeys()){JSONArray all=new JSONArray(t9Engine.candidatesFor(keys)),top=new JSONArray();for(String c:t9Learning==null||t9PrivateField?toList(all):t9Learning.rank(toList(all)))if(top.length()<10)top.put(c);segments.put(new JSONObject().put("keys",keys).put("candidates",top));}
+            t9AiReranker.request(this,segments,contextBefore,contextAfter,t9Engine.twoPressMode()?"two_press":"full",text->{t9Handler.post(()->{if(generation==t9Generation&&!t9PrivateField&&getSharedPreferences("simon_ime_prefs",MODE_PRIVATE).getBoolean("t9_ai_enabled",true)){t9AiSuggestion=text;renderT9();}});});}catch(Exception ignored){}},"T9-rerank-prepare").start();
+    }
+
+    private static List<String> toList(JSONArray array){ArrayList<String> out=new ArrayList<>();if(array!=null)for(int i=0;i<array.length();i++)out.add(array.optString(i));return out;}
+
+    private void commitT9Preview(){
+        if(t9Engine==null)return;String seq=t9Engine.keySequence(),base=t9AdoptedSuggestion.isEmpty()?t9Snapshot().optString("preview",""):t9AdoptedSuggestion;
+        if(base.isEmpty())base=t9Snapshot().optString("preedit","");String output=base+(t9AdoptedSuggestion.isEmpty()?t9Punctuation.toString():"");if(output.isEmpty())return;
+        InputConnection ic=getCurrentInputConnection();if(ic!=null)commitTextProgrammatically(ic,output);
+        recordCommitEvent("t9",output,t9FirstCandidate,t9AiSuggestion,!output.equals(t9FirstCandidate));
+        if(!t9PrivateField&&t9Learning!=null&&getSharedPreferences("simon_ime_prefs",MODE_PRIVATE).getBoolean("t9_learning_enabled",true))t9Learning.commit(currentPackageName(),seq,t9FirstCandidate,t9AiSuggestion,output,t9BubbleChanged,t9ChangedSegment);
+        clearT9State();
+    }
+
+    private String currentPackageName(){EditorInfo i=getCurrentInputEditorInfo();return i==null||i.packageName==null?"":i.packageName;}
+    private static boolean isProtectedT9Field(EditorInfo i){if(i==null)return true;int flags=i.imeOptions&EditorInfo.IME_FLAG_NO_PERSONALIZED_LEARNING;int cls=i.inputType&android.text.InputType.TYPE_MASK_CLASS,var=i.inputType&android.text.InputType.TYPE_MASK_VARIATION;boolean password=(cls==android.text.InputType.TYPE_CLASS_TEXT&&(var==android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD||var==android.text.InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD||var==android.text.InputType.TYPE_TEXT_VARIATION_WEB_PASSWORD))||(cls==android.text.InputType.TYPE_CLASS_NUMBER&&var==android.text.InputType.TYPE_NUMBER_VARIATION_PASSWORD);return flags!=0||password;}
+
+    private void recordCandidateEvent(String page,List<String> candidates,int chosen){if(imeTelemetry==null)return;try{JSONArray shown=new JSONArray();if(candidates!=null)for(int i=0;i<Math.min(10,candidates.size());i++)shown.put(candidates.get(i));imeTelemetry.record("candidate",page,new JSONObject().put("shown",shown).put("chosen_index",chosen),t9PrivateField);}catch(Exception ignored){}}
+    private void recordCommitEvent(String page,String text,String first,String ai,boolean corrected){if(imeTelemetry==null)return;try{imeTelemetry.record("commit",page,new JSONObject().put("text",text).put("engine_top1",first==null?"":first).put("ai_suggestion",ai==null?"":ai).put("corrected",corrected),t9PrivateField);}catch(Exception ignored){}}
+    private void recordCorrectionEvent(String page,String segment,String from,String to,String via){if(imeTelemetry==null)return;try{imeTelemetry.record("correction",page,new JSONObject().put("segment",segment).put("from",from).put("to",to).put("via",via),t9PrivateField);}catch(Exception ignored){}}
+
+    private void clearT9State(){t9Handler.removeCallbacks(t9AiRunnable);t9Generation++;if(t9Engine!=null)t9Engine.clear();t9Punctuation.setLength(0);t9AiSuggestion="";t9AdoptedSuggestion="";t9FirstCandidate="";t9BubbleChanged=false;t9ChangedSegment=-1;t9SentenceId=java.util.UUID.randomUUID().toString();if(t9PreviewView!=null)renderT9();}
+
     private void setupKeyboardSwipe(View page) {
         if (!isWatchService() && page instanceof SwipeInterceptLayout) {
             ((SwipeInterceptLayout) page).setOnSwipeListener(this::swipeKeyboard);
@@ -3155,7 +3366,7 @@ public class SimonIMEService extends InputMethodService {
         KeyboardMode mode = KeyboardPager.next(currentKeyboardMode, direction);
         switchKeyboard(mode);
         View page = mode == KeyboardMode.VOICE ? voiceKeyboard
-                : mode == KeyboardMode.BOPOMOFO ? bopomofoKeyboard
+                : mode == KeyboardMode.BOPOMOFO ? (getSharedPreferences("simon_ime_prefs", MODE_PRIVATE).getBoolean("t9_last_used", false) ? t9Keyboard : bopomofoKeyboard)
                 : mode == KeyboardMode.ENGLISH ? englishKeyboard : numbersKeyboard;
         try {
             page.setTranslationX((direction == KeyboardPager.Direction.LEFT ? 1f : -1f)
@@ -3180,7 +3391,8 @@ public class SimonIMEService extends InputMethodService {
     }
 
     private void switchKeyboard(KeyboardMode mode) {
-        for (View page : new View[] { voiceKeyboard, bopomofoKeyboard, englishKeyboard, numbersKeyboard }) {
+        for (View page : new View[] { voiceKeyboard, bopomofoKeyboard, t9Keyboard, englishKeyboard, numbersKeyboard }) {
+            if (page == null) continue;
             resetKeyboardAnimation(page);
         }
         // v6.23: clear English buffer when leaving English keyboard
@@ -3189,10 +3401,13 @@ public class SimonIMEService extends InputMethodService {
         }
         if (currentKeyboardMode == KeyboardMode.BOPOMOFO && mode != KeyboardMode.BOPOMOFO) {
             clearBopomofoBuffer();
+            clearT9State();
         }
         currentKeyboardMode = mode;
         voiceKeyboard.setVisibility(mode == KeyboardMode.VOICE ? View.VISIBLE : View.GONE);
-        bopomofoKeyboard.setVisibility(mode == KeyboardMode.BOPOMOFO ? View.VISIBLE : View.GONE);
+        boolean t9 = mode == KeyboardMode.BOPOMOFO && getSharedPreferences("simon_ime_prefs", MODE_PRIVATE).getBoolean("t9_last_used", false);
+        bopomofoKeyboard.setVisibility(mode == KeyboardMode.BOPOMOFO && !t9 ? View.VISIBLE : View.GONE);
+        if (t9Keyboard != null) t9Keyboard.setVisibility(t9 ? View.VISIBLE : View.GONE);
         englishKeyboard.setVisibility(mode == KeyboardMode.ENGLISH ? View.VISIBLE : View.GONE);
         numbersKeyboard.setVisibility(mode == KeyboardMode.NUMBERS ? View.VISIBLE : View.GONE);
         // Close any open panel when switching keyboards
@@ -3202,7 +3417,8 @@ public class SimonIMEService extends InputMethodService {
     /**
      * Recursively find all views with "key:xxx" tags and set up click listeners.
      */
-    private void setupTypingKeyboard(View parent) {
+    private void setupTypingKeyboard(View parent) { setupTypingKeyboard(parent,parent==bopomofoKeyboard); }
+    private void setupTypingKeyboard(View parent,boolean traditionalBopomofo) {
         if (!(parent instanceof ViewGroup)) return;
         ViewGroup vg = (ViewGroup) parent;
         for (int i = 0; i < vg.getChildCount(); i++) {
@@ -3213,11 +3429,12 @@ public class SimonIMEService extends InputMethodService {
                 if (key.equals("backspace")) {
                     setupBackspaceTouch(child);
                 } else {
+                    if(traditionalBopomofo)child.setOnTouchListener((v,e)->{if(e.getAction()==MotionEvent.ACTION_UP)recordBopomofoTouch(v,key,e);return false;});
                     child.setOnClickListener(v -> onTypingKeyPressed(key));
                 }
             }
             if (child instanceof ViewGroup) {
-                setupTypingKeyboard(child);
+                setupTypingKeyboard(child,traditionalBopomofo);
             }
         }
     }
@@ -3265,6 +3482,9 @@ public class SimonIMEService extends InputMethodService {
                 break;
             case "toBopomofo":
                 switchKeyboard(KeyboardMode.BOPOMOFO);
+                break;
+            case "toT9":
+                showT9Keyboard();
                 break;
             default:
                 if (currentKeyboardMode == KeyboardMode.BOPOMOFO && isBopomofoSymbol(key)) {
@@ -3569,6 +3789,8 @@ public class SimonIMEService extends InputMethodService {
         InputConnection ic = getCurrentInputConnection();
         if (ic != null) {
             if (!state.commitText.isEmpty()) {
+                String top=state.candidates.isEmpty()?"":state.candidates.get(0);
+                recordCommitEvent("bopomofo",state.commitText,top,"",false);
                 commitTextProgrammatically(ic, state.commitText);
                 if (lastCommittedZhuyinWord != null && zhuyinAssociationHistory != null)
                     zhuyinAssociationHistory.record(lastCommittedZhuyinWord, state.commitText);
@@ -3581,13 +3803,24 @@ public class SimonIMEService extends InputMethodService {
             }
             if (state.composingText.isEmpty()) ic.finishComposingText();
             else {
-                ic.setComposingText(state.composingText, 1);
-                moveEditorCursorWithinComposition(ic, state.composingText, state.cursorPosition);
+                android.text.SpannableString composing=highlightZhuyinTarget(state.composingText,state.cursorPosition);
+                ic.setComposingText(composing, 1); // external text cursor stays after the full composition
             }
         }
         if (boCursorLeft != null) boCursorLeft.setVisibility(state.composingText.isEmpty() ? View.INVISIBLE : View.VISIBLE);
         if (boCursorRight != null) boCursorRight.setVisibility(state.composingText.isEmpty() ? View.INVISIBLE : View.VISIBLE);
         renderZhuyinCandidates(state.candidates, state.candidateKind);
+    }
+
+    private static android.text.SpannableString highlightZhuyinTarget(String value,int cursorCodePoints){
+        android.text.SpannableString span=new android.text.SpannableString(value);
+        if(value==null||value.isEmpty())return span;
+        int count=value.codePointCount(0,value.length());
+        int cp=Math.max(0,Math.min(count-1,cursorCodePoints>=count?count-1:cursorCodePoints));
+        int start=value.offsetByCodePoints(0,cp),end=value.offsetByCodePoints(start,1);
+        span.setSpan(new android.text.style.BackgroundColorSpan(0xffffc857),start,end,android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+        span.setSpan(new android.text.style.ForegroundColorSpan(0xff1a1a2e),start,end,android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+        return span;
     }
 
     private void moveEditorCursorWithinComposition(InputConnection ic, String composing, int cursor) {
@@ -3609,6 +3842,7 @@ public class SimonIMEService extends InputMethodService {
         boCandidateItems.removeAllViews();
         renderedZhuyinCandidateCount = 0;
         renderedZhuyinCandidates = new ArrayList<>(candidates);
+        recordCandidateEvent("bopomofo",renderedZhuyinCandidates,-1);
         renderedZhuyinCandidateKind = kind;
         appendZhuyinCandidateBatch();
         if (boCandidateScroll != null) boCandidateScroll.scrollTo(0, 0);
@@ -3628,10 +3862,16 @@ public class SimonIMEService extends InputMethodService {
             candidate.setEllipsize(android.text.TextUtils.TruncateAt.END);
             candidate.setPadding(dp(12), 0, dp(12), 0);
             String value = renderedZhuyinCandidates.get(i);
-            candidate.setText(("association".equals(renderedZhuyinCandidateKind) ? "…" : "abbreviation".equals(renderedZhuyinCandidateKind) ? "首·" : "") + value);
+            String origin=zhuyinInput==null?"engine":zhuyinInput.candidateOrigin(i);
+            candidate.setText(("association".equals(renderedZhuyinCandidateKind) ? "…" : "abbreviation".equals(renderedZhuyinCandidateKind)||"abbreviation".equals(origin) ? "首·" : "mixed".equals(renderedZhuyinCandidateKind) ? "音·" : "") + value);
             String kind = renderedZhuyinCandidateKind;
-            candidate.setOnClickListener(v -> applyZhuyinState("association".equals(kind)
-                    ? zhuyinInput.chooseAssociation(candidateIndex) : zhuyinInput.chooseCandidate(candidateIndex)));
+            candidate.setOnClickListener(v -> {
+                recordCandidateEvent("bopomofo",renderedZhuyinCandidates,candidateIndex);
+                if(!"association".equals(kind)&&candidateIndex>0&&candidateIndex<renderedZhuyinCandidates.size())
+                    recordCorrectionEvent("bopomofo","all",renderedZhuyinCandidates.get(0),renderedZhuyinCandidates.get(candidateIndex),"candidate");
+                applyZhuyinState("association".equals(kind)
+                    ? zhuyinInput.chooseAssociation(candidateIndex) : zhuyinInput.chooseCandidate(candidateIndex));
+            });
             boCandidateItems.addView(candidate, new LinearLayout.LayoutParams(
                     ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.MATCH_PARENT));
         }
@@ -4519,6 +4759,7 @@ public class SimonIMEService extends InputMethodService {
     public void onFinishInputView(boolean finishingInput) {
         dismissSymbolPopup();
         if (!isWatchService() && zhuyinInput != null) clearBopomofoBuffer();
+        if (!isWatchService()) clearT9State();
         if (mainHandler != null) {
             mainHandler.removeCallbacks(connectionWarmUpRunnable);
             clearServerWaitBudgetCallbacks();
@@ -4534,6 +4775,8 @@ public class SimonIMEService extends InputMethodService {
         dismissSymbolPopup();
         if (zhuyinInput != null) zhuyinInput.close();
         if (zhuyinWordIndex != null) zhuyinWordIndex.close();
+        if (t9Engine != null) t9Engine.close();
+        if (t9Learning != null) t9Learning.close();
         if (isRecording) {
             isRecording = false;
             streamingMode = false;

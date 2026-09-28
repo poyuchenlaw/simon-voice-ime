@@ -269,6 +269,12 @@
         android:layout_height="wrap_content"
         android:visibility="gone" />
 
+    <include
+        layout="@layout/keyboard_t9"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:visibility="gone" />
+
     <!-- ========== 數字符號鍵盤（預設隱藏） ========== -->
     <include
         layout="@layout/keyboard_numbers"

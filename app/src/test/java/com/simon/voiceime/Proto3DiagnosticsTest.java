@@ -1,0 +1,48 @@
+package com.simon.voiceime;
+
+import org.json.JSONObject;
+import org.junit.Test;
+import java.util.Arrays;
+import java.io.File;
+import static org.junit.Assert.*;
+
+public class Proto3DiagnosticsTest {
+    @Test public void apkMarkerUsesVersionAndUpdateTime() {
+        assertEquals("apk:73:123456", T9AssetVersion.fromPackage(73,123456));
+        assertTrue(T9AssetVersion.shouldCopy("apk:72:123456",T9AssetVersion.fromPackage(73,123456)));
+        assertFalse(T9AssetVersion.shouldCopy("apk:73:123456",T9AssetVersion.fromPackage(73,123456)));
+    }
+    @Test public void protectedFieldsPersistOnlySkipMarker() throws Exception {
+        JSONObject fields=new JSONObject().put("text","do-not-record-this").put("key","secret");
+        JSONObject event=ImeTelemetry.makeEvent(1,"s","v","commit","bopomofo",fields,true);
+        assertEquals("t9_init",event.getString("type"));
+        assertEquals("protected_field_skipped",event.getString("step"));
+        assertFalse(event.toString().contains("do-not-record-this"));
+        assertFalse(event.toString().contains("secret"));
+    }
+    @Test public void retryBatchHasStableId() throws Exception {
+        JSONObject e=new JSONObject().put("ts",7).put("type","key");
+        String first=ImeTelemetry.stableBatchId(Arrays.asList(e));
+        assertEquals(first,ImeTelemetry.stableBatchId(Arrays.asList(new JSONObject(e.toString()))));
+        assertNotEquals(first,ImeTelemetry.stableBatchId(Arrays.asList(new JSONObject().put("ts",8).put("type","key"))));
+    }
+    @Test public void failedUploadLeavesBatchForSameIdRetry() throws Exception {
+        File dir=new File(System.getProperty("java.io.tmpdir"),"ime-spool-test-"+System.nanoTime());assertTrue(dir.mkdirs());
+        try {
+            TelemetrySpool q=new TelemetrySpool(new File(dir,"events.jsonl"),1024);
+            q.add(new JSONObject().put("ts",1).put("type","key"));
+            java.util.List<JSONObject> first=q.batch(200);String id=ImeTelemetry.stableBatchId(first);
+            // A failed HTTP post performs no acknowledge; retry returns the same batch identity.
+            assertEquals(1,q.size());assertEquals(id,ImeTelemetry.stableBatchId(q.batch(200)));
+            assertTrue(q.acknowledge(id,1));assertEquals(0,q.size());
+        } finally { for(File f:dir.listFiles())f.delete();dir.delete(); }
+    }
+    @Test public void spoolNeverExceedsLimitForSingleOversizedEvent() throws Exception {
+        File dir=new File(System.getProperty("java.io.tmpdir"),"ime-spool-limit-"+System.nanoTime());assertTrue(dir.mkdirs());
+        try {
+            TelemetrySpool q=new TelemetrySpool(new File(dir,"events.jsonl"),128);
+            q.add(new JSONObject().put("payload",new String(new char[256]).replace('\0','x')));
+            assertTrue(q.bytes()<=128);assertEquals(0,q.size());
+        } finally { for(File f:dir.listFiles())f.delete();dir.delete(); }
+    }
+}

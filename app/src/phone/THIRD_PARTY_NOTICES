@@ -1038,3 +1038,11 @@ For some ISAs (for example, for MIPS) it's impossible to get gain from such filt
 http://www.7-zip.org
 http://www.7-zip.org/sdk.html
 http://www.7-zip.org/support.html
+
+
+Octagram language model support:
+- librime-octagram, copyright 2015-2024, licensed under BSD-3-Clause.
+  Source: https://github.com/lotem/librime-octagram (commit 57d18b9f58e5284bd891d559f6bdd16cf60341e9)
+- rime-octagram-data, licensed under LGPL-3.0.
+  Source: https://github.com/lotem/rime-octagram-data (commit 97bf55046aad163c3d1881abae5312040b1bbed9)
+Full license texts are included in assets/licenses/.

@@ -2,8 +2,8 @@ plugins {
     id 'com.android.application'
 }
 
-def phoneVersionCodeValue = rootProject.findProperty("phoneVersionCode")?.toString() ?: "72"
-def phoneVersionNameValue = rootProject.findProperty("phoneVersionName")?.toString() ?: "6.35"
+def phoneVersionCodeValue = rootProject.findProperty("phoneVersionCode")?.toString() ?: "73"
+def phoneVersionNameValue = rootProject.findProperty("phoneVersionName")?.toString() ?: "6.36-proto3"
 
 android {
     namespace 'com.simon.voiceime'
@@ -13,8 +13,8 @@ android {
         applicationId "com.simon.voiceime"
         minSdk 26
         targetSdk 34
-        versionCode 72
-        versionName "6.35"
+        versionCode 74
+        versionName "6.37"
     }
 
     flavorDimensions "device"
@@ -83,8 +83,14 @@ def buildZhuyinIndex = tasks.register("buildPhoneZhuyinIndex", Exec) {
     commandLine "/home/simon/whisper-to-input-proxy/.g2pw_venv/bin/python",
             "scripts/build_v633_zhuyin_index.py"
 }
+def buildPhoneRime = tasks.register("buildPhoneRime", Exec) {
+    workingDir rootProject.projectDir
+    inputs.files(file("src/phone/cpp/rime_jni.cpp"), file("../evidence/rime_spike/android-prefix/lib/librime.so"), file("../scripts/build_phone_rime_jni.sh"), file("../scripts/prepare_t9_rime_assets.py"))
+    outputs.files(file("src/phone/jniLibs/arm64-v8a/librime.so"), file("src/phone/jniLibs/arm64-v8a/librime_jni.so"))
+    commandLine "bash", "-c", "python3 scripts/prepare_t9_rime_assets.py && bash scripts/build_phone_rime_jni.sh"
+}
 tasks.matching { it.name in ["prePhoneDebugBuild", "prePhoneReleaseBuild"] }.configureEach {
-    dependsOn buildZhuyinIndex
+    dependsOn buildZhuyinIndex, buildPhoneRime
 }
 
 dependencies {

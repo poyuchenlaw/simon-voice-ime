@@ -74,6 +74,12 @@ Java_com_simon_voiceime_ChewingEngine_nativeCreate(JNIEnv *env, jclass type, jst
         return 0;
     }
     struct ChewingContext *ctx = chewing_new3(system, user, "word.dat,tsi.dat", NULL, NULL);
+    /* Keep native behavior identical to the host evaluation: new consonants
+       delimit a tone-less syllable instead of overwriting its initial. */
+    if (ctx != NULL) {
+        chewing_config_set_int(ctx, "chewing.conversion_engine", FUZZY_CHEWING_CONVERSION_ENGINE);
+        chewing_set_maxChiSymbolLen(ctx, MAX_CHI_SYMBOL_LEN); /* 39 symbols */
+    }
     NativeChewing *state = ctx == NULL ? NULL : (NativeChewing *)calloc(1, sizeof(NativeChewing));
     if (state != NULL) { state->ctx = ctx; chewing_set_autoLearn(ctx, 1); }
     else if (ctx != NULL) chewing_delete(ctx);

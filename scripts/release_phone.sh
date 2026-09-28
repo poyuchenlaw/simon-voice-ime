@@ -152,6 +152,30 @@ PY
   "$ROOT/scripts/test_apkdiffpatch_host.sh" "$OLD_APK" "$PATCH_OUT" "$FINAL" > "$EVIDENCE/host-jni-v$old_version.log" 2>&1
 done
 
+if [[ -n "${EXTRA_BASE_APKS:-}" ]]; then
+  read -r -a EXTRA_BASE_PATHS <<< "$EXTRA_BASE_APKS"
+  for base_path in "${EXTRA_BASE_PATHS[@]}"; do
+    if [[ "$base_path" = /* ]]; then OLD_APK="$base_path"; else OLD_APK="$ROOT/$base_path"; fi
+    [[ -s "$OLD_APK" ]] || { echo "extra base APK missing: $OLD_APK" >&2; exit 2; }
+    OLD_BADGING="$WORK/extra-base-$(basename "$OLD_APK").badging.txt"
+    "$AAPT" dump badging "$OLD_APK" > "$OLD_BADGING"
+    OLD_CODE="$(sed -n "s/.*versionCode='\([0-9][0-9]*\)'.*/\1/p" "$OLD_BADGING" | head -1)"
+    OLD_VERSION_NAME="$(sed -n "s/.*versionName='\([^']*\)'.*/\1/p" "$OLD_BADGING" | head -1)"
+    [[ -n "$OLD_CODE" && -n "$OLD_VERSION_NAME" ]] || { echo "could not read extra base APK version: $OLD_APK" >&2; exit 2; }
+    OLD_SHA="$(sha256sum "$OLD_APK" | cut -d' ' -f1)"
+    PATCH_NAME="simon-voice-ime-phone-$OLD_VERSION_NAME-to-$VERSION.patch"
+    PATCH_OUT="$DEST/$PATCH_NAME"
+    "$ZIP_DIFF" "$OLD_APK" "$FINAL" "$PATCH_OUT" -c-lzma-7-4m > "$EVIDENCE/zipdiff-extra-$OLD_VERSION_NAME.log" 2>&1
+    PATCHED="$WORK/patched-from-extra-$OLD_VERSION_NAME.apk"
+    "$ZIP_PATCH" "$OLD_APK" "$PATCH_OUT" "$PATCHED" 67108864 "$WORK/uncompress-extra-$OLD_VERSION_NAME.tmp" > "$EVIDENCE/zippatch-extra-$OLD_VERSION_NAME.log" 2>&1
+    [[ "$(sha256sum "$PATCHED" | cut -d' ' -f1)" == "$FULL_SHA" ]] || { echo "round-trip mismatch from extra base $OLD_VERSION_NAME" >&2; exit 2; }
+    PATCH_SHA="$(sha256sum "$PATCH_OUT" | cut -d' ' -f1)"
+    PATCH_SIZE="$(stat -c %s "$PATCH_OUT")"
+    PATCH_RECORDS+=("$OLD_VERSION_NAME|$OLD_CODE|$OLD_SHA|$PATCH_NAME|$PATCH_SHA|$PATCH_SIZE")
+    "$ROOT/scripts/test_apkdiffpatch_host.sh" "$OLD_APK" "$PATCH_OUT" "$FINAL" > "$EVIDENCE/host-jni-extra-$OLD_VERSION_NAME.log" 2>&1
+  done
+fi
+
 python3 - "$FINAL" "$DEST/update-manifest.json" "$VERSION" "$PHONE_VERSION_CODE" "${PATCH_RECORDS[@]}" <<'PY'
 import hashlib, json, os, sys
 apk, manifest, name, code, *rows = sys.argv[1:]

@@ -1,0 +1,15 @@
+# Official lotem/rime-octagram-data config; see licenses/OCTAGRAM_DATA_LGPL-3.0.txt
+hant:
+  grammar:
+    language: zh-hant-t-essay-bgw
+  translator/contextual_suggestions: true
+  translator/max_homophones: 7
+  translator/max_homographs: 7
+hant_char:
+  grammar:
+    language: zh-hant-t-essay-bgc
+    collocation_max_length: 2
+    collocation_min_length: 2
+  translator/contextual_suggestions: true
+  translator/max_homophones: 7
+  translator/max_homographs: 7

@@ -1,0 +1,127 @@
+# Self-authored T9 schema. The phonetic normalization is based on official
+# rime-bopomofo spelling algebra; the digit projection is Simon's key grouping.
+schema:
+  schema_id: bopomofo_t9_simon
+  name: 注音九宮格（Simon 分組）
+  version: '0.2'
+  author: [RIME spike]
+  description: |
+    1 ㄅㄆㄇㄈ / 2 ㄉㄊㄋㄌ / 3 ㄍㄎㄏ / 4 ㄐㄑㄒ /
+    5 ㄓㄔㄕㄖ / 6 ㄗㄘㄙ / 7 ㄧㄨㄩ /
+    8 ㄚㄛㄜㄝㄞㄟㄠㄡ / 9 ㄢㄣㄤㄥㄦ
+
+switches:
+  - name: ascii_mode
+    reset: 0
+    states: [中文, 西文]
+  - name: full_shape
+    states: [半角, 全角]
+  - name: zh_hant_tw
+    reset: 1
+    states: [臺灣正體, 臺灣正體]
+  - name: ascii_punct
+    states: [。，, ．，]
+
+engine:
+  processors:
+    - ascii_composer
+    - recognizer
+    - key_binder
+    - speller
+    - punctuator
+    - selector
+    - navigator
+    - fluency_editor
+  segmentors:
+    - ascii_segmentor
+    - matcher
+    - abc_segmentor
+    - punct_segmentor
+    - fallback_segmentor
+  translators:
+    - punct_translator
+    - table_translator@custom_phrase
+    - script_translator
+  filters:
+    - simplifier@zh_hant_tw
+    - uniquifier
+
+menu:
+  page_size: 9
+
+speller:
+  alphabet: '123456789'
+  initials: '123456789'
+  finals: ''
+  delimiter: "'"
+  use_space: false
+  algebra:
+    - xform/^m(\d)$/mu$1/
+    - xform/^r5$/er5/
+    - xform/iu/iou/
+    - xform/ui/uei/
+    - xform/ong/ung/
+    - xform/^yi?/i/
+    - xform/^wu?/u/
+    - xform/iu/v/
+    - xform/^([jqx])u/$1v/
+    - xform/([iuv])n/$1en/
+    - xform/^zhi?/Z/
+    - xform/^chi?/C/
+    - xform/^shi?/S/
+    - xform/^([zcsr])i/$1/
+    - xform/ai/A/
+    - xform/ei/I/
+    - xform/ao/O/
+    - xform/ou/U/
+    - xform/ang/K/
+    - xform/eng/G/
+    - xform/an/M/
+    - xform/en/N/
+    - xform/er/R/
+    - xform/eh/E/
+    - xform/([iv])e/$1E/
+    - derive/[bpmf]/1/
+    - derive/[dtnl]/2/
+    - derive/[gkh]/3/
+    - derive/[jqx]/4/
+    - derive/[ZCSr]/5/
+    - derive/[zcs]/6/
+    - derive/[iuv]/7/
+    - derive/[aoeEAIOU]/8/
+    - derive/[MNKGR]/9/
+    - derive/[1-5]$//
+
+translator:
+  dictionary: terra_pinyin
+  prism: bopomofo_t9_simon
+  enable_user_dict: false
+  enable_sentence: true
+  preedit_format:
+    - xform/([1-9])/$1/
+
+custom_phrase:
+  dictionary: ''
+  user_dict: custom_phrase
+  db_class: stabledb
+  enable_completion: false
+  enable_sentence: false
+  initial_quality: 1
+
+punctuator:
+  import_preset: default
+key_binder:
+  import_preset: default
+recognizer:
+  import_preset: default
+  patterns:
+    uppercase: "^[A-Z][-_+.'0-9A-Za-z]*$"
+    url: "^(www[.]|https?:|ftp:|mailto:).*$"
+zh_hant_tw:
+  option_name: zh_hant_tw
+  opencc_config: t2tw.json
+  tips: none
+  excluded_types: [reverse_lookup]
+
+__patch:
+  - grammar:/hant?
