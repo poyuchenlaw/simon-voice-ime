@@ -33,4 +33,18 @@ public class ZhuyinStreamingCompatibilityTest {
         assertTrue(state.candidates.contains("本音候選"));
         assertEquals("mixed",state.candidateKind);
     }
+    @Test public void fourInitialsStreamAsFrequencyRankedSegmentedPhrase() {
+        Fake engine=new Fake();
+        ZhuyinWordIndex index=ZhuyinWordIndex.forTesting(
+                new ZhuyinWordIndex.Entry("ㄨㄑ","完全","ㄨㄢˊ ㄑㄩㄢˊ",10000,false),
+                new ZhuyinWordIndex.Entry("ㄇㄧ","沒有","ㄇㄟˊ ㄧㄡˇ",9000,false),
+                new ZhuyinWordIndex.Entry("ㄨㄑㄇㄧ","往前面一","ㄨㄤˇ ㄑㄧㄢˊ ㄇㄧㄢˋ ㄧ",1,false));
+        ZhuyinInputController c=new ZhuyinInputController(engine,index);
+        c.press("ㄨ"); c.press("ㄑ"); c.press("ㄇ");
+        ZhuyinInputController.State state=c.press("ㄧ");
+        assertEquals("ㄨㄑㄇㄧ",engine.composing);
+        assertTrue(state.candidates.contains("完全沒有"));
+        assertEquals(state.candidates.size(),new HashSet<>(state.candidates).size());
+        assertEquals("完全沒有",c.chooseCandidate(state.candidates.indexOf("完全沒有")).commitText);
+    }
 }

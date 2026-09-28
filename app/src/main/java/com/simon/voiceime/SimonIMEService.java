@@ -3224,9 +3224,31 @@ public class SimonIMEService extends InputMethodService {
 
     private void showT9Help() {
         getSharedPreferences("simon_ime_prefs", MODE_PRIVATE).edit().putBoolean("t9_help_seen", true).apply();
-        new android.app.AlertDialog.Builder(this).setTitle("注音九宮格")
-                .setMessage("預設每字按兩下（聲母那格＋韻母那格），不用打聲調；也可點預覽列旁的「兩按」切換「全碼」，按完整注音符號群，再按空白選字分段。句子越長越準。選錯了點一下預覽列的字就能換。打字停一下，AI 會給整句建議，點它就採用。")
-                .setPositiveButton("開始試用", null).show();
+        if (panelContainer == null) return;
+        panelContainer.removeAllViews();
+        panelContainer.setVisibility(View.VISIBLE);
+        LinearLayout panel = new LinearLayout(this);
+        panel.setOrientation(LinearLayout.VERTICAL);
+        panel.setPadding(dp(16), dp(12), dp(16), dp(12));
+        panel.setBackgroundColor(0xff202633);
+        TextView title = new TextView(this);
+        title.setText("注音九宮格");
+        title.setTextColor(Color.WHITE);
+        title.setTextSize(18);
+        TextView message = new TextView(this);
+        message.setText("預設每字按兩下（聲母那格＋韻母那格），不用打聲調；也可點預覽列旁的「兩按」切換「全碼」，按完整注音符號群，再按空白選字分段。句子越長越準。選錯了點一下預覽列的字就能換。打字停一下，AI 會給整句建議，點它就採用。");
+        message.setTextColor(Color.WHITE);
+        message.setPadding(0, dp(8), 0, dp(8));
+        TextView dismiss = new TextView(this);
+        dismiss.setText("開始試用");
+        dismiss.setTextColor(0xff80cbc4);
+        dismiss.setGravity(Gravity.END | Gravity.CENTER_VERTICAL);
+        dismiss.setPadding(dp(12), dp(8), dp(4), dp(8));
+        dismiss.setOnClickListener(v -> closePanel());
+        panel.addView(title);
+        panel.addView(message);
+        panel.addView(dismiss);
+        panelContainer.addView(panel);
     }
 
     private void setupT9Keyboard() {
@@ -4686,7 +4708,7 @@ public class SimonIMEService extends InputMethodService {
 
     private String getAuthPassword() {
         SharedPreferences prefs = getSharedPreferences("simon_ime_prefs", MODE_PRIVATE);
-        return prefs.getString("auth_password", "guangxin_voice_2026");
+        return AuthConfig.password(prefs);
     }
 
     private static String truncate(String s, int maxLen) {

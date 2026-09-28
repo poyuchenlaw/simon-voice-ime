@@ -23,6 +23,7 @@ import okhttp3.*;
 final class ImeTelemetry {
     static final long MAX_BYTES = 5L * 1024 * 1024;
     static final int BATCH_SIZE = 200;
+    static final int MAX_CRASH_STACK_CHARS = 8192;
     private static volatile ImeTelemetry instance;
     static synchronized ImeTelemetry install(Context context) {
         if (instance == null) instance = new ImeTelemetry(context.getApplicationContext());
@@ -73,6 +74,17 @@ final class ImeTelemetry {
         if(fields!=null)for(java.util.Iterator<String> i=fields.keys();i.hasNext();){String k=i.next();event.put(k,fields.get(k));}
         return event;
     }
+    static JSONObject makeCrashEvent(String threadName, Throwable failure, int maxStackChars) throws Exception {
+        StringWriter writer = new StringWriter();
+        failure.printStackTrace(new PrintWriter(writer));
+        String stack = writer.toString();
+        if (stack.length() > maxStackChars) stack = stack.substring(0, maxStackChars);
+        return new JSONObject().put("type", "crash")
+                .put("where", threadName == null ? "unknown" : threadName)
+                .put("exception_class", failure.getClass().getName())
+                .put("message", redact(failure.getMessage() == null ? "" : failure.getMessage()))
+                .put("stack", redact(stack));
+    }
     private void enqueue(JSONObject event){spool.add(event);if(size()>=BATCH_SIZE&&handler!=null)handler.post(this::flush);}
     void key(String page,String key,float x,float y,float cx,float cy,boolean protectedField) {
         try{record("key",page,new JSONObject().put("key",key).put("x",x).put("y",y).put("key_center_x",cx).put("key_center_y",cy),protectedField);}catch(Exception ignored){}
@@ -88,10 +100,10 @@ final class ImeTelemetry {
             String base=p.getString("server_url","http://100.84.86.128:8001"); URI uri=URI.create(base);
             String host=uri.getHost();if(host==null||host.isEmpty()){lastResult="伺服器位址無效";return;}
             String url=new URI(uri.getScheme(),null,host,8094,"/v1/ime/log",null,null).toString();
-            String password=p.getString("auth_password","");
+            String password=AuthConfig.password(p);
             String batchId=stableBatchId(batch);JSONArray events=new JSONArray();for(JSONObject e:batch)events.put(e);
             JSONObject body=new JSONObject().put("device",deviceId()).put("app_version",appVersion).put("batch_id",batchId).put("events",events);
-            int status=transport.post(url,password,body.toString());
+            int status=transport.post(url,AuthConfig.authorizationHeader(password),body.toString());
             if(status<200||status>=300)throw new IOException("HTTP "+status);
             if(!spool.acknowledge(batchId,batch.size()))throw new IOException("local batch changed before acknowledgement");
             lastUploadMs=System.currentTimeMillis();lastResult="成功（"+batch.size()+" 筆）";
@@ -100,17 +112,19 @@ final class ImeTelemetry {
     }
     private static int httpPost(String url,String bearer,String body)throws Exception{
         OkHttpClient c=new OkHttpClient.Builder().connectTimeout(5,TimeUnit.SECONDS).readTimeout(5,TimeUnit.SECONDS).writeTimeout(5,TimeUnit.SECONDS).build();
+        try(Response r=c.newCall(makeRequest(url,bearer,body)).execute()){return r.code();}
+    }
+    static Request makeRequest(String url,String bearer,String body){
         Request.Builder b=new Request.Builder().url(url).post(RequestBody.create(body,MediaType.parse("application/json; charset=utf-8")));
-        if(bearer!=null&&!bearer.isEmpty())b.header("Authorization","Bearer "+bearer);
-        try(Response r=c.newCall(b.build()).execute()){return r.code();}
+        if(bearer!=null&&!bearer.isEmpty())b.header("Authorization",bearer.startsWith("Bearer ")?bearer:AuthConfig.authorizationHeader(bearer));
+        return b.build();
     }
     private String deviceId(){SharedPreferences p=context.getSharedPreferences("ime_telemetry",Context.MODE_PRIVATE);String id=p.getString("id",null);if(id==null){id=UUID.randomUUID().toString();p.edit().putString("id",id).apply();}return id;}
     static String stableBatchId(List<JSONObject> events)throws Exception{MessageDigest d=MessageDigest.getInstance("SHA-256");for(JSONObject e:events)d.update(e.toString().getBytes(StandardCharsets.UTF_8));byte[] b=d.digest();StringBuilder s=new StringBuilder();for(byte x:b)s.append(String.format(Locale.ROOT,"%02x",x&255));return s.toString();}
     String lastResult(){return lastResult;} long lastUploadMs(){return lastUploadMs;}
     void uploadNow(){if(handler!=null)handler.post(this::flush);}
     private void installCrashHandlers(){Thread.UncaughtExceptionHandler prior=Thread.getDefaultUncaughtExceptionHandler();Thread.setDefaultUncaughtExceptionHandler((t,e)->{
-        try{StringWriter sw=new StringWriter();e.printStackTrace(new PrintWriter(sw));String[] lines=sw.toString().split("\\R");StringBuilder stack=new StringBuilder();for(int i=0;i<Math.min(40,lines.length);i++)stack.append(lines[i]).append('\n');
-            recordUrgent("error","voice",new JSONObject().put("where",t.getName()).put("message",redact(e.toString())).put("stack",redact(stack.toString())));}catch(Exception ignored){}
+        try{JSONObject crash=makeCrashEvent(t.getName(),e,MAX_CRASH_STACK_CHARS);crash.remove("type");recordUrgent("crash","voice",crash);}catch(Exception ignored){}
         if(prior!=null)prior.uncaughtException(t,e);
     });}
     private static String redact(String s){return s.replaceAll("(?i)(Bearer\\s+)[^\\s]+","$1[redacted]");}

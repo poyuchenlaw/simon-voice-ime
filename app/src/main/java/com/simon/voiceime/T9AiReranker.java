@@ -19,7 +19,7 @@ final class T9AiReranker {
             JSONObject body=new JSONObject().put("layout","t9_simon").put("mode",mode).put("segments",segments)
                     .put("context_before",before==null?"":before).put("context_after",after==null?"":after);
             Request.Builder rb=new Request.Builder().url(base+"/v1/zhuyin/rerank").post(RequestBody.create(body.toString(),MediaType.parse("application/json; charset=utf-8")));
-            String auth=p.getString("auth_password","guangxin_voice_2026");if(!auth.isEmpty())rb.header("Authorization","Bearer "+auth);
+            String auth=AuthConfig.password(p);if(!auth.isEmpty())rb.header("Authorization",AuthConfig.authorizationHeader(auth));
             client.newCall(rb.build()).enqueue(new okhttp3.Callback(){
                 @Override public void onFailure(Call c,java.io.IOException e) { }
                 @Override public void onResponse(Call c,Response r) { try(Response response=r){if(response.code()!=503&&response.isSuccessful()&&response.body()!=null){String text=new JSONObject(response.body().string()).optString("text","");if(!text.isEmpty())callback.onSuggestion(text);}}catch(Exception ignored){} }

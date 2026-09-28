@@ -89,8 +89,15 @@ def buildPhoneRime = tasks.register("buildPhoneRime", Exec) {
     outputs.files(file("src/phone/jniLibs/arm64-v8a/librime.so"), file("src/phone/jniLibs/arm64-v8a/librime_jni.so"))
     commandLine "bash", "-c", "python3 scripts/prepare_t9_rime_assets.py && bash scripts/build_phone_rime_jni.sh"
 }
+def ndkRoot = System.getenv("ANDROID_NDK_HOME") ?: "/home/simon/android-sdk/ndk/26.3.11579264"
+def buildPhoneChewingJni = tasks.register("buildPhoneChewingJni", Exec) {
+    workingDir rootProject.projectDir
+    inputs.files(file("src/phone/cpp/chewing_jni.c"), file("src/phone/jniLibs/arm64-v8a/libchewing.so"))
+    outputs.file(file("src/phone/jniLibs/arm64-v8a/libchewing_jni.so"))
+    commandLine "bash", "-c", "set -euo pipefail; LLVM='${ndkRoot}/toolchains/llvm/prebuilt/linux-x86_64/bin'; \"\$LLVM/aarch64-linux-android26-clang\" -shared -fPIC -O2 -Wl,-z,max-page-size=16384 -Wl,-soname,libchewing_jni.so -I'${ndkRoot}/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/include' -I'${rootProject.projectDir}/third_party/libchewing/capi/include' '${rootProject.projectDir}/app/src/phone/cpp/chewing_jni.c' -L'${rootProject.projectDir}/app/src/phone/jniLibs/arm64-v8a' -lchewing -o '${rootProject.projectDir}/app/src/phone/jniLibs/arm64-v8a/libchewing_jni.so';"
+}
 tasks.matching { it.name in ["prePhoneDebugBuild", "prePhoneReleaseBuild"] }.configureEach {
-    dependsOn buildZhuyinIndex, buildPhoneRime
+    dependsOn buildZhuyinIndex, buildPhoneRime, buildPhoneChewingJni
 }
 
 dependencies {

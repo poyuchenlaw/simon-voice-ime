@@ -82,6 +82,35 @@ GRADLE_USER_HOME="$GRADLE_HOME" "$ROOT/gradlew" --project-cache-dir "$ROOT/out/v
   testPhoneReleaseUnitTest assemblePhoneRelease > "$EVIDENCE/gradle-build.log" 2>&1
 BUILT="$ROOT/app/build/outputs/apk/phone/release/app-phone-release.apk"
 [[ -s "$BUILT" ]] || { echo "Gradle phone APK missing" >&2; exit 2; }
+# Verify repo-built ARM64 libraries are the exact current artifacts and newer than
+# their native source inputs. This catches stale prebuilt JNI binaries in the APK.
+NATIVE_TMP="$WORK/native-check"
+rm -rf "$NATIVE_TMP"; mkdir -p "$NATIVE_TMP"
+unzip -q "$BUILT" 'lib/arm64-v8a/*.so' -d "$NATIVE_TMP"
+JNI_DIR="$ROOT/app/src/phone/jniLibs/arm64-v8a"
+LLVM_READelf="${ANDROID_NDK_HOME:-/home/simon/android-sdk/ndk/26.3.11579264}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-readelf"
+[[ -x "$LLVM_READelf" ]] || { echo "missing llvm-readelf: $LLVM_READelf" >&2; exit 2; }
+for lib in libchewing_jni.so librime_jni.so librime.so libchewing.so libapkpatch.so; do
+  [[ -s "$NATIVE_TMP/lib/arm64-v8a/$lib" && -s "$JNI_DIR/$lib" ]] || { echo "missing native library: $lib" >&2; exit 2; }
+  "$LLVM_READelf" --dyn-syms --wide "$JNI_DIR/$lib" | awk 'NF>=8{print $8}' | sort -u > "$NATIVE_TMP/source-symbols.txt"
+  "$LLVM_READelf" --dyn-syms --wide "$NATIVE_TMP/lib/arm64-v8a/$lib" | awk 'NF>=8{print $8}' | sort -u > "$NATIVE_TMP/apk-symbols.txt"
+  cmp -s "$NATIVE_TMP/source-symbols.txt" "$NATIVE_TMP/apk-symbols.txt" || { echo "APK native exports differ from repo artifact: $lib" >&2; exit 2; }
+done
+strings "$NATIVE_TMP/lib/arm64-v8a/libchewing_jni.so" | grep -Fq 'chewing.conversion_engine' || {
+  echo "APK libchewing_jni.so lacks chewing.conversion_engine; refusing stale native build" >&2; exit 2;
+}
+fresh_against() {
+  local artifact="$1"; shift
+  for source in "$@"; do
+    [[ -f "$source" ]] || { echo "native source missing: $source" >&2; exit 2; }
+    [[ "$artifact" -nt "$source" ]] || { echo "native library is older than source: $artifact <= $source" >&2; exit 2; }
+  done
+}
+fresh_against "$JNI_DIR/libchewing_jni.so" "$ROOT/app/src/phone/cpp/chewing_jni.c"
+while IFS= read -r source; do fresh_against "$JNI_DIR/libchewing.so" "$source"; done < <(find "$ROOT/third_party/libchewing/src" "$ROOT/third_party/libchewing/capi/src" "$ROOT/third_party/libchewing/capi/include" -type f \( -name '*.rs' -o -name '*.c' -o -name '*.h' \))
+fresh_against "$JNI_DIR/librime_jni.so" "$ROOT/app/src/phone/cpp/rime_jni.cpp" "$ROOT/evidence/rime_spike/android-prefix/lib/librime.so"
+fresh_against "$JNI_DIR/librime.so" "$ROOT/evidence/rime_spike/android-prefix/lib/librime.so"
+while IFS= read -r source; do fresh_against "$JNI_DIR/libapkpatch.so" "$source"; done < <(find "$ROOT/third_party/ApkDiffPatch/builds/android_ndk_jni_mk" -type f \( -name '*.c' -o -name '*.cpp' -o -name '*.h' -o -name 'Android.mk' -o -name 'Application.mk' \))
 RAW="$WORK/gradle-signed.apk"
 NORMALIZED="$WORK/normalized.apk"
 FINAL="$DEST/simon-voice-ime-phone-$VERSION.apk"
@@ -95,7 +124,27 @@ KEY_PASS="${RELEASE_KEY_PASSWORD:-simonime2026}"
   --v4-signing-enabled false \
   --out "$FINAL" "$NORMALIZED"
 "$APK_SIGNER" verify --verbose --print-certs "$FINAL" > "$EVIDENCE/apksigner-verify.txt" 2>&1
-"$ZIPALIGN" -c -P 16 -v 4 "$FINAL" > "$EVIDENCE/zipalign-16kb.txt" 2>&1
+if "$ZIPALIGN" -h 2>&1 | grep -q -- '-P'; then
+  "$ZIPALIGN" -c -P 16 -v 4 "$FINAL" > "$EVIDENCE/zipalign-16kb.txt" 2>&1
+else
+  # Build Tools 34 has no -P 16 switch; check 4 KB alignment there, then
+  # independently verify every uncompressed native library's actual data offset.
+  "$ZIPALIGN" -c -p -v 4 "$FINAL" > "$EVIDENCE/zipalign-16kb.txt" 2>&1
+  python3 - "$FINAL" <<'PY' >> "$EVIDENCE/zipalign-16kb.txt"
+import struct, sys, zipfile
+path=sys.argv[1]
+with zipfile.ZipFile(path) as z, open(path,'rb') as f:
+    libs=[x for x in z.infolist() if x.filename.startswith('lib/') and x.filename.endswith('.so')]
+    if not libs: raise SystemExit('APK contains no native libraries')
+    for x in libs:
+        f.seek(x.header_offset); h=f.read(30)
+        if len(h)!=30 or struct.unpack_from('<I',h)[0]!=0x04034b50: raise SystemExit('invalid ZIP local header: '+x.filename)
+        name_len,extra_len=struct.unpack_from('<HH',h,26)
+        offset=x.header_offset+30+name_len+extra_len
+        if offset%16384: raise SystemExit(f'16 KB alignment failed: {x.filename} offset={offset}')
+        print(f'16 KB aligned: {x.filename} offset={offset}')
+PY
+fi
 "$AAPT" dump badging "$FINAL" > "$EVIDENCE/badging.txt"
 if ! rg -q "versionCode='$PHONE_VERSION_CODE'.*versionName='$VERSION'" "$EVIDENCE/badging.txt"; then
   echo "built APK version metadata does not match requested release" >&2; exit 2
@@ -126,7 +175,17 @@ for old_version in "${PREVIOUS_TAGS[@]}"; do
     OLD_META="$(printf '%s\n' "$OLD_ASSETS" | rg '^simon-voice-ime-phone-.*\.apk$' | head -1)"
     [[ -n "$OLD_META" && "$OLD_META" != null ]] || continue
     OLD_APK="$OLD_DIR/$OLD_META"
-    gh release download "v$old_version" --repo poyuchenlaw/simon-voice-ime --pattern "$OLD_META" --dir "$OLD_DIR"
+    OLD_LOCAL="$ROOT/dist/simon-voice-ime-v$old_version-phone.apk"
+    if [[ -s "$OLD_LOCAL" ]] && python3 - "$OLD_DIR/update-manifest.json" "$OLD_LOCAL" <<'PY'
+import hashlib, json, sys
+m=json.load(open(sys.argv[1])); h=hashlib.sha256(open(sys.argv[2],'rb').read()).hexdigest()
+sys.exit(0 if m.get('normalized') is True and m.get('sha256') == h else 1)
+PY
+    then
+      cp "$OLD_LOCAL" "$OLD_APK"
+    else
+      gh release download "v$old_version" --repo poyuchenlaw/simon-voice-ime --pattern "$OLD_META" --dir "$OLD_DIR"
+    fi
   fi
   OLD_MANIFEST="$OLD_DIR/update-manifest.json"
   if ! python3 - "$OLD_MANIFEST" "$OLD_APK" <<'PY'

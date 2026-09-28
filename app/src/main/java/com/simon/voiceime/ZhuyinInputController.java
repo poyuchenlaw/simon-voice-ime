@@ -72,10 +72,11 @@ final class ZhuyinInputController {
                 && (abbreviationKeys.length() > 0 || engine.composingText().isEmpty())) {
             if (abbreviationKeys.length() > 0) {
                 String extended = abbreviationKeys.toString() + key;
-                if (abbreviationIndex.hasPrefix(extended)) {
+                if (abbreviationIndex.hasPrefix(extended) || abbreviationIndex.hasSegmentedPrefix(extended)) {
                     abbreviationKeys.append(key);
                     engine.key(key);
                     abbreviationEntries = abbreviationKeys.length() >= 2 ? abbreviationIndex.lookup(extended) : Collections.emptyList();
+                    if (abbreviationKeys.length() >= 4) abbreviationEntries = mergeEntries(abbreviationEntries, abbreviationIndex.segmented(extended));
                     return mixedSnapshot(true);
                 }
                 abbreviationKeys.setLength(0); abbreviationEntries=Collections.emptyList(); mixedChoices=Collections.emptyList();
@@ -155,6 +156,14 @@ final class ZhuyinInputController {
         for (ZhuyinWordIndex.Entry e : abbreviationEntries) words.add(e.word);
         return new State(abbreviationKeys.toString(), Collections.unmodifiableList(words), "", true, abbreviationKeys.length(), "abbreviation", abbreviationEntries);
     }
+    private static List<ZhuyinWordIndex.Entry> mergeEntries(List<ZhuyinWordIndex.Entry> first, List<ZhuyinWordIndex.Entry> second) {
+        java.util.LinkedHashMap<String,ZhuyinWordIndex.Entry> unique = new java.util.LinkedHashMap<>();
+        for (ZhuyinWordIndex.Entry e : first) unique.putIfAbsent(e.word, e);
+        for (ZhuyinWordIndex.Entry e : second) unique.putIfAbsent(e.word, e);
+        List<ZhuyinWordIndex.Entry> result = new ArrayList<>(unique.values());
+        result.sort((a,b)->Long.compare(b.frequency,a.frequency));
+        return result;
+    }
     private State mixedSnapshot(boolean accepted) {
         List<MixedChoice> all=new ArrayList<>();
         int input=abbreviationKeys.codePointCount(0,abbreviationKeys.length());
@@ -163,7 +172,7 @@ final class ZhuyinInputController {
         List<String> nativeCandidates=mergeNative?engine.candidates():Collections.emptyList();if(nativeCandidates!=null)for(int i=0;i<nativeCandidates.size();i++){
             String word=nativeCandidates.get(i);all.add(new MixedChoice(word,null,i,false,1_000_000L-i,word.codePointCount(0,word.length())==input));
         }
-        all.sort((a,b)->{int c=Boolean.compare(b.exactLength,a.exactLength);if(c!=0)return c;c=Boolean.compare(b.personal,a.personal);if(c!=0)return c;return Long.compare(b.frequency,a.frequency);});
+        all.sort((a,b)->{double sa=Math.log10(Math.max(1L,a.frequency))+(a.exactLength?0.5:0)+(a.personal?2:0);double sb=Math.log10(Math.max(1L,b.frequency))+(b.exactLength?0.5:0)+(b.personal?2:0);return Double.compare(sb,sa);});
         java.util.LinkedHashMap<String,MixedChoice> unique=new java.util.LinkedHashMap<>();for(MixedChoice c:all)unique.putIfAbsent(c.word,c);
         mixedChoices=new ArrayList<>(unique.values());List<String> words=new ArrayList<>();for(MixedChoice c:mixedChoices)words.add(c.word);
         String composing=mergeNative?engine.composingText():abbreviationKeys.toString();

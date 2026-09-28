@@ -82,7 +82,7 @@ public class SettingsActivity extends Activity {
         // Load saved settings
         SharedPreferences prefs = getSharedPreferences("simon_ime_prefs", MODE_PRIVATE);
         editServerUrl.setText(prefs.getString("server_url", "http://100.84.86.128:8001"));
-        editAuthPassword.setText(prefs.getString("auth_password", "guangxin_voice_2026"));
+        editAuthPassword.setText(AuthConfig.password(prefs));
 
         // v6.20: 複製自動記詞開關（預設開；即時持久化）
         CheckBox checkAutoVocab = findViewById(R.id.checkAutoVocab);

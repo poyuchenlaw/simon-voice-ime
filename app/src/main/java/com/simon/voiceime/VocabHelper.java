@@ -81,7 +81,7 @@ public class VocabHelper {
 
     private String getAuth() {
         SharedPreferences prefs = context.getSharedPreferences("simon_ime_prefs", Context.MODE_PRIVATE);
-        return prefs.getString("auth_password", "guangxin_voice_2026");
+        return AuthConfig.password(prefs);
     }
 
     private Request.Builder authorizedBuilder(String url) {

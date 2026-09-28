@@ -7,6 +7,19 @@ import java.io.File;
 import static org.junit.Assert.*;
 
 public class Proto3DiagnosticsTest {
+    @Test public void telemetryUsesDefaultAuthorizationWhenPasswordWasNeverSaved() {
+        assertEquals("Bearer guangxin_voice_2026", ImeTelemetry.makeRequest("https://example.test/log", AuthConfig.authorizationHeader(null), "{}").header("Authorization"));
+        assertEquals("Bearer guangxin_voice_2026", ImeTelemetry.makeRequest("https://example.test/log", AuthConfig.authorizationHeader(""), "{}").header("Authorization"));
+    }
+    @Test public void syntheticUncaughtExceptionProducesBoundedCrashDetails() throws Exception {
+        RuntimeException failure = new RuntimeException("window token missing");
+        JSONObject event = ImeTelemetry.makeCrashEvent("main", failure, 160);
+        assertEquals("crash", event.getString("type"));
+        assertEquals("java.lang.RuntimeException", event.getString("exception_class"));
+        assertEquals("window token missing", event.getString("message"));
+        assertTrue(event.getString("stack").contains("syntheticUncaughtExceptionProducesBoundedCrashDetails"));
+        assertTrue(event.getString("stack").length() <= 160);
+    }
     @Test public void apkMarkerUsesVersionAndUpdateTime() {
         assertEquals("apk:73:123456", T9AssetVersion.fromPackage(73,123456));
         assertTrue(T9AssetVersion.shouldCopy("apk:72:123456",T9AssetVersion.fromPackage(73,123456)));

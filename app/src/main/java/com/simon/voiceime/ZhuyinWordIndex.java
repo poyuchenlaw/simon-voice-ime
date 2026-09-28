@@ -77,6 +77,61 @@ final class ZhuyinWordIndex {
         rankAndDeduplicate(out, key);
         return out;
     }
+    private List<Entry> exact(String key) {
+        List<Entry> out = new ArrayList<>();
+        for (Entry e : personalEntries.values()) if (e.key.equals(key)) out.add(e);
+        if (database == null) {
+            for (Entry e : entries) if (e.key.equals(key)) out.add(e);
+        } else try (Cursor c = database.rawQuery("SELECT initial_key,word,pronunciation,frequency,personal FROM words WHERE initial_key=? ORDER BY frequency DESC LIMIT 50", new String[]{key})) {
+            while (c.moveToNext()) out.add(new Entry(c.getString(0),c.getString(1),c.getString(2),c.getLong(3),c.getInt(4)!=0));
+        }
+        return out;
+    }
+    List<Entry> segmented(String key) {
+        List<List<Entry>> paths = new ArrayList<>();
+        segment(key, 0, new ArrayList<>(), paths, 5000);
+        List<Entry> out = new ArrayList<>();
+        for (List<Entry> path : paths) {
+            if (path.size() < 2) continue;
+            StringBuilder word = new StringBuilder(), pronunciation = new StringBuilder();
+            double logFrequency = 0;
+            for (Entry e : path) {
+                word.append(e.word);
+                if (pronunciation.length() > 0) pronunciation.append(' ');
+                pronunciation.append(e.pronunciation);
+                long boundedFrequency = e.frequency > 1_000_000_000L ? 1L : Math.max(1L, e.frequency);
+                logFrequency += Math.log(boundedFrequency);
+            }
+            long frequency = Math.max(1L, Math.min(Long.MAX_VALUE, Math.round(Math.exp(Math.min(40, logFrequency / path.size())))));
+            out.add(new Entry(key, word.toString(), pronunciation.toString(), frequency, false));
+        }
+        rankAndDeduplicate(out, key);
+        if (out.size() > 100) out = new ArrayList<>(out.subList(0, 100));
+        return out;
+    }
+    boolean hasSegmentedPrefix(String key) {
+        return hasSegmentedPrefix(key, new java.util.HashSet<>());
+    }
+    private boolean hasSegmentedPrefix(String key, java.util.Set<String> knownDeadEnds) {
+        if (knownDeadEnds.contains(key)) return false;
+        for (int split = 2; split < key.length(); split++) {
+            if (!exact(key.substring(0, split)).isEmpty()
+                    && (hasPrefix(key.substring(split)) || hasSegmentedPrefix(key.substring(split), knownDeadEnds))) return true;
+        }
+        knownDeadEnds.add(key);
+        return false;
+    }
+    private void segment(String key, int offset, List<Entry> path, List<List<Entry>> out, int limit) {
+        if (out.size() >= limit) return;
+        if (offset == key.length()) { if (path.size() > 1) out.add(new ArrayList<>(path)); return; }
+        for (int end = key.length(); end >= offset + 2; end--) {
+            String part = key.substring(offset, end);
+            for (Entry e : exact(part)) {
+                path.add(e); segment(key, end, path, out, limit); path.remove(path.size() - 1);
+                if (out.size() >= limit) return;
+            }
+        }
+    }
     private static void rankAndDeduplicate(List<Entry> candidates, String key) {
         Map<String, Entry> bestByWord = new LinkedHashMap<>();
         for (Entry candidate : candidates) {
