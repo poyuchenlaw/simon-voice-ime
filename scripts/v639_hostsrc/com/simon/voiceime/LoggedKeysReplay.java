@@ -9,7 +9,7 @@ public final class LoggedKeysReplay {
     final RimeZhuyinNative rime;
     Engine(String shared,String user){rime=new RimeZhuyinNative(shared,user);}
     public void key(String symbol){rime.key(ZhuyinKeyMap.physicalKey(symbol));}
-    public void backspace(){rime.key(8);} public void space(){rime.key(32);} public void enter(){rime.key(13);}
+    public void backspace(){rime.backspace();} public void space(){rime.space();} public void enter(){rime.enter();}
     public void choose(int i){rime.choose(i);} public void moveCursor(String d){rime.moveCursor("right".equals(d));}
     public int cursorPosition(){return rime.cursor();} public String composingText(){return rime.composing();}
     public List<String> candidates(){return Arrays.asList(rime.candidates());} public String takeCommit(){return rime.takeCommit();}

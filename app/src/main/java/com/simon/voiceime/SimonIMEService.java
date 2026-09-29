@@ -3636,11 +3636,12 @@ public class SimonIMEService extends InputMethodService {
                     InputConnection ic0 = getCurrentInputConnection();
                     if (ic0 != null) {
                         if (currentKeyboardMode == KeyboardMode.BOPOMOFO && !zhuyinInput.state().composingText.isEmpty()) {
-                            applyZhuyinState(zhuyinInput.press("backspace"));
-                            v.setPressed(true);
-                            return true;
-                        }
-                        if (!deleteSelectionIfAny(ic0)) {
+                            String before = zhuyinInput.state().composingText;
+                            ZhuyinInputController.State after = zhuyinInput.press("backspace");
+                            applyZhuyinState(after);
+                            if (!before.equals(after.composingText))
+                                recordCorrectionEvent("bopomofo", "all", before, after.composingText, "backspace");
+                        } else if (!deleteSelectionIfAny(ic0)) {
                             deleteSurroundingTextProgrammatically(ic0, 1, 0);
                             // v6.23: pop last char from enWordBuffer on English keyboard
                             if (currentKeyboardMode == KeyboardMode.ENGLISH && enWordBuffer.length() > 0) {
@@ -3681,6 +3682,8 @@ public class SimonIMEService extends InputMethodService {
                 case MotionEvent.ACTION_UP:
                 case MotionEvent.ACTION_CANCEL:
                     backspacePressed = false;
+                    if (event.getAction() == MotionEvent.ACTION_UP && currentKeyboardMode == KeyboardMode.BOPOMOFO)
+                        recordBopomofoTouch(v, "backspace", event);
                     if (backspaceRepeatRunnable != null) {
                         mainHandler.removeCallbacks(backspaceRepeatRunnable);
                     }

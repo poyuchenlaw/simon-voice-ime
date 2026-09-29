@@ -4,6 +4,10 @@ import java.nio.charset.StandardCharsets;
 
 /** Small JNI boundary shared by the phone engine and host-side controller replay. */
 final class RimeZhuyinNative implements AutoCloseable {
+    // librime process_key consumes X11 keysyms, not Android keycodes or ASCII controls.
+    static final int KEYSYM_BACKSPACE = 0xff08;
+    static final int KEYSYM_RETURN = 0xff0d;
+    static final int KEYSYM_SPACE = 0x0020;
     static {
         System.loadLibrary("rime");
         System.loadLibrary("rime_jni");
@@ -15,6 +19,9 @@ final class RimeZhuyinNative implements AutoCloseable {
         if (handle == 0L) throw new IllegalStateException("Rime bopomofo_express session unavailable");
     }
     void key(int code) { nativeProcessKey(handle, code); }
+    void backspace() { key(KEYSYM_BACKSPACE); }
+    void enter() { key(KEYSYM_RETURN); }
+    void space() { key(KEYSYM_SPACE); }
     void choose(int index) { nativeSelect(handle, index); }
     void clear() { nativeClear(handle); }
     int cursor() { return nativeCursor(handle); }

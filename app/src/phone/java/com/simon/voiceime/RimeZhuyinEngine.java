@@ -33,9 +33,9 @@ final class RimeZhuyinEngine implements ZhuyinInputController.Engine, AutoClosea
         int key = ZhuyinKeyMap.physicalKey(symbol);
         if (key >= 0) nativeEngine.key(key);
     }
-    @Override public void backspace() { nativeEngine.key(8); }
-    @Override public void space() { nativeEngine.key(32); }
-    @Override public void enter() { nativeEngine.key(13); }
+    @Override public void backspace() { nativeEngine.backspace(); }
+    @Override public void space() { nativeEngine.space(); }
+    @Override public void enter() { nativeEngine.enter(); }
     @Override public void choose(int index) { nativeEngine.choose(index); }
     @Override public void moveCursor(String direction) {
         if ("left".equals(direction)) nativeEngine.moveCursor(false);
