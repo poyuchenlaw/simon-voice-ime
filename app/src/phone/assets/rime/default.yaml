@@ -5,7 +5,6 @@ config_version: '0.50'
 
 schema_list:
   - schema: bopomofo_express
-  - schema: bopomofo_t9_simon
 
 switcher:
   caption: 〔方案選單〕

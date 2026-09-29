@@ -9,7 +9,7 @@ import argparse
 def check(root: Path, assets: Path | None = None, compiled_only: bool = False) -> None:
     assets = assets or root / "app/src/phone/assets/rime"
     build = assets / "build"
-    schemas = ("bopomofo_express", "bopomofo_t9_simon", "terra_pinyin", "stroke")
+    schemas = ("bopomofo_express", "terra_pinyin", "stroke")
     for name in schemas:
         compiled = build / f"{name}.schema.yaml"
         source = assets / f"{name}.schema.yaml"
@@ -17,7 +17,7 @@ def check(root: Path, assets: Path | None = None, compiled_only: bool = False) -
             raise ValueError(f"missing Rime schema source or compiled asset: {name}")
         if not compiled_only and compiled.stat().st_mtime_ns < source.stat().st_mtime_ns:
             raise ValueError(f"compiled Rime schema is older than its source: {name}")
-    for name in ("bopomofo_express", "bopomofo_t9_simon"):
+    for name in ("bopomofo_express",):
         path = build / f"{name}.schema.yaml"
         text = path.read_text(encoding="utf-8")
         if re.search(r"(?m)^\s+grammar:\s*0\s*$", text) or "zh-hant-t-essay-bgw" not in text:

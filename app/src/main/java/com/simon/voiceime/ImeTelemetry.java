@@ -68,7 +68,7 @@ final class ImeTelemetry {
     static JSONObject makeEvent(long ts,String session,String version,String type,String page,JSONObject fields,boolean protectedField)throws Exception {
         if(protectedField && ("key".equals(type)||"candidate".equals(type)||"commit".equals(type)||"correction".equals(type))) {
             fields=new JSONObject().put("step","protected_field_skipped").put("ms",0).put("ok",true).put("message","protected field; content omitted");
-            type="t9_init";page="bopomofo";
+            type="protected_field_skipped";page="bopomofo";
         }
         JSONObject event=new JSONObject().put("ts",ts).put("type",type).put("session_id",session).put("page",page).put("app_version",version);
         if(fields!=null)for(java.util.Iterator<String> i=fields.keys();i.hasNext();){String k=i.next();event.put(k,fields.get(k));}
@@ -90,7 +90,7 @@ final class ImeTelemetry {
         try{record("key",page,new JSONObject().put("key",key).put("x",x).put("y",y).put("key_center_x",cx).put("key_center_y",cy),protectedField);}catch(Exception ignored){}
     }
     void init(String step,long ms,boolean ok,String message) {
-        try{JSONObject j=new JSONObject().put("step",step).put("ms",ms).put("ok",ok);if(message!=null&&!message.isEmpty())j.put("message",message);record("t9_init","t9",j,false);}catch(Exception ignored){}
+        try{JSONObject j=new JSONObject().put("step",step).put("ms",ms).put("ok",ok);if(message!=null&&!message.isEmpty())j.put("message",message);record("rime_init","bopomofo",j,false);}catch(Exception ignored){}
     }
     int size(){return spool.size();}
     private void flush() {

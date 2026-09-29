@@ -20,15 +20,10 @@ public class Proto3DiagnosticsTest {
         assertTrue(event.getString("stack").contains("syntheticUncaughtExceptionProducesBoundedCrashDetails"));
         assertTrue(event.getString("stack").length() <= 160);
     }
-    @Test public void apkMarkerUsesVersionAndUpdateTime() {
-        assertEquals("apk:73:123456", T9AssetVersion.fromPackage(73,123456));
-        assertTrue(T9AssetVersion.shouldCopy("apk:72:123456",T9AssetVersion.fromPackage(73,123456)));
-        assertFalse(T9AssetVersion.shouldCopy("apk:73:123456",T9AssetVersion.fromPackage(73,123456)));
-    }
     @Test public void protectedFieldsPersistOnlySkipMarker() throws Exception {
         JSONObject fields=new JSONObject().put("text","do-not-record-this").put("key","secret");
         JSONObject event=ImeTelemetry.makeEvent(1,"s","v","commit","bopomofo",fields,true);
-        assertEquals("t9_init",event.getString("type"));
+        assertEquals("protected_field_skipped",event.getString("type"));
         assertEquals("protected_field_skipped",event.getString("step"));
         assertFalse(event.toString().contains("do-not-record-this"));
         assertFalse(event.toString().contains("secret"));
