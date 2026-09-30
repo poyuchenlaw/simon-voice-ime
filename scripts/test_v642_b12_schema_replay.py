@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Replay the non-identifying B12 Zhuyin suffix through packaged Rime assets.
+"""XFAIL diagnostic: B12 behavior is intentionally reverted in v6.43.
 
 The sequence is the symbol-only portion extracted from the authorised telemetry
 incident.  It intentionally contains no device, session, person, or document
@@ -20,6 +20,7 @@ ASSETS = ROOT / "app/src/phone/assets/rime/build"
 KEYS = "1qaz2wsxedcrfv5tgbyhnujm8ik,9ol.0p;/- 6347"
 SYMS = "ㄅㄆㄇㄈㄉㄊㄋㄌㄍㄎㄏㄐㄑㄒㄓㄔㄕㄖㄗㄘㄙㄧㄨㄩㄚㄛㄜㄝㄞㄟㄠㄡㄢㄣㄤㄥㄦˉˊˇˋ˙"
 PHYSICAL = dict(zip(SYMS, KEYS))
+EXPECTED_FAILURE_REASON = "v6.43 restores v6.41 abbreviation behavior after B12 caused raw-key passthrough"
 
 
 def physical(symbols: str) -> str:
@@ -71,13 +72,15 @@ def main() -> None:
             name: run_case(shared, user, "b12_" + name, symbols)
             for name, (symbols, _) in cases.items()
         }
+    regressions = []
     for name, (_, expected) in cases.items():
         candidates = observed[name]
         if not any(expected in candidate for candidate in candidates):
-            raise AssertionError(
-                f"B12 regression {name}: complete syllable lost to abbreviation: {candidates[:5]!r}"
-            )
-    print("PASS B12 packaged-schema replay exposes all complete syllables; cases=", len(cases))
+            regressions.append(f"{name}: {candidates[:5]!r}")
+    if not regressions:
+        raise AssertionError("XPASS B12 diagnostic: " + EXPECTED_FAILURE_REASON)
+    print("XFAIL B12 packaged-schema replay:", EXPECTED_FAILURE_REASON)
+    print("XFAIL cases=", len(regressions))
 
 
 if __name__ == "__main__":
