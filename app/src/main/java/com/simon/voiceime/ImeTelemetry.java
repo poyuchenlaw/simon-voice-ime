@@ -41,6 +41,8 @@ final class ImeTelemetry {
     private final Transport transport;
     private volatile String lastResult = "尚未上傳";
     private volatile long lastUploadMs;
+    private volatile long lastInputElapsed = android.os.SystemClock.elapsedRealtime();
+    private long lastAttemptElapsed = android.os.SystemClock.elapsedRealtime();
 
     ImeTelemetry(Context context) {
         this(context, new File(context.getFilesDir(), "ime-diagnostics.jsonl"), version(context), ImeTelemetry::httpPost);
@@ -48,14 +50,16 @@ final class ImeTelemetry {
     ImeTelemetry(Context context, File spool, String version, Transport transport) {
         this.context=context; this.spool=new TelemetrySpool(spool,MAX_BYTES); this.appVersion=version; this.transport=transport;
         thread.start(); handler=new Handler(thread.getLooper());
-        handler.postDelayed(new Runnable(){public void run(){flush();if(handler!=null)handler.postDelayed(this,60_000);}},60_000);
+        handler.postDelayed(new Runnable(){public void run(){flush(false);if(handler!=null)handler.postDelayed(this,15_000);}},15_000);
         installCrashHandlers(); collectPreviousExits();
     }
     private static String version(Context c) {
         try { return c.getPackageManager().getPackageInfo(c.getPackageName(),0).versionName; }
         catch(Exception e) { return "unknown"; }
     }
+    void noteInput(){lastInputElapsed=android.os.SystemClock.elapsedRealtime();}
     void record(String type,String page,JSONObject fields,boolean protectedField) {
+        if("key".equals(type)||"key_outcome".equals(type)||"candidate".equals(type)||"commit".equals(type)||"correction".equals(type)||"key_outcome".equals(type))noteInput();
         if(!context.getSharedPreferences("simon_ime_prefs",Context.MODE_PRIVATE).getBoolean("ime_auto_upload",true))return;
         try {
             JSONObject event=makeEvent(System.currentTimeMillis(),session,appVersion,type,page,fields,protectedField);
@@ -66,7 +70,7 @@ final class ImeTelemetry {
         try{JSONObject event=makeEvent(System.currentTimeMillis(),session,appVersion,type,page,fields,false);enqueue(event);}catch(Exception e){Log.w("ImeTelemetry","urgent event could not be stored",e);}
     }
     static JSONObject makeEvent(long ts,String session,String version,String type,String page,JSONObject fields,boolean protectedField)throws Exception {
-        if(protectedField && ("key".equals(type)||"candidate".equals(type)||"commit".equals(type)||"correction".equals(type))) {
+        if(protectedField && ("key".equals(type)||"key_outcome".equals(type)||"candidate".equals(type)||"commit".equals(type)||"correction".equals(type))) {
             fields=new JSONObject().put("step","protected_field_skipped").put("ms",0).put("ok",true).put("message","protected field; content omitted");
             type="protected_field_skipped";page="bopomofo";
         }
@@ -85,7 +89,7 @@ final class ImeTelemetry {
                 .put("message", redact(failure.getMessage() == null ? "" : failure.getMessage()))
                 .put("stack", redact(stack));
     }
-    private void enqueue(JSONObject event){spool.add(event);if(size()>=BATCH_SIZE&&handler!=null)handler.post(this::flush);}
+    private void enqueue(JSONObject event){spool.add(event);}
     void key(String page,String key,float x,float y,float cx,float cy,boolean protectedField) {
         try{record("key",page,new JSONObject().put("key",key).put("x",x).put("y",y).put("key_center_x",cx).put("key_center_y",cy),protectedField);}catch(Exception ignored){}
     }
@@ -98,11 +102,13 @@ final class ImeTelemetry {
         return makeEvent(ts, session, version, "key", "bopomofo", fields, false);
     }
     void bopomofoKey(String key, float x, float y, float cx, float cy,
-                     long keyToCandidateMs, boolean protectedField) {
+                     long keyToCandidateMs, JSONObject shadow, boolean protectedField) {
         try {
-            record("key", "bopomofo", new JSONObject().put("key", key).put("x", x).put("y", y)
+            JSONObject fields = new JSONObject().put("key", key).put("x", x).put("y", y)
                     .put("key_center_x", cx).put("key_center_y", cy)
-                    .put("key_to_candidate_ms", Math.max(0L, keyToCandidateMs)), protectedField);
+                    .put("key_to_candidate_ms", Math.max(0L, keyToCandidateMs));
+            if (shadow != null) for (Iterator<String> i=shadow.keys();i.hasNext();) { String k=i.next();fields.put(k,shadow.get(k)); }
+            record("key", "bopomofo", fields, protectedField);
         } catch (Exception ignored) {}
     }
     /**
@@ -120,8 +126,23 @@ final class ImeTelemetry {
         try{JSONObject j=new JSONObject().put("step",step).put("ms",ms).put("ok",ok);if(message!=null&&!message.isEmpty())j.put("message",message);record("rime_init","bopomofo",j,false);}catch(Exception ignored){}
     }
     int size(){return spool.size();}
-    private void flush() {
+    private boolean onWifi() {
+        try { android.net.ConnectivityManager manager=(android.net.ConnectivityManager)context.getSystemService(Context.CONNECTIVITY_SERVICE);
+            android.net.NetworkCapabilities caps=manager==null?null:manager.getNetworkCapabilities(manager.getActiveNetwork());
+            return caps!=null&&caps.hasTransport(android.net.NetworkCapabilities.TRANSPORT_WIFI);
+        }catch(Exception unavailable){return false;}
+    }
+    private void flush(boolean manual) {
+        SharedPreferences settings=context.getSharedPreferences("simon_ime_prefs",Context.MODE_PRIVATE);
+        if(!manual&&!settings.getBoolean("ime_auto_upload",true))return;
+        String mode=settings.getString("ime_upload_frequency","idle");
+        long now=android.os.SystemClock.elapsedRealtime();
+        if(!TelemetryFlushPolicy.eligible(mode,now,lastAttemptElapsed,lastInputElapsed,onWifi(),manual)) {
+            if(manual&&"wifi".equals(mode)){lastResult="等待 Wi-Fi 連線";settings.edit().putString("ime_last_upload_result",lastResult).apply();}
+            return;
+        }
         List<JSONObject> batch=spool.batch(BATCH_SIZE);if(batch.isEmpty())return;
+        lastAttemptElapsed=now;
         try {
             SharedPreferences p=context.getSharedPreferences("simon_ime_prefs",Context.MODE_PRIVATE);
             String base=p.getString("server_url","http://100.84.86.128:8001"); URI uri=URI.create(base);
@@ -149,18 +170,46 @@ final class ImeTelemetry {
     private String deviceId(){SharedPreferences p=context.getSharedPreferences("ime_telemetry",Context.MODE_PRIVATE);String id=p.getString("id",null);if(id==null){id=UUID.randomUUID().toString();p.edit().putString("id",id).apply();}return id;}
     static String stableBatchId(List<JSONObject> events)throws Exception{MessageDigest d=MessageDigest.getInstance("SHA-256");for(JSONObject e:events)d.update(e.toString().getBytes(StandardCharsets.UTF_8));byte[] b=d.digest();StringBuilder s=new StringBuilder();for(byte x:b)s.append(String.format(Locale.ROOT,"%02x",x&255));return s.toString();}
     String lastResult(){return lastResult;} long lastUploadMs(){return lastUploadMs;}
-    void uploadNow(){if(handler!=null)handler.post(this::flush);}
+    void uploadNow(){if(handler!=null)handler.post(()->flush(true));}
     private void installCrashHandlers(){Thread.UncaughtExceptionHandler prior=Thread.getDefaultUncaughtExceptionHandler();Thread.setDefaultUncaughtExceptionHandler((t,e)->{
         try{JSONObject crash=makeCrashEvent(t.getName(),e,MAX_CRASH_STACK_CHARS);crash.remove("type");recordUrgent("crash","voice",crash);}catch(Exception ignored){}
         if(prior!=null)prior.uncaughtException(t,e);
     });}
     private static String redact(String s){return s.replaceAll("(?i)(Bearer\\s+)[^\\s]+","$1[redacted]");}
+    private static String exitReasonName(int reason) {
+        switch(reason) {
+            case ApplicationExitInfo.REASON_EXIT_SELF: return "EXIT_SELF";
+            case ApplicationExitInfo.REASON_CRASH: return "CRASH";
+            case ApplicationExitInfo.REASON_CRASH_NATIVE: return "CRASH_NATIVE";
+            case ApplicationExitInfo.REASON_ANR: return "ANR";
+            case ApplicationExitInfo.REASON_LOW_MEMORY: return "LOW_MEMORY";
+            case ApplicationExitInfo.REASON_USER_REQUESTED: return "USER_REQUESTED";
+            case ApplicationExitInfo.REASON_USER_STOPPED: return "USER_STOPPED";
+            case ApplicationExitInfo.REASON_SIGNALED: return "SIGNALED";
+            case ApplicationExitInfo.REASON_INITIALIZATION_FAILURE: return "INITIALIZATION_FAILURE";
+            case ApplicationExitInfo.REASON_PERMISSION_CHANGE: return "PERMISSION_CHANGE";
+            case ApplicationExitInfo.REASON_EXCESSIVE_RESOURCE_USAGE: return "EXCESSIVE_RESOURCE_USAGE";
+            case ApplicationExitInfo.REASON_DEPENDENCY_DIED: return "DEPENDENCY_DIED";
+            case ApplicationExitInfo.REASON_PACKAGE_STATE_CHANGE: return "PACKAGE_STATE_CHANGE";
+            case ApplicationExitInfo.REASON_FREEZER: return "FREEZER";
+            case ApplicationExitInfo.REASON_PACKAGE_UPDATED: return "PACKAGE_UPDATED";
+            default: return "OTHER";
+        }
+    }
     private void collectPreviousExits(){if(Build.VERSION.SDK_INT<30)return;try{
         SharedPreferences p=context.getSharedPreferences("ime_telemetry",Context.MODE_PRIVATE);long sent=p.getLong("exit_timestamp",0);ActivityManager am=(ActivityManager)context.getSystemService(Context.ACTIVITY_SERVICE);
         List<ApplicationExitInfo> rows=am.getHistoricalProcessExitReasons(context.getPackageName(),0,10);long newest=sent;
-        if(rows!=null)for(ApplicationExitInfo x:rows){long ts=x.getTimestamp();if(ts<=sent)continue;String kind=x.getReason()==ApplicationExitInfo.REASON_ANR?"anr":x.getReason()==ApplicationExitInfo.REASON_CRASH_NATIVE?"native":"java";
-            String trace="";try(InputStream in=x.getTraceInputStream()){if(in!=null){byte[] b=new byte[4096];int n=in.read(b);if(n>0)trace=redact(new String(b,0,n,StandardCharsets.UTF_8).substring(0,Math.min(n,2048)));}}catch(Exception ignored){}
-            recordUrgent("crash","voice",new JSONObject().put("kind",kind).put("reason",x.getDescription()==null?"exit-"+x.getReason():x.getDescription()).put("trace",trace));newest=Math.max(newest,ts);}
+        if(rows!=null)for(ApplicationExitInfo x:rows){long ts=x.getTimestamp();if(ts<=sent)continue;int reason=x.getReason();
+            if(reason==ApplicationExitInfo.REASON_CRASH||reason==ApplicationExitInfo.REASON_CRASH_NATIVE||reason==ApplicationExitInfo.REASON_ANR){
+                String kind=reason==ApplicationExitInfo.REASON_ANR?"anr":reason==ApplicationExitInfo.REASON_CRASH_NATIVE?"native":"java";
+                String trace="";try(InputStream in=x.getTraceInputStream()){if(in!=null){byte[] b=new byte[4096];int n=in.read(b);if(n>0)trace=redact(new String(b,0,n,StandardCharsets.UTF_8).substring(0,Math.min(n,2048)));}}catch(Exception ignored){}
+                recordUrgent("crash","voice",new JSONObject().put("kind",kind).put("reason",x.getDescription()==null?"exit-"+reason:x.getDescription()).put("trace",trace));
+            } else {
+                recordUrgent("exit","voice",new JSONObject().put("reason_code",reason).put("reason_name",exitReasonName(reason))
+                        .put("status",x.getStatus()).put("importance",x.getImportance()).put("pss_kb",x.getPss()).put("rss_kb",x.getRss())
+                        .put("description",x.getDescription()==null?"":x.getDescription()).put("exit_ts",ts));
+            }
+            newest=Math.max(newest,ts);}
         if(newest>sent)p.edit().putLong("exit_timestamp",newest).apply();
     }catch(Exception e){Log.w("ImeTelemetry","exit history unavailable",e);}}
     void close(){if(handler!=null)handler.removeCallbacksAndMessages(null);thread.quitSafely();}

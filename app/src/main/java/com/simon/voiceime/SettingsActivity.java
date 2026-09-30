@@ -96,6 +96,28 @@ public class SettingsActivity extends Activity {
         ImeTelemetry telemetry=ImeTelemetry.install(this);
         TextView uploadStatus=findViewById(R.id.tvImeUploadStatus);
         if(checkImeAutoUpload!=null){checkImeAutoUpload.setChecked(prefs.getBoolean("ime_auto_upload",true));checkImeAutoUpload.setOnCheckedChangeListener((button,checked)->prefs.edit().putBoolean("ime_auto_upload",checked).apply());}
+        android.widget.Spinner frequency=findViewById(R.id.imeUploadFrequency);
+        if(frequency!=null){
+            String[] labels={"即時約每分鐘","停止輸入 1 分鐘後（預設）","每小時","只在 Wi-Fi"};
+            String[] modes={"realtime","idle","hourly","wifi"};
+            frequency.setAdapter(new android.widget.ArrayAdapter<>(this,android.R.layout.simple_spinner_dropdown_item,labels));
+            String saved=prefs.getString("ime_upload_frequency","idle");int selected=1;
+            for(int i=0;i<modes.length;i++)if(modes[i].equals(saved))selected=i;
+            frequency.setSelection(selected);
+            frequency.setOnItemSelectedListener(new android.widget.AdapterView.OnItemSelectedListener(){
+                public void onNothingSelected(android.widget.AdapterView<?> parent){}
+                public void onItemSelected(android.widget.AdapterView<?> parent,android.view.View view,int position,long id){
+                    prefs.edit().putString("ime_upload_frequency",modes[position]).apply();
+                }
+            });
+        }
+        Button resetTouch=findViewById(R.id.btnResetTouchLearning);
+        if(resetTouch!=null)resetTouch.setOnClickListener(v->new AlertDialog.Builder(this)
+            .setTitle("重置落點學習").setMessage("將清除已學習的落點參數並恢復預設值。")
+            .setNegativeButton("取消",null).setPositiveButton("重置",(dialog,which)->{
+                TouchShadowLearning.resetDefaults(this);
+                Toast.makeText(this,"已恢復預設落點參數",Toast.LENGTH_SHORT).show();
+            }).show());
         Button uploadNow=findViewById(R.id.btnImeUploadNow);
         if(uploadNow!=null){uploadNow.setOnClickListener(v->{uploadStatus.setText("正在背景上傳…");telemetry.uploadNow();new android.os.Handler().postDelayed(()->{
                     long when=prefs.getLong("ime_last_upload_ms",0);String result=prefs.getString("ime_last_upload_result",telemetry.lastResult());

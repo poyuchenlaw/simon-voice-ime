@@ -38,14 +38,14 @@
         android:visibility="gone" />
 
     <!-- ========== 語音鍵盤（預設顯示） ========== -->
-    <com.simon.voiceime.SwipeInterceptLayout
+    <com.simon.voiceime.KeyboardTouchLayout
         android:id="@+id/voiceKeyboard"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:orientation="horizontal"
-        android:paddingStart="2dp"
+        android:paddingStart="3dp"
         android:paddingEnd="2dp"
-        android:paddingBottom="2dp">
+        android:paddingBottom="3dp">
 
         <!-- 左側：功能列 + 編輯列 -->
         <LinearLayout
@@ -62,19 +62,7 @@
                 android:gravity="center_vertical"
                 android:layout_marginBottom="2dp">
 
-                <TextView
-                    android:id="@+id/btnSwitchIME"
-                    android:layout_width="0dp"
-                    android:layout_height="34dp"
-                    android:layout_weight="1"
-                    android:gravity="center"
-                    android:text="EN"
-                    android:textSize="12sp"
-                    android:textColor="#6bc5f0"
-                    android:background="@color/key_bg"
-                    android:layout_marginEnd="2dp"
-                    android:clickable="true"
-                    android:focusable="true" />
+
 
                 <TextView
                     android:id="@+id/btnSettings"
@@ -139,6 +127,19 @@
                 android:layout_height="42dp"
                 android:orientation="horizontal"
                 android:gravity="center_vertical">
+
+                <TextView
+                    android:id="@+id/btnSwitchIME"
+                    android:layout_width="44dp"
+                    android:layout_height="38dp"
+                    android:gravity="center"
+                    android:text="EN"
+                    android:textSize="12sp"
+                    android:textColor="#6bc5f0"
+                    android:background="@color/key_bg"
+                    android:layout_marginEnd="2dp"
+                    android:clickable="true"
+                    android:focusable="true" />
 
                 <TextView
                     android:id="@+id/btnSpace"
@@ -253,7 +254,7 @@
             android:textColor="@color/key_text"
             android:background="@color/mic_idle" />
 
-    </com.simon.voiceime.SwipeInterceptLayout>
+    </com.simon.voiceime.KeyboardTouchLayout>
 
     <!-- ========== 英文鍵盤（預設隱藏） ========== -->
     <include

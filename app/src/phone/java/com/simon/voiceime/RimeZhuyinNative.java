@@ -26,6 +26,11 @@ final class RimeZhuyinNative implements AutoCloseable {
     void clear() { nativeClear(handle); }
     int cursor() { return nativeCursor(handle); }
     void moveCursor(boolean right) { nativeMoveCursor(handle, right); }
+    boolean moveCursorToPreviewCharacter(int codePointIndex) {
+        return nativeMoveCursorToPreviewCharacter(handle, codePointIndex);
+    }
+    void moveCursorToEnd() { nativeMoveCursorToEnd(handle); }
+    int[] previewSelectionRange() { return nativePreviewSelectionRange(handle); }
     String composing() { return decode(nativeComposing(handle)); }
     String[] candidates() {
         byte[][] values = nativeCandidates(handle);
@@ -50,6 +55,9 @@ final class RimeZhuyinNative implements AutoCloseable {
     private static native void nativeClear(long handle);
     private static native int nativeCursor(long handle);
     private static native void nativeMoveCursor(long handle, boolean right);
+    private static native boolean nativeMoveCursorToPreviewCharacter(long handle, int codePointIndex);
+    private static native void nativeMoveCursorToEnd(long handle);
+    private static native int[] nativePreviewSelectionRange(long handle);
     private static native byte[] nativeComposing(long handle);
     private static native byte[][] nativeCandidates(long handle);
     private static native byte[] nativeTakeCommit(long handle);

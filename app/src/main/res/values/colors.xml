@@ -9,4 +9,8 @@
     <color name="mode_append">#4ecca3</color>
     <color name="mode_replace">#e94560</color>
     <color name="mode_spell">#f0a500</color>
+    <color name="keyboard_key_border">#7288AB</color>
+    <color name="keyboard_key_pressed">#354E78</color>
+    <color name="keyboard_key_bg">#16213e</color>
+    <color name="keyboard_key_text">#e0e0e0</color>
 </resources>

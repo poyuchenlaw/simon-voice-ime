@@ -358,6 +358,9 @@
         <View android:layout_width="match_parent" android:layout_height="1dp" android:background="#333333" android:layout_marginBottom="16dp" />
         <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="注音九宮格" android:textSize="18sp" android:textColor="#e0e0e0" android:layout_marginBottom="6dp" />
         <CheckBox android:id="@+id/checkImeAutoUpload" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="自動回傳測試紀錄（預設開啟）" android:textColor="#cccccc" />
+        <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:text="上傳頻率" android:textColor="#cccccc" />
+        <Spinner android:id="@+id/imeUploadFrequency" android:layout_width="match_parent" android:layout_height="48dp" />
+        <Button android:id="@+id/btnResetTouchLearning" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="重置落點學習" />
         <Button android:id="@+id/btnImeUploadNow" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="立即上傳測試紀錄" android:layout_marginBottom="2dp" />
         <TextView android:id="@+id/tvImeUploadStatus" android:layout_width="match_parent" android:layout_height="wrap_content" android:textColor="#888888" android:textSize="12sp" android:layout_marginBottom="8dp" />
 

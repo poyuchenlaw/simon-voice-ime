@@ -29,6 +29,8 @@ final class RimeZhuyinEngine implements ZhuyinInputController.Engine, AutoClosea
         nativeEngine = new RimeZhuyinNative(shared.getAbsolutePath(), user.getAbsolutePath());
     }
 
+    @Override public boolean preservesUnparsedInput() { return true; }
+
     @Override public void key(String symbol) {
         int key = ZhuyinKeyMap.physicalKey(symbol);
         if (key >= 0) nativeEngine.key(key);
@@ -41,6 +43,11 @@ final class RimeZhuyinEngine implements ZhuyinInputController.Engine, AutoClosea
         if ("left".equals(direction)) nativeEngine.moveCursor(false);
         else if ("right".equals(direction)) nativeEngine.moveCursor(true);
     }
+    @Override public boolean moveCursorToPreviewCharacter(int codePointIndex) {
+        return nativeEngine.moveCursorToPreviewCharacter(codePointIndex);
+    }
+    @Override public void moveCursorToEnd() { nativeEngine.moveCursorToEnd(); }
+    @Override public int[] previewSelectionRange() { return nativeEngine.previewSelectionRange(); }
     @Override public int cursorPosition() { return nativeEngine.cursor(); }
     @Override public String composingText() { return nativeEngine.composing(); }
     @Override public List<String> candidates() {

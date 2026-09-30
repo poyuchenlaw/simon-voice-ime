@@ -5,6 +5,12 @@ import com.simon.voiceime.KeyboardPager.KeyboardMode;
 import android.content.ClipData;
 import android.content.ClipboardManager;
 import android.content.Context;
+import android.app.Notification;
+import android.app.NotificationChannel;
+import android.app.NotificationManager;
+import android.net.ConnectivityManager;
+import android.net.Network;
+import android.net.NetworkRequest;
 import android.content.Intent;
 import android.content.SharedPreferences;
 import android.inputmethodservice.InputMethodService;
@@ -63,6 +69,7 @@ import java.util.List;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import okhttp3.Call;
 import okhttp3.Callback;
@@ -75,6 +82,7 @@ import okhttp3.Response;
 import okhttp3.WebSocket;
 import okhttp3.WebSocketListener;
 import okio.ByteString;
+import okio.BufferedSink;
 
 /**
  * Simon Voice IME v4.2.1
@@ -160,6 +168,7 @@ public class SimonIMEService extends InputMethodService {
     private TextView enSuggest0, enSuggest1, enSuggest2;
 
     private ZhuyinInputController zhuyinInput;
+    private InputConnection zhuyinComposingConnection;
     private ZhuyinWordIndex zhuyinWordIndex;
     private ZhuyinAssociationHistory zhuyinAssociationHistory;
     private String lastCommittedZhuyinWord;
@@ -172,14 +181,43 @@ public class SimonIMEService extends InputMethodService {
     private int renderedZhuyinCandidateCount = 0;
 
     private ImeTelemetry imeTelemetry;
+    private VoicePendingQueue voicePendingQueue;
+    private volatile boolean recordingFinalizing;
+    private final List<Runnable> afterRecordingFinalization=new ArrayList<>();
+    private final Set<Integer> discardedVoiceGenerations = java.util.concurrent.ConcurrentHashMap.newKeySet();
+    private int silenceStatusGeneration;
+    private final AtomicBoolean pendingDrainRunning = new AtomicBoolean(false);
+    private final java.util.concurrent.ScheduledExecutorService pendingVoiceExecutor=java.util.concurrent.Executors.newSingleThreadScheduledExecutor(r -> {
+        Thread t=new Thread(r,"VoicePendingUploader");t.setDaemon(true);return t;
+    });
+    private java.util.concurrent.ScheduledFuture<?> pendingDrainTask;
+    private final Set<String> discardedProtectedSessions = java.util.concurrent.ConcurrentHashMap.newKeySet();
+    private volatile String activePendingSessionId;
+    private final java.util.concurrent.ConcurrentHashMap<Integer, String> pendingSessionByGeneration = new java.util.concurrent.ConcurrentHashMap<>();
+    private ConnectivityManager.NetworkCallback voiceNetworkCallback;
+    private volatile long lastVoiceChunkElapsed;
+    private volatile long lastVoiceStallEventElapsed;
+    // Delivery receipts suppress duplicate text; audio custody receipts alone permit PCM deletion.
+    private final java.util.concurrent.ConcurrentHashMap<String,java.util.concurrent.CountDownLatch> audioReceiptWaiters=new java.util.concurrent.ConcurrentHashMap<>();
+    private final java.util.Set<Integer> deliveredVoiceGenerations = java.util.concurrent.ConcurrentHashMap.newKeySet();
+    private final java.util.Set<Integer> serverFinalGenerations = java.util.concurrent.ConcurrentHashMap.newKeySet();
+    private final java.util.Set<Integer> serverFullAudioGenerations = java.util.concurrent.ConcurrentHashMap.newKeySet();
+    private final java.util.Set<Integer> fullAudioRequests = java.util.concurrent.ConcurrentHashMap.newKeySet();
+    private volatile boolean lastCommitInsertedOrCopied;
+    private volatile boolean lastCommitClipboardWritten;
+    private volatile String lastCommitMethod="clipboard";
+    private final java.util.concurrent.atomic.AtomicBoolean pendingQuotaWarningShown=new java.util.concurrent.atomic.AtomicBoolean(false);
     private TouchLearningStore touchLearning;
+    private TouchShadowLearning touchShadow;
     /** Blocks telemetry and local learning for password/no-personalized-learning editors. */
     private boolean protectedInputField = false;
     private String touchSessionId = java.util.UUID.randomUUID().toString();
     private BopomofoKeyTouch pendingBopomofoKeyTouch;
+    private PopupWindow zhuyinReplacePopup;
 
     private static final class BopomofoKeyTouch {
         final String key; final float x; final float y; final float centerX; final float centerY;
+        JSONObject shadow = new JSONObject();
         BopomofoKeyTouch(String key, float x, float y, float centerX, float centerY) {
             this.key = key; this.x = x; this.y = y; this.centerX = centerX; this.centerY = centerY;
         }
@@ -233,6 +271,187 @@ public class SimonIMEService extends InputMethodService {
     private final Set<Integer> completedGenerations = new HashSet<>();
     // v6.1: fullPcmBuffer 封頂 ~10 分鐘（19.2MB）防無界成長
     private static final int MAX_FULL_PCM_BYTES = SAMPLE_RATE * 2 * 600;
+
+    private void recordVoiceEvent(String phase, String id, long audioMs, int chars, int closeCode,
+                                  String closeReason, String insertMethod, long bytes, int attempts) {
+        if (imeTelemetry == null || protectedInputField) return;
+        try {
+            String reason = closeReason == null ? "" : closeReason;
+            if (reason.length() > 80) reason = reason.substring(0, 80);
+            long sinceStart=Math.max(0L,SystemClock.elapsedRealtime()-activeRecordingStartedMs);
+            if(id!=null&&voicePendingQueue!=null){try{long started=Long.parseLong(voicePendingQueue.startedAt(id));if(started>0)sinceStart=Math.max(0L,System.currentTimeMillis()-started);}catch(Exception ignored){}}
+            imeTelemetry.record("voice", "voice", new JSONObject().put("phase",phase)
+                    .put("client_session_id",id == null ? "" : id)
+                    .put("ms_since_start", sinceStart)
+                    .put("audio_ms",Math.max(0L,audioMs)).put("chars",Math.max(0,chars))
+                    .put("close_code",closeCode).put("close_reason",reason)
+                    .put("insert_method",insertMethod == null ? "" : insertMethod)
+                    .put("bytes",Math.max(0L,bytes)).put("attempts",Math.max(0,attempts)),false);
+        } catch (Exception e) { Log.w(TAG,"voice telemetry event skipped",e); }
+    }
+
+    private void registerVoiceNetworkCallback() {
+        try {
+            ConnectivityManager cm=(ConnectivityManager)getSystemService(CONNECTIVITY_SERVICE);
+            if(cm==null)return;
+            voiceNetworkCallback=new ConnectivityManager.NetworkCallback(){
+                @Override public void onAvailable(Network network){drainPendingVoiceQueue();}
+            };
+            cm.registerNetworkCallback(new NetworkRequest.Builder().addCapability(android.net.NetworkCapabilities.NET_CAPABILITY_INTERNET).build(),voiceNetworkCallback);
+        } catch(Exception e){Log.w(TAG,"voice network callback unavailable",e);}
+    }
+
+    private String fetchServerArchiveText(String sessionId)throws IOException {
+        MultipartBody body=new MultipartBody.Builder().setType(MultipartBody.FORM)
+                .addFormDataPart("client_session_id",sessionId).build();
+        Request.Builder rb=new Request.Builder().url(getServerUrl()+"/v1/audio-archive/transcribe").post(body);
+        String auth=getAuthPassword();if(auth!=null&&!auth.isEmpty())rb.addHeader("Authorization","Bearer "+auth);
+        OkHttpClient client=httpClient.newBuilder().readTimeout(600,TimeUnit.SECONDS).callTimeout(610,TimeUnit.SECONDS).build();
+        try(Response response=client.newCall(rb.build()).execute()) {
+            if(!response.isSuccessful())throw new IOException("stored transcription HTTP "+response.code());
+            String raw=response.body()==null?"":response.body().string();
+            VoicePendingQueue.parseSuccessfulResponse(raw);
+            return raw;
+        }
+    }
+
+    private void drainPendingVoiceQueue() {
+        VoicePendingQueue queue=voicePendingQueue;if(queue==null)return;
+        if(!pendingDrainRunning.compareAndSet(false,true))return;
+        if(pendingVoiceExecutor.isShutdown()){pendingDrainRunning.set(false);return;}
+        pendingVoiceExecutor.execute(()->{
+          try {
+            queue.runIO(() -> null);
+            for(String id:queue.pendingServerDiscards()) {
+                if(!queue.serverDiscardDue(id,System.currentTimeMillis()))continue;
+                Request.Builder rb=new Request.Builder().url(getServerUrl()+"/v1/audio-archive?client_session_id="+id).delete();
+                String auth=getAuthPassword();if(auth!=null&&!auth.isEmpty())rb.addHeader("Authorization","Bearer "+auth);
+                try(Response response=httpClient.newBuilder().readTimeout(2,TimeUnit.SECONDS).callTimeout(3,TimeUnit.SECONDS).build().newCall(rb.build()).execute()) {
+                    boolean confirmed=response.isSuccessful()&&response.body()!=null&&new JSONObject(response.body().string()).optBoolean("discarded");
+                    if(response.code()==404||response.code()==405) {
+                        Request.Builder receipt=new Request.Builder().url(getServerUrl()+"/v1/audio-receipt?client_session_id="+id);
+                        if(auth!=null&&!auth.isEmpty())receipt.addHeader("Authorization","Bearer "+auth);
+                        try(Response custody=httpClient.newBuilder().callTimeout(3,TimeUnit.SECONDS).build().newCall(receipt.build()).execute()) {
+                            confirmed=custody.code()==404&&custody.body()!=null
+                                    &&"Audio receipt not found".equals(new JSONObject(custody.body().string()).optString("detail"));
+                        }
+                    }
+                    if(!confirmed)throw new IOException("discard not confirmed HTTP "+response.code());
+                    queue.confirmServerDiscard(id);
+                }catch(Exception e) {queue.serverDiscardFailed(id);Log.w(TAG,"Server audio discard pending; will retry",e);}
+            }
+            for(String id:queue.pendingOldestFirst()){
+                if(id.equals(activePendingSessionId)||pendingSessionByGeneration.containsValue(id)||!queue.due(id,System.currentTimeMillis()))continue;
+                queue.uploadOne(id,(pcm,sessionId,sampleRate)->{
+                    if(queue.receiptConfirmed(sessionId))return fetchServerArchiveText(sessionId);
+                    MultipartBody body=new MultipartBody.Builder().setType(MultipartBody.FORM)
+                            .addFormDataPart("file","recording.wav",pcmWavBody(pcm,sampleRate))
+                            .addFormDataPart("client_session_id",sessionId).build();
+                    Request.Builder rb=new Request.Builder().url(getServerUrl()+"/v1/audio-archive").post(body);
+                    String auth=getAuthPassword();if(auth!=null&&!auth.isEmpty())rb.addHeader("Authorization","Bearer "+auth);
+                    long seconds=Math.max(60L,Math.min(600L,30L+(long)Math.ceil(queue.audioMs(sessionId)/2000.0)));
+                    OkHttpClient uploadClient=httpClient.newBuilder().readTimeout(seconds,TimeUnit.SECONDS).callTimeout(seconds+10,TimeUnit.SECONDS).build();
+                    try(Response response=uploadClient.newCall(rb.build()).execute()){
+                        if(response.code()==409) {
+                            mainHandler.post(() -> updateStatus("錄音備份衝突，音訊保留待重試"));
+                            if(queue.backupFailed(sessionId)) {
+                                Request.Builder receipt=new Request.Builder().url(getServerUrl()+"/v1/audio-receipt?client_session_id="+sessionId);
+                                if(auth!=null&&!auth.isEmpty())receipt.addHeader("Authorization","Bearer "+auth);
+                                try(Response custody=uploadClient.newCall(receipt.build()).execute()) {
+                                    if(custody.isSuccessful()&&custody.body()!=null) {
+                                        JSONObject held=new JSONObject(custody.body().string());
+                                        if(queue.acceptServerCopyAfterWriteFailure(sessionId,held)) {
+                                            mainHandler.post(() -> updateStatus("本機錄音備份失敗，伺服器已保存音訊"));
+                                            return fetchServerArchiveText(sessionId);
+                                        }
+                                    }
+                                }
+                            }
+                            throw new IOException("audio custody conflict");
+                        }
+                        if(!response.isSuccessful())throw new IOException("HTTP "+response.code());
+                    String raw=response.body()==null?"":response.body().string();
+                    VoicePendingQueue.parseSuccessfulResponse(raw);
+                    return raw;
+                    }
+                },new VoicePendingQueue.Delivery() {
+                  @Override public void archiveToHistory(String text,String startedAt) {
+                    if(clipboardHelper==null)throw new IllegalStateException("clipboard history unavailable");
+                    clipboardHelper.addToHistory(text);
+                  }
+                  @Override public void deliver(String text,String startedAt) {
+                    if(!VoiceResultText.isSilence(text)){
+                        ClipboardManager cm=(ClipboardManager)getSystemService(CLIPBOARD_SERVICE);
+                        if(cm==null)throw new IllegalStateException("clipboard unavailable");
+                        cm.setPrimaryClip(ClipData.newPlainText("simon-ime",text));
+                        if(clipboardHelper!=null)clipboardHelper.addToHistory(text);
+                        showPendingVoiceNotification(startedAt);
+                    }
+                    recordVoiceEvent("pending_uploaded",id,queue.audioMs(id),text==null?0:text.length(),0,"","clipboard",queue.totalBytes(),queue.attempts(id));
+                  }
+                },(phase,sessionId,audioMs,bytes,attempts,error)->{
+                    if("silence".equals(phase)&&!queue.backupFailed(sessionId)) { mainHandler.post(this::showNoVoiceStatus); }
+                    if("pending_failed".equals(phase)){
+                        recordVoiceEvent(phase,sessionId,audioMs,0,0,error,"",bytes,attempts);
+
+                    }
+                });
+                if(queue.totalBytes()>500L*1024*1024)showPendingVoiceQuotaWarning();
+            }
+          } finally { pendingDrainRunning.set(false); schedulePendingDrain(); }
+        });
+    }
+
+    private synchronized void schedulePendingDrain(){
+        VoicePendingQueue q=voicePendingQueue;if(q==null||pendingVoiceExecutor.isShutdown())return;
+        if(pendingDrainTask!=null){pendingDrainTask.cancel(false);pendingDrainTask=null;}
+        long wait=Long.MAX_VALUE;
+        for(String id:q.pendingOldestFirst())if(!id.equals(activePendingSessionId)&&!pendingSessionByGeneration.containsValue(id))wait=Math.min(wait,q.retryDelayMs(id));
+        for(String id:q.pendingServerDiscards())wait=Math.min(wait,q.serverDiscardDelayMs(id));
+        if(wait!=Long.MAX_VALUE)pendingDrainTask=pendingVoiceExecutor.schedule(this::drainPendingVoiceQueue,wait,TimeUnit.MILLISECONDS);
+    }
+
+    private RequestBody pcmWavBody(java.io.File pcm,int sampleRate) {
+        return new RequestBody(){
+            @Override public MediaType contentType(){return MediaType.parse("audio/wav");}
+            @Override public long contentLength(){return voicePendingQueue.runIO(() -> pcm.length()+44L);}
+            @Override public void writeTo(BufferedSink sink)throws IOException {
+                try {
+                    long dataLength=voicePendingQueue.runIO(() -> pcm.length());
+                    java.nio.ByteBuffer h=java.nio.ByteBuffer.allocate(44).order(java.nio.ByteOrder.LITTLE_ENDIAN);
+                    h.put(new byte[]{'R','I','F','F'}).putInt((int)(dataLength+36)).put(new byte[]{'W','A','V','E'}).put(new byte[]{'f','m','t',' '})
+                            .putInt(16).putShort((short)1).putShort((short)1).putInt(sampleRate).putInt(sampleRate*2).putShort((short)2).putShort((short)16)
+                            .put(new byte[]{'d','a','t','a'}).putInt((int)dataLength);
+                    sink.write(h.array());
+                    java.io.InputStream in=voicePendingQueue.runIO(() -> new java.io.FileInputStream(pcm));
+                    try {
+                        byte[] buffer=new byte[16*1024];
+                        int n;
+                        while((n=voicePendingQueue.runIO(() -> in.read(buffer)))!=-1)sink.write(buffer,0,n);
+                    } finally {voicePendingQueue.runIO(() -> {in.close();return null;});}
+                } catch(IllegalStateException e) {throw new IOException("durable audio read failed",e);}
+            }
+        };
+    }
+
+    private void showPendingVoiceNotification(String startedAt) {
+        try {
+            NotificationManager nm=(NotificationManager)getSystemService(NOTIFICATION_SERVICE);if(nm==null)return;
+            String channel="voice_pending";
+            if(android.os.Build.VERSION.SDK_INT>=26)nm.createNotificationChannel(new NotificationChannel(channel,"語音補傳",NotificationManager.IMPORTANCE_DEFAULT));
+            String time=startedAt;
+            try{time=new java.text.SimpleDateFormat("HH:mm",java.util.Locale.getDefault()).format(new java.util.Date(Long.parseLong(startedAt)));}catch(Exception ignored){}
+            Notification.Builder b=android.os.Build.VERSION.SDK_INT>=26?new Notification.Builder(this,channel):new Notification.Builder(this);
+            nm.notify((int)(System.currentTimeMillis()&0x7fffffff),b.setSmallIcon(android.R.drawable.ic_btn_speak_now)
+                    .setContentTitle("上一段語音已轉成文字，已放剪貼簿").setContentText(time).setAutoCancel(true).build());
+        }catch(Exception e){Log.w(TAG,"pending voice notification failed",e);}
+    }
+    private void showPendingVoiceQuotaWarning(){try{NotificationManager nm=(NotificationManager)getSystemService(NOTIFICATION_SERVICE);if(nm==null)return;
+        if(!pendingQuotaWarningShown.compareAndSet(false,true))return;
+        String channel="voice_pending";if(android.os.Build.VERSION.SDK_INT>=26)nm.createNotificationChannel(new NotificationChannel(channel,"語音補傳",NotificationManager.IMPORTANCE_DEFAULT));
+        Notification.Builder b=android.os.Build.VERSION.SDK_INT>=26?new Notification.Builder(this,channel):new Notification.Builder(this);
+        nm.notify(646,b.setSmallIcon(android.R.drawable.stat_notify_error).setContentTitle("待補傳語音已超過 500 MB").setContentText("音訊仍保留在手機，等待網路上傳").setOngoing(true).build());
+    }catch(Exception e){Log.w(TAG,"pending queue warning failed",e);}}
 
     // v6.20 fields
     private final Set<String> markedClips = new LinkedHashSet<>();
@@ -341,6 +560,10 @@ public class SimonIMEService extends InputMethodService {
             return;
         }
         imeTelemetry = ImeTelemetry.install(this);
+        voicePendingQueue = VoicePendingQueue.getInstance(getFilesDir(),SAMPLE_RATE);
+        if(voicePendingQueue.totalBytes()>500L*1024*1024)showPendingVoiceQuotaWarning();
+        registerVoiceNetworkCallback();
+        drainPendingVoiceQueue();
         commandsHelper = new CommandsHelper(this);
         englishMapper = new EnglishMapper(this);
         onDeviceCorrection = createOnDeviceCorrectionEngine();
@@ -371,7 +594,9 @@ public class SimonIMEService extends InputMethodService {
         catch (Exception error) { Log.e(TAG, "Initial-symbol dictionary unavailable", error); }
         zhuyinAssociationHistory = new ZhuyinAssociationHistory(new java.io.File(getFilesDir(), "zhuyin_associations.tsv"));
         zhuyinInput = new ZhuyinInputController(createZhuyinEngine(), zhuyinWordIndex);
+        zhuyinInput.setRetypeEngineFactory(this::createZhuyinEngine);
         touchLearning = new TouchLearningStore(this);
+        touchShadow = new TouchShadowLearning(this, mainHandler);
 
         // 背景初始化本機 STT
         localSTT = createLocalSTT();
@@ -408,15 +633,28 @@ public class SimonIMEService extends InputMethodService {
     @Override
     public void onStartInput(EditorInfo attribute, boolean restarting) {
         super.onStartInput(attribute, restarting);
+        boolean wasProtected=protectedInputField;
         protectedInputField = isProtectedInputField(attribute);
+        if(protectedInputField&&!wasProtected&&isRecording){
+            discardProtectedRecording();
+            activePendingSessionId=null;isRecording=false;
+            AudioRecord recorder=audioRecord;
+            if(recorder!=null){synchronized(recorderRestartLock){try{recorder.stop();}catch(Exception ignored){}try{recorder.release();}catch(Exception ignored){}}}
+            if(audioStreamWs!=null){try{audioStreamWs.close(1000,"protected field");}catch(Exception ignored){}audioStreamWs=null;}
+            try{if(recordingWakeLock!=null&&recordingWakeLock.isHeld())recordingWakeLock.release();}catch(Exception ignored){}
+            recordingWakeLock=null;
+            Log.i(TAG,"Voice recording discarded after protected-field switch");
+        }
         if (zhuyinInput != null) zhuyinInput.setLearningEnabled(!protectedInputField);
         if (protectedInputField) RemotePrivateVocabSync.cancelForProtectedField();
         else if (zhuyinWordIndex != null) RemotePrivateVocabSync.refreshOnce(this, zhuyinWordIndex);
         if (!restarting) touchSessionId = java.util.UUID.randomUUID().toString();
+        if (touchShadow != null && (!restarting || protectedInputField)) touchShadow.invalidate();
         // v6.20: only treat a genuinely new field (not an internal restart) as a field switch.
         // On a real switch, bump the generation guard and disarm any pending AI material so it
         // never leaks into an unrelated field. Keep state on restarting==true.
         if (!restarting) {
+            zhuyinComposingConnection = null;
             fieldGeneration++;
             aiContextText = null;
             aiContextCount = 0;
@@ -484,6 +722,7 @@ public class SimonIMEService extends InputMethodService {
         btnBackspace.setOnTouchListener((v, event) -> {
             switch (event.getAction()) {
                 case MotionEvent.ACTION_DOWN:
+                    if (touchShadow != null) touchShadow.invalidate();
                     backspacePressed = true;
                     backspaceRepeatCount = 0;
                     // 先刪一個字
@@ -567,9 +806,6 @@ public class SimonIMEService extends InputMethodService {
         bopomofoKeyboard = rootView.findViewById(R.id.bopomofoKeyboard);
         englishKeyboard = rootView.findViewById(R.id.englishKeyboard);
         numbersKeyboard = rootView.findViewById(R.id.numbersKeyboard);
-        setupKeyboardSwipe(voiceKeyboard);
-        setupKeyboardSwipe(bopomofoKeyboard);
-        setupKeyboardSwipe(englishKeyboard);
 
         // 設定注音、英文鍵盤和數字鍵盤的按鍵處理
         setupTypingKeyboard(bopomofoKeyboard);
@@ -592,8 +828,8 @@ public class SimonIMEService extends InputMethodService {
         renderedZhuyinCandidateCount = 0;
         boCursorLeft = rootView.findViewById(R.id.boCursorLeft);
         boCursorRight = rootView.findViewById(R.id.boCursorRight);
-        if (boCursorLeft != null) boCursorLeft.setOnClickListener(v -> applyZhuyinState(zhuyinInput.moveCursorLeft()));
-        if (boCursorRight != null) boCursorRight.setOnClickListener(v -> applyZhuyinState(zhuyinInput.moveCursorRight()));
+        if (boCursorLeft != null) boCursorLeft.setOnClickListener(v -> { if(touchShadow!=null)touchShadow.invalidate();applyZhuyinState(zhuyinInput.moveCursorLeft()); });
+        if (boCursorRight != null) boCursorRight.setOnClickListener(v -> { if(touchShadow!=null)touchShadow.invalidate();applyZhuyinState(zhuyinInput.moveCursorRight()); });
         if (boCandidateScroll != null) boCandidateScroll.setOnScrollChangeListener((View v, int x, int y, int oldX, int oldY) -> {
             if (boCandidateItems != null && x + v.getWidth() >= boCandidateItems.getWidth() - dp(24))
                 appendZhuyinCandidateBatch();
@@ -748,10 +984,6 @@ public class SimonIMEService extends InputMethodService {
         if (currentKeyboardMode == KeyboardMode.BOPOMOFO && zhuyinInput != null) {
             ZhuyinInputController.State state = zhuyinInput.flushForPunctuation();
             applyZhuyinState(state);
-            if (state.commitText != null && !state.commitText.isEmpty()) {
-                InputConnection pending = getCurrentInputConnection();
-                if (pending != null) commitTextProgrammatically(pending, state.commitText);
-            }
         }
         InputConnection ic = getCurrentInputConnection();
         if (ic != null) commitTextProgrammatically(ic, text);
@@ -777,8 +1009,13 @@ public class SimonIMEService extends InputMethodService {
      * Small single-char / punctuation / space commits should NOT use this method.
      */
     protected void commitFinalText(String text) {
+        lastCommitInsertedOrCopied=false;
+        lastCommitClipboardWritten=false;
+        lastCommitMethod="clipboard";
         try {
-            if (text == null || text.isEmpty()) return;
+            if(VoiceResultText.isHallucinationMarker(text)) {updateStatus("辨識結果無效，音訊保留待重試");return;}
+            if(VoiceResultText.isSilence(text)) {showNoVoiceStatus();return;}
+            text=VoiceResultText.clean(text);
             settlePendingCorrectionCapture();
             TextSnapshot beforeSnapshot = getCurrentTextSnapshotSafely();
 
@@ -787,6 +1024,8 @@ public class SimonIMEService extends InputMethodService {
                 ClipboardManager cm = (ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
                 if (cm != null) {
                     cm.setPrimaryClip(ClipData.newPlainText("simon-ime", text));
+                    lastCommitClipboardWritten=true;
+                    lastCommitInsertedOrCopied=true;
                 }
             } catch (Exception ex) {
                 Log.w(TAG, "commitFinalText: clipboard copy failed", ex);
@@ -814,6 +1053,8 @@ public class SimonIMEService extends InputMethodService {
                 markProgrammaticTextChange();
                 boolean ok = ic.commitText(text, 1);
                 if (ok) {
+                    lastCommitInsertedOrCopied=true;
+                    lastCommitMethod="commit";
                     recordVoiceCommit(text, beforeSnapshot);
                     return;
                 }
@@ -822,7 +1063,8 @@ public class SimonIMEService extends InputMethodService {
 
             // Step 5: Paste fallback (text already on clipboard).
             markProgrammaticTextChange();
-            ic.performContextMenuAction(android.R.id.paste);
+            if(lastCommitClipboardWritten&&ic.performContextMenuAction(android.R.id.paste))lastCommitInsertedOrCopied=true;
+            lastCommitMethod="paste";
             recordVoiceCommit(text, beforeSnapshot);
             updateStatus("已複製，可長按貼上");
 
@@ -881,9 +1123,179 @@ public class SimonIMEService extends InputMethodService {
         serverWaitBudgetCallbacks.clear();
     }
 
+    private static final class ReadyUtterance {
+        final int generation; final String clientSessionId; final String text;
+        ReadyUtterance(int generation,String clientSessionId,String text){this.generation=generation;this.clientSessionId=clientSessionId;this.text=text;}
+    }
+
+    private void commitReadyUtterance(ReadyUtterance ready) {
+        if(isDiscardedVoiceGeneration(ready.generation))return;
+        deliverVoiceResult(ready.generation,ready.text,() -> {
+            commitFinalText(VoiceResultText.clean(ready.text));
+            updateStatus("完成: " + truncate(VoiceResultText.clean(ready.text),20));
+        });
+    }
+
+    private boolean isDiscardedVoiceGeneration(int gen) {
+        String id=pendingSessionByGeneration.get(gen);
+        return discardedVoiceGenerations.contains(gen)||(id!=null&&discardedProtectedSessions.contains(id));
+    }
+
+    private void showNoVoiceStatus() {
+        updatePreviewStrip("");
+        updateStatus("沒有錄到聲音");
+        final int token=silenceStatusGeneration;
+        mainHandler.postDelayed(() -> {
+            if(token==silenceStatusGeneration)updateStatus(isRecording?"🔴 錄音中...":"就緒");
+        },2000L);
+    }
+
+    private long voiceAudioDurationMs(int gen) {
+        Long duration=recordingDurationMs.get(gen);
+        if(duration!=null)return duration;
+        String id=pendingSessionByGeneration.get(gen);
+        if(!isRecording&&!recordingFinalizing&&id!=null&&voicePendingQueue!=null
+                &&!voicePendingQueue.backupFailed(id)&&voicePendingQueue.audioMs(id)>0)return voicePendingQueue.audioMs(id);
+        return -1; // Unknown duration is not evidence of a short tap.
+    }
+
+    private void keepPendingModeResult(int gen,String mode) {keepPendingModeResult(gen,mode,"empty_"+mode+"_result");}
+    private void keepPendingModeResult(int gen,String mode,String reason) {
+        markPendingGeneration(gen,reason);
+        mainHandler.post(() -> updateStatus("未取得結果，音訊等待封存收據"));
+    }
+
+    private boolean consumeSilentResult(int gen,String text) {return consumeSilentResult(gen,text,true);}
+    private boolean consumeSilentResult(int gen,String text,boolean append) {return consumeSilentResult(gen,text,append,"non_append");}
+    private boolean consumeSilentResult(int gen,String text,boolean append,String mode) {
+        if(isDiscardedVoiceGeneration(gen)||deliveredVoiceGenerations.contains(gen))return true;
+        if(!VoiceResultText.isSilence(text)&&!VoiceResultText.isNonSpeech(text,append,-1))return false;
+        // Only delivery semantics: no text, duration or mode can authorize audio deletion.
+        if(gen>0)deliveredVoiceGenerations.add(gen);
+        markPendingGeneration(gen,"live_silence_waiting_receipt");
+        if(append) {reserveUtteranceGeneration(gen);completeReservedUtteranceWithoutText(gen);}
+        showNoVoiceStatus();return true;
+    }
+
+    /** Save the outbox and acknowledge delivery independently of audio custody. */
+    private void deliverVoiceResult(int gen,String text,Runnable delivery) {
+        deliverVoiceResult(gen,text,false,true,delivery);
+    }
+    private void deliverVoiceResult(int gen,String text,boolean deleteOnly,boolean append,Runnable delivery) {
+        if(isDiscardedVoiceGeneration(gen)||deliveredVoiceGenerations.contains(gen))return;
+        if(!deleteOnly&&consumeSilentResult(gen,text,append))return;
+        final String id=pendingSessionByGeneration.get(gen);
+        final boolean full=serverFullAudioGenerations.contains(gen)||serverFinalGenerations.contains(gen);
+        java.util.function.Consumer<Boolean> deliver=backupFailed -> {
+            if(isDiscardedVoiceGeneration(gen)||deliveredVoiceGenerations.contains(gen)||(id!=null&&discardedProtectedSessions.contains(id)))return;
+            lastCommitInsertedOrCopied=false;lastCommitClipboardWritten=false;
+            try {delivery.run();}catch(Exception e) {Log.e(TAG,"Voice delivery failed",e);}
+            final boolean delivered=lastCommitInsertedOrCopied||lastCommitClipboardWritten;
+            final boolean copied=lastCommitClipboardWritten;
+            if(delivered&&gen>0)deliveredVoiceGenerations.add(gen);
+            if(backupFailed) {
+                // Delivery survives a missing durable file or a failed outbox write.
+                pendingSessionByGeneration.remove(gen);
+                updateStatus("錄音備份失敗，"+(delivered?"文字已送出":"文字未送出，請重試"));
+                return;
+            }
+            if(id==null||voicePendingQueue==null)return;
+            voicePendingQueue.execute(() -> {
+                try {
+                    if(delivered)voicePendingQueue.acknowledgeDelivery(id,copied);
+                    markPendingGeneration(gen,delivered?"text_delivered_waiting_audio_receipt":"result_not_delivered");
+                } catch(Exception e) {
+                    Log.e(TAG,"Voice delivery receipt failed",e);
+                    mainHandler.post(() -> updateStatus("錄音備份失敗，文字已送出，音訊保留"));
+                }
+            });
+        };
+        if(id==null||voicePendingQueue==null) {deliver.accept(false);return;}
+        voicePendingQueue.execute(() -> {
+            boolean failed=false;
+            try {voicePendingQueue.persistResult(id,text,full,append);}
+            catch(Exception e) {failed=true;Log.e(TAG,"Voice result backup failed",e);}
+            final boolean backupFailed=failed;
+            mainHandler.post(() -> deliver.accept(backupFailed));
+        });
+    }
+
+    private void persistRecordingRead(String id,byte[] buffer,int read) {
+        if(voicePendingQueue!=null&&id!=null&&read>0&&!discardedProtectedSessions.contains(id))
+            voicePendingQueue.appendAsync(id,buffer,read);
+    }
+
+    private void finishDurableRecording(String id) {
+        if(voicePendingQueue==null||id==null||discardedProtectedSessions.contains(id))return;
+        voicePendingQueue.holdForReceipt(id);
+        java.util.concurrent.CountDownLatch waiter=audioReceiptWaiters.computeIfAbsent(id,key->new java.util.concurrent.CountDownLatch(1));
+        voicePendingQueue.finishRecording(id,() -> {
+            new Thread(() -> {
+                try {
+                    if(voicePendingQueue.receiptConfirmed(id))waiter.countDown();
+                    if(waiter.await(8,TimeUnit.SECONDS))return;
+                    // Query only after an absent/abnormal WS receipt. Never on the normal WS path.
+                    for(long delay:new long[]{200L,500L,1000L}) {
+                        Thread.sleep(delay);
+                        if(waiter.getCount()==0||discardedProtectedSessions.contains(id))return;
+                        Request.Builder rb=new Request.Builder().url(getServerUrl()+"/v1/audio-receipt?client_session_id="+id);
+                        String auth=getAuthPassword();if(auth!=null&&!auth.isEmpty())rb.addHeader("Authorization","Bearer "+auth);
+                        OkHttpClient client=httpClient.newBuilder().readTimeout(2,TimeUnit.SECONDS).callTimeout(3,TimeUnit.SECONDS).build();
+                        try(Response response=client.newCall(rb.build()).execute()) {
+                            if(response.isSuccessful()&&response.body()!=null&&voicePendingQueue.acceptReceipt(id,new JSONObject(response.body().string()))) {
+                                waiter.countDown();return;
+                            }
+                        }catch(Exception e) {Log.w(TAG,"Audio receipt lookup failed; retaining pending PCM",e);}
+                    }
+                }catch(InterruptedException e) {Thread.currentThread().interrupt();}
+                finally {
+                    audioReceiptWaiters.remove(id,waiter);
+                    voicePendingQueue.releaseReceiptWait(id);
+                    drainPendingVoiceQueue();
+                }
+            },"VoiceAudioReceipt").start();
+        });
+    }
+
+    private void receiveAudioReceipt(String id,JSONObject receipt) {
+        if(id==null||voicePendingQueue==null||discardedProtectedSessions.contains(id))return;
+        voicePendingQueue.execute(() -> {
+            if(voicePendingQueue.acceptReceipt(id,receipt)) {
+                java.util.concurrent.CountDownLatch waiter=audioReceiptWaiters.get(id);
+                if(waiter!=null)waiter.countDown();
+            }
+        });
+    }
+
+    private void sendAudioEndOfStream(WebSocket ws,String id) {
+        if(voicePendingQueue==null||id==null) {ws.send(AppVersion.controlMessage("finalize"));return;}
+        voicePendingQueue.execute(() -> {
+            try {
+                voicePendingQueue.sealStreamedBytes(id);
+                JSONObject eos=AppVersion.withAppVersion(voicePendingQueue.recordingIdentity(id));
+                eos.put("type","finalize");ws.send(eos.toString());
+            }catch(Exception e) {Log.e(TAG,"Audio EOS identity unavailable; retaining local PCM",e);ws.send(AppVersion.controlMessage("finalize"));}
+        });
+    }
+
+    private void discardProtectedRecording() {
+        // Simon intentionally discards the whole session, including speech before switching
+        // to a protected field; no earlier portion may leak to clipboard or retry upload.
+        String id=activePendingSessionId;
+        if(id!=null) {
+            discardedProtectedSessions.add(id);
+            for(java.util.Map.Entry<Integer,String> e:pendingSessionByGeneration.entrySet())
+                if(id.equals(e.getValue()))discardedVoiceGenerations.add(e.getKey());
+            if(voicePendingQueue!=null){voicePendingQueue.discardAsync(id);drainPendingVoiceQueue();}
+            recordVoiceEvent("protected_discard",id,0,0,0,"","",0,0);
+            completeReservedUtteranceWithoutText(activeUtteranceGeneration);
+        }
+    }
+
     private void completeReservedUtteranceWithText(int gen, String text) {
-        if (text == null || text.isEmpty()) {
-            completeReservedUtteranceWithoutText(gen);
+        String sessionId=pendingSessionByGeneration.get(gen);
+        if(sessionId!=null&&discardedProtectedSessions.contains(sessionId)){
+            Log.i(TAG,"Discarding transcription for protected-field recording session");
             return;
         }
         if (Looper.myLooper() != Looper.getMainLooper()) {
@@ -891,17 +1303,19 @@ public class SimonIMEService extends InputMethodService {
             return;
         }
 
-        List<String> readyTexts = new ArrayList<>();
+        if(consumeSilentResult(gen,text))return;
+        final String cleanedText=VoiceResultText.clean(text);
+        List<ReadyUtterance> readyTexts = new ArrayList<>();
         synchronized (utteranceCommitLock) {
             if (gen < nextGenToCommit) return;
             completedGenerations.add(gen);
-            pendingCommits.put(gen, text);
-            if (!isWatchService()) acceptedTextLengths.put(gen, text.length());
+            pendingCommits.put(gen, cleanedText);
+            if (!isWatchService()) acceptedTextLengths.put(gen, cleanedText.length());
             collectReadyUtteranceCommitsLocked(readyTexts);
         }
-        for (String readyText : readyTexts) {
-            commitFinalText(readyText);
-            updateStatus("完成: " + truncate(readyText, 20));
+        for (ReadyUtterance ready : readyTexts) {
+            commitReadyUtterance(ready);
+            if(voicePendingQueue!=null)drainPendingVoiceQueue();
         }
     }
 
@@ -912,23 +1326,34 @@ public class SimonIMEService extends InputMethodService {
             return;
         }
 
-        List<String> readyTexts = new ArrayList<>();
+        List<ReadyUtterance> readyTexts = new ArrayList<>();
         synchronized (utteranceCommitLock) {
             if (gen < nextGenToCommit) return;
             completedGenerations.add(gen);
             collectReadyUtteranceCommitsLocked(readyTexts);
         }
-        for (String readyText : readyTexts) {
-            commitFinalText(readyText);
-            updateStatus("完成: " + truncate(readyText, 20));
-        }
+        for (ReadyUtterance ready : readyTexts) commitReadyUtterance(ready);
+        String activeId=pendingSessionByGeneration.get(gen);
+        if(activeId!=null&&activeId.equals(activePendingSessionId))return;
+        String queuedId=pendingSessionByGeneration.remove(gen);
+        if(queuedId!=null&&voicePendingQueue!=null){voicePendingQueue.execute(() -> voicePendingQueue.markPending(queuedId,"transcription_not_committed"));recordVoiceEvent("pending_saved",queuedId,voicePendingQueue.audioMs(queuedId),0,0,"","",voicePendingQueue.totalBytes(),0);drainPendingVoiceQueue();}
     }
 
-    private void collectReadyUtteranceCommitsLocked(List<String> readyTexts) {
+    private void markPendingGeneration(int gen,String reason){
+        String id=pendingSessionByGeneration.remove(gen);
+        if(id!=null&&voicePendingQueue!=null)voicePendingQueue.markPendingAsync(id,reason,this::drainPendingVoiceQueue);
+    }
+
+    private void notePendingGeneration(int gen,String reason) {
+        String id=pendingSessionByGeneration.get(gen);
+        if(id!=null&&voicePendingQueue!=null)voicePendingQueue.markPendingAsync(id,reason,null);
+    }
+
+    private void collectReadyUtteranceCommitsLocked(List<ReadyUtterance> readyTexts) {
         while (completedGenerations.contains(nextGenToCommit)) {
             String text = pendingCommits.remove(nextGenToCommit);
             if (text != null && !text.isEmpty()) {
-                readyTexts.add(text);
+                readyTexts.add(new ReadyUtterance(nextGenToCommit,pendingSessionByGeneration.get(nextGenToCommit),text));
             }
             completedGenerations.remove(nextGenToCommit);
             nextGenToCommit++;
@@ -1220,30 +1645,34 @@ public class SimonIMEService extends InputMethodService {
      * 「無輸入連線」＝ic null；「📋 已貼上」＝commit 成功。
      */
     protected boolean pasteClipboardText(String text) {
-        if (text == null || text.isEmpty()) return false;
-        InputConnection ic = getCurrentInputConnection();
-        if (ic == null) {
-            copyToSystemClipboard(text);
-            updateStatus("已複製，長按輸入框貼上（無輸入連線）");
-            return true;
+        if(text==null||text.isEmpty())return false;
+        InputConnection ic=getCurrentInputConnection();
+        if(ic==null) {
+            boolean copied=copyToSystemClipboard(text);
+            updateStatus(copied?"已複製，長按輸入框貼上（無輸入連線）":"複製失敗，請重試");
+            return copied;
         }
         markProgrammaticTextChange();
-        boolean ok = ic.commitText(text, 1);
-        if (!ok) {
-            // 部分 app 拒收 commitText → 用系統剪貼簿 + 貼上動作兜底
-            copyToSystemClipboard(text);
-            markProgrammaticTextChange();
-            ic.performContextMenuAction(android.R.id.paste);
+        boolean pasted=ic.commitText(text,1);
+        boolean copied=false;
+        if(!pasted) {
+            copied=copyToSystemClipboard(text);
+            if(copied) {
+                markProgrammaticTextChange();
+                pasted=ic.performContextMenuAction(android.R.id.paste);
+            }
         }
-        updateStatus("📋 已貼上");
-        return true;
+        updateStatus(pasted?"📋 已貼上":copied?"已複製，可長按貼上":"貼上失敗，請重試");
+        return pasted||copied;
     }
 
-    private void copyToSystemClipboard(String text) {
+    private boolean copyToSystemClipboard(String text) {
         try {
-            ClipboardManager cm = (ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
-            if (cm != null) cm.setPrimaryClip(ClipData.newPlainText("simon-ime", text));
-        } catch (Exception ignored) {}
+            ClipboardManager cm=(ClipboardManager)getSystemService(Context.CLIPBOARD_SERVICE);
+            if(cm==null)return false;
+            cm.setPrimaryClip(ClipData.newPlainText("simon-ime",text));
+            return true;
+        } catch(Exception e) {Log.w(TAG,"Clipboard copy failed",e);return false;}
     }
 
     // ==================== Clipboard Panel ====================
@@ -1806,39 +2235,43 @@ public class SimonIMEService extends InputMethodService {
         }
     }
 
-    private void rescueReplaceAudio(int gen, boolean shortResult) {
-        final byte[] pcm = fullPcmByGeneration.get(gen);
-        final LocalSTT recognizer = localSTT;
-        final String retained = shortResult ? "換字結果偏短，錄音已保留，請再按一次換"
-                : "換字逾時，錄音已保留，請再按一次換";
-        if (pcm == null || pcm.length == 0) {
-            Log.w(TAG, "[ReplaceRescue] no PCM for gen=" + gen);
-            mainHandler.post(() -> updateStatus("換字失敗，這段錄音已無法取得"));
-            return;
+    private void rescueReplaceAudio(int gen,boolean shortResult) {
+        if(isDiscardedVoiceGeneration(gen))return;
+        final byte[] pcm=fullPcmByGeneration.get(gen);
+        final LocalSTT recognizer=localSTT;
+        if(pcm==null||pcm.length==0||!localSTTReady||recognizer==null) {
+            markPendingGeneration(gen,"replace_rescue_unavailable");
+            mainHandler.post(() -> updateStatus("換字失敗，音訊保留待補傳"));return;
         }
-        mainHandler.post(() -> updateStatus(retained));
-        if (!localSTTReady || recognizer == null) return;
         new Thread(() -> {
             try {
-                String recognized = recognizer.recognize(pcm, SAMPLE_RATE);
-                if (recognized == null || recognized.trim().isEmpty()) {
-                    Log.w(TAG, "[ReplaceRescue] empty local result gen=" + gen);
-                    return; // Keep PCM and the visible retained-audio warning.
-                }
-                final String rescued = recognized.trim();
+                String recognized=recognizer.recognize(pcm,SAMPLE_RATE);
                 mainHandler.post(() -> {
-                    clipboardHelper.addToHistory(rescued);
-                    updateStatus(shortResult ? "換字結果偏短，原話已存剪貼簿"
-                            : "換字逾時，原話已存剪貼簿（端上辨識）");
+                    // This is an unconfirmed offline rescue, not a server punctuation/SPELL command.
+                    if(VoiceResultText.clean(recognized).codePoints().noneMatch(Character::isLetterOrDigit)
+                            ||VoiceResultText.isHallucinationMarker(recognized)) {
+                        markPendingGeneration(gen,"replace_local_unconfirmed");
+                        updateStatus("換字失敗，音訊保留待補傳");return;
+                    }
+                    String rescued=VoiceResultText.clean(recognized);
+                    deliverVoiceResult(gen,rescued,() -> {
+                        ClipboardManager cm=(ClipboardManager)getSystemService(CLIPBOARD_SERVICE);
+                        if(cm==null)throw new IllegalStateException("clipboard unavailable");
+                        cm.setPrimaryClip(ClipData.newPlainText("simon-ime",rescued));
+                        lastCommitClipboardWritten=true;lastCommitInsertedOrCopied=true;
+                        if(clipboardHelper!=null)clipboardHelper.addToHistory(rescued);
+                        updateStatus(shortResult?"換字結果偏短，原話已存剪貼簿":"換字逾時，原話已存剪貼簿（端上辨識）");
+                    });
                 });
-            } catch (Exception e) {
-                Log.w(TAG, "[ReplaceRescue] local recognition failed gen=" + gen, e);
-                mainHandler.post(() -> updateStatus(retained));
+            } catch(Exception e) {
+                markPendingGeneration(gen,"replace_rescue_failed:"+e.getClass().getSimpleName());
+                mainHandler.post(() -> updateStatus("換字失敗，音訊保留待補傳"));
             }
-        }, "ReplaceRescue-STT").start();
+        },"ReplaceRescue-STT").start();
     }
 
     protected void startRecording() {
+        if(recordingFinalizing) {updateStatus("收尾中，請稍候");return;}
         if (isRecording) {
             // v5.4.1: tap-toggle 停止也走延遲（和 handleTouchUp 一致）
             if (currentMode == Mode.APPEND && audioStreamWs != null) {
@@ -1901,6 +2334,8 @@ public class SimonIMEService extends InputMethodService {
         streamFailed = false;
         final int myGen = utteranceGeneration.incrementAndGet();
         activeUtteranceGeneration = myGen;
+        activePendingSessionId=(voicePendingQueue==null||protectedInputField)?null:voicePendingQueue.beginAsync(() -> mainHandler.post(() -> updateStatus("錄音備份失敗，仍可即時辨識")));
+        if(activePendingSessionId!=null)pendingSessionByGeneration.put(myGen,activePendingSessionId);
         if (currentMode != Mode.APPEND) {
             completeReservedUtteranceWithoutText(myGen);
         }
@@ -1924,6 +2359,8 @@ public class SimonIMEService extends InputMethodService {
 
         final long recordingStartedMs = android.os.SystemClock.elapsedRealtime();
         activeRecordingStartedMs = recordingStartedMs;
+        lastVoiceChunkElapsed=recordingStartedMs;lastVoiceStallEventElapsed=0;
+        recordVoiceEvent("start",activePendingSessionId,0,0,0,"","",0,0);
         audioRecord.startRecording();
 
         // v3.6: 停用舊串流模式（VAD 分段）
@@ -1939,6 +2376,7 @@ public class SimonIMEService extends InputMethodService {
         btnMic.setBackgroundColor(getResources().getColor(R.color.mic_active, null));
         if (btnMic instanceof Button) ((Button) btnMic).setText("⏹");
 
+        final String recordingSessionId=activePendingSessionId;
         recordingThread = new Thread(() -> {
             byte[] buffer = new byte[bufferSize];
             int silentBytes = 0;           // 連續靜音 byte 計數
@@ -1948,9 +2386,6 @@ public class SimonIMEService extends InputMethodService {
             final int SILENCE_BYTES_TO_SPLIT = SILENCE_MS_TO_SPLIT * BYTES_PER_MS; // 16000 bytes = 500ms
             final int MIN_CHUNK_BYTES = 32000;  // 最小 1 秒才送（避免 Whisper 幻覺）
             final int MAX_CHUNK_BYTES = 48000;  // v6.14: 最大 1.5 秒強制送，讓 GB10 在說話中先解碼
-            // v5.4: 跳過前 400ms 音訊（避免按鈕點擊聲干擾 STT）
-            final int SKIP_INITIAL_BYTES = 12800; // 400ms @ 16kHz 16-bit mono
-            int totalBytesRead = 0;
             boolean rebuildFailed = false;
             SharedPreferences prefs = getSharedPreferences("simon_ime_prefs", MODE_PRIVATE);
             SilenceWatchdog watchdog = new SilenceWatchdog(recordingStartedMs,
@@ -1959,6 +2394,7 @@ public class SimonIMEService extends InputMethodService {
                     prefs.getLong("silent_restart_ms", SilenceWatchdog.SILENT_RESTART_MS),
                     prefs.getInt("read_error_limit", SilenceWatchdog.READ_ERROR_LIMIT));
 
+            try {
             while (isRecording) {
                 int read;
                 try {
@@ -1966,7 +2402,19 @@ public class SimonIMEService extends InputMethodService {
                 } catch (IllegalStateException e) {
                     read = AudioRecord.ERROR_INVALID_OPERATION;
                 }
-                if (!isRecording) break;
+                // stopRecordingAndSend may race with read(): persist and process a final positive
+                // read before the loop exits so it cannot fall between the server final and queue deletion.
+                if (!isRecording && read <= 0) break;
+                if(read>0 && voicePendingQueue!=null && recordingSessionId!=null && !discardedProtectedSessions.contains(recordingSessionId)){
+                    persistRecordingRead(recordingSessionId,buffer,read);
+                    if(voicePendingQueue.totalBytes()>500L*1024*1024)showPendingVoiceQuotaWarning();
+                }
+                long voiceNow=SystemClock.elapsedRealtime();
+                if(voicePendingQueue!=null && recordingSessionId!=null && voiceNow-lastVoiceChunkElapsed>3000
+                        && voiceNow-lastVoiceStallEventElapsed>=3000){
+                    lastVoiceStallEventElapsed=voiceNow;
+                    recordVoiceEvent("stall",recordingSessionId,voicePendingQueue.audioMs(recordingSessionId),0,0,"","",voicePendingQueue.totalBytes(),0);
+                }
                 if (!isWatchService()) {
                     long sum = 0;
                     for (int i = 0; i + 1 < read; i += 2) {
@@ -1987,15 +2435,11 @@ public class SimonIMEService extends InputMethodService {
                     if (read <= 0) android.os.SystemClock.sleep(20); // avoid a hot error loop
                 }
                 if (read > 0) {
-                    totalBytesRead += read;
-                    // v5.4: 前 400ms 不寫入 buffer（丟掉點擊聲）
-                    if (totalBytesRead <= SKIP_INITIAL_BYTES) {
-                        continue;
-                    }
+                    // The stream and durable backup cover the same recorder reads.
                     pcmBuffer.write(buffer, 0, read);
                     // v6.1: APPEND 串流模式下，pcmBuffer 會每送一個 chunk 就 reset()，
                     //       fullPcmBuffer 不 reset → 保留整段音訊供失敗時乾淨重轉錄。
-                    //       封頂 ~10 分鐘防無界成長（超過則停止累積，fallback 退化為前 10 分鐘，極端罕見）。
+                    //       預覽記憶體封頂 ~10 分鐘；完整 PCM 持續落盤。片段端上辨識不能授權刪除完整檔案。
                     if (currentMode == Mode.APPEND && fullPcmBuffer != null
                             && fullPcmBuffer.size() < MAX_FULL_PCM_BYTES) {
                         fullPcmBuffer.write(buffer, 0, read);
@@ -2030,7 +2474,8 @@ public class SimonIMEService extends InputMethodService {
                             byte[] chunkData = pcmBuffer.toByteArray();
                             pcmBuffer.reset();
                             silentBytes = 0;
-                            audioStreamWs.send(ByteString.of(chunkData, 0, chunkData.length));
+                            if(audioStreamWs.send(ByteString.of(chunkData, 0, chunkData.length))&&voicePendingQueue!=null)voicePendingQueue.noteStreamedBytes(recordingSessionId,chunkData.length);
+                            lastVoiceChunkElapsed=SystemClock.elapsedRealtime();
                             streamChunkTotal++;
                             Log.i(TAG, "[AudioStream] chunk #" + streamChunkTotal
                                     + " (" + chunkData.length + "B, "
@@ -2039,6 +2484,8 @@ public class SimonIMEService extends InputMethodService {
                     }
                 }
             }
+            } catch(Exception e) {Log.e(TAG,"Recorder stopped after capture error",e);}
+            finally {finishDurableRecording(recordingSessionId);}
         }, "AudioRecorder");
         recordingThread.start();
     }
@@ -2048,6 +2495,7 @@ public class SimonIMEService extends InputMethodService {
      * APPEND 模式下，每 2 秒送 PCM chunk → Server Groq Whisper + Moonshot K2 → 即時回傳文字。
      */
     private void startAudioStreamWs(final int myGen) {
+        final String custodySessionId=pendingSessionByGeneration.get(myGen);
         streamedChunks.clear();
         streamChunkTotal = 0;
         audioStreamActive = false;
@@ -2082,6 +2530,7 @@ public class SimonIMEService extends InputMethodService {
                     JSONObject authMsg = AppVersion.withAppVersion(new JSONObject());
                     authMsg.put("type", "auth");
                     authMsg.put("password", auth != null ? auth : "");
+                    authMsg.put("client_session_id",custodySessionId==null?"":custodySessionId);
                     if (!contextBefore.isEmpty()) authMsg.put("context_before", contextBefore);
                     if (!contextAfter.isEmpty()) authMsg.put("context_after", contextAfter);
                     ws.send(authMsg.toString());
@@ -2126,7 +2575,7 @@ public class SimonIMEService extends InputMethodService {
                         if (myGen != utteranceGeneration.get()) return;
                         String chunkText = json.optString("text", "");
                         int idx = json.optInt("index", -1);
-                        if (!chunkText.isEmpty()) {
+                        if (!VoiceResultText.isSilence(chunkText)) {
                             streamedChunks.add(chunkText);
                             // v6.1: 不再寫進輸入框（移除 setComposingText）。串流預覽只顯示在鍵盤自己的
                             //       previewText 預覽列 → 輸入框在 final 之前保持乾淨、空無一物，
@@ -2145,9 +2594,15 @@ public class SimonIMEService extends InputMethodService {
                         }
                         Log.i(TAG, "[AudioStream] chunk#" + idx + " 回傳: '" + chunkText + "'");
 
+                    } else if ("receipt".equals(type)) {
+                        receiveAudioReceipt(custodySessionId,json);
                     } else if ("final".equals(type)) {
                         String finalText = json.optString("text", "");
+                        String sessionId=pendingSessionByGeneration.get(myGen);
+                        recordVoiceEvent("final",sessionId,sessionId==null?0:voicePendingQueue.audioMs(sessionId),finalText.length(),0,"","",0,0);
                         mainHandler.post(() -> {
+                            if(consumeSilentResult(myGen,finalText))return;
+                            serverFinalGenerations.add(myGen);
                             // Main-thread snapshot cannot mix a new recording's preview into this generation.
                             final String candidate = isWatchService() ? "" : appendRescueCandidate(myGen);
                             final boolean rescue = !isWatchService() && TextLossGuard.shouldRescue(
@@ -2196,6 +2651,8 @@ public class SimonIMEService extends InputMethodService {
                             audioStreamActive = false;
                             audioStreamWs = null;
                         }
+                        String sessionId=pendingSessionByGeneration.get(myGen);
+                        if(sessionId!=null&&voicePendingQueue!=null){voicePendingQueue.execute(() -> voicePendingQueue.markPending(sessionId,"ws_error:"+msg));recordVoiceEvent("ws_close",sessionId,voicePendingQueue.audioMs(sessionId),0,0,msg,"",voicePendingQueue.totalBytes(),0);}
                         mainHandler.post(() -> {
                             if (myGen != utteranceGeneration.get()) {
                                 httpFallbackFullAudio(myGen);
@@ -2215,6 +2672,8 @@ public class SimonIMEService extends InputMethodService {
             @Override
             public void onFailure(WebSocket ws, Throwable t, Response response) {
                 Log.w(TAG, "[AudioStream] WebSocket 連線失敗（改走整段音訊 fallback）", t);
+                String sessionId=pendingSessionByGeneration.get(myGen);
+                if(sessionId!=null&&voicePendingQueue!=null){voicePendingQueue.execute(() -> voicePendingQueue.markPending(sessionId,"ws_failure:"+t.getClass().getSimpleName()));recordVoiceEvent("ws_close",sessionId,voicePendingQueue.audioMs(sessionId),0,response==null?0:response.code(),t.getClass().getSimpleName(),"",voicePendingQueue.totalBytes(),0);}
                 if (myGen == utteranceGeneration.get()) {
                     streamFailed = true;
                     audioStreamActive = false;
@@ -2242,6 +2701,9 @@ public class SimonIMEService extends InputMethodService {
             @Override
             public void onClosed(WebSocket ws, int code, String reason) {
                 Log.i(TAG, "[AudioStream] WebSocket 已關閉: " + code + " " + reason);
+                String id=pendingSessionByGeneration.get(myGen);
+                if(id!=null&&voicePendingQueue!=null){recordVoiceEvent("ws_close",id,voicePendingQueue.audioMs(id),0,code,reason,"",voicePendingQueue.totalBytes(),0);
+                    if(code!=1000){voicePendingQueue.execute(() -> voicePendingQueue.markPending(id,"ws_close:"+code));if(!isRecording)drainPendingVoiceQueue();}}
                 if (myGen == utteranceGeneration.get()) {
                     audioStreamActive = false;
                     audioStreamWs = null;
@@ -2290,6 +2752,9 @@ public class SimonIMEService extends InputMethodService {
     protected void stopRecordingAndSend() {
         if (!isRecording) return;
         isRecording = false;
+        recordingFinalizing=true;
+        final Thread stoppedThread=recordingThread;
+        final String stoppedSessionId=activePendingSessionId;
         onDeviceAppendPreviewEnabled = false;
 
         // v6.1: 停止錄音 → 釋放螢幕常亮、清掉鍵盤預覽列（輸入框本來就沒被碰過）
@@ -2324,15 +2789,33 @@ public class SimonIMEService extends InputMethodService {
         }
 
         try {
-            recordingThread.join(1000);
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
+            if(stoppedThread!=null)stoppedThread.join(2500L);
+        } catch(InterruptedException e) {Thread.currentThread().interrupt();}
+        if(stoppedThread!=null&&stoppedThread.isAlive()) {
+            finishWhenRecorderStopped(stoppedThread,wasStreaming,myGen,stoppedSessionId);
+            return;
         }
+        finishStoppedRecordingAndSend(wasStreaming,myGen,stoppedSessionId);
+    }
 
+    private void finishWhenRecorderStopped(Thread stoppedThread,boolean wasStreaming,int gen,String id) {
+        if(stoppedThread.isAlive()) {
+            mainHandler.postDelayed(() -> finishWhenRecorderStopped(stoppedThread,wasStreaming,gen,id),100L);
+            return;
+        }
+        finishStoppedRecordingAndSend(wasStreaming,gen,id);
+    }
+
+    private void finishStoppedRecordingAndSend(boolean wasStreaming,int myGen,String stoppedSessionId) {
+        if(stoppedSessionId!=null&&stoppedSessionId.equals(activePendingSessionId))activePendingSessionId=null;
+        recordingFinalizing=false;
         if (!isWatchService()) appendRescueCandidates.put(myGen, appendRescueCandidate(myGen));
         byte[] pcmData = pcmBuffer.toByteArray();
         rememberFullPcmForGeneration(myGen, pcmData);
         pcmBuffer = null;
+        List<Runnable> waiting=new ArrayList<>(afterRecordingFinalization);
+        afterRecordingFinalization.clear();
+        for(Runnable callback:waiting)callback.run();
 
         mainHandler.post(() -> {
             btnMic.setBackgroundColor(getResources().getColor(R.color.mic_idle, null));
@@ -2341,12 +2824,14 @@ public class SimonIMEService extends InputMethodService {
         });
 
         if (isWatchService()) {
+            markPendingGeneration(myGen,"watch_audio_waiting_receipt");
             onWatchAudio(pcmData);
             return;
         }
 
         // v6.20: 資料夾語音命名攔截
         if (folderNamingMode) {
+            markPendingGeneration(myGen,"folder_name_audio_waiting_receipt");
             folderNamingMode = false;
             final byte[] namePcm = pcmData;
             final int gen = fieldGeneration;
@@ -2390,11 +2875,11 @@ public class SimonIMEService extends InputMethodService {
         if (currentMode == Mode.APPEND && audioStreamWs != null && streamChunkTotal > 0) {
             // v4.4.2: 送出所有殘餘音訊（不管多短），避免末尾 1-2 字被裁切
             if (pcmData.length > 0) {
-                audioStreamWs.send(ByteString.of(pcmData, 0, pcmData.length));
+                if(audioStreamWs.send(ByteString.of(pcmData, 0, pcmData.length))&&voicePendingQueue!=null)voicePendingQueue.noteStreamedBytes(stoppedSessionId,pcmData.length);
                 Log.i(TAG, "[AudioStream] 送出剩餘音訊 (" + pcmData.length + " bytes)");
             }
             // Send finalize command
-            audioStreamWs.send(AppVersion.controlMessage("finalize"));
+            sendAudioEndOfStream(audioStreamWs,stoppedSessionId);
             Log.i(TAG, "[AudioStream] 已送出 finalize，共 " + streamChunkTotal + " chunks");
             // The final result will come via onMessage callback — don't send via HTTP
             mainHandler.post(() -> updateStatus("整理中..."));
@@ -2412,6 +2897,7 @@ public class SimonIMEService extends InputMethodService {
             }
             // v6.1: 不再有 composing text 需清理（輸入框全程乾淨），只清狀態
             streamedChunks.clear();
+            markPendingGeneration(myGen,"short_recording_waiting_receipt");
             if (currentMode == Mode.APPEND) {
                 completeReservedUtteranceWithoutText(myGen);
             }
@@ -2426,11 +2912,11 @@ public class SimonIMEService extends InputMethodService {
         if (currentMode == Mode.APPEND && audioStreamWs != null) {
             // Send remaining audio in buffer (less than 2 seconds)
             if (pcmData.length > 0) {
-                audioStreamWs.send(ByteString.of(pcmData, 0, pcmData.length));
+                if(audioStreamWs.send(ByteString.of(pcmData, 0, pcmData.length))&&voicePendingQueue!=null)voicePendingQueue.noteStreamedBytes(stoppedSessionId,pcmData.length);
                 Log.i(TAG, "[AudioStream] 送出剩餘音訊 (" + pcmData.length + " bytes)");
             }
             // Send finalize command
-            audioStreamWs.send(AppVersion.controlMessage("finalize"));
+            sendAudioEndOfStream(audioStreamWs,stoppedSessionId);
             Log.i(TAG, "[AudioStream] 已送出 finalize，共 " + streamChunkTotal + " chunks");
             // The final result will come via onMessage callback — don't send via HTTP
             mainHandler.post(() -> updateStatus("整理中..."));
@@ -2484,7 +2970,7 @@ public class SimonIMEService extends InputMethodService {
                     if (modeNow == Mode.REPLACE) {
                         // v6.20 R2: AI 素材已備 → 走 /v1/ai-command 並「插入」答案（絕不刪除游標周圍）
                         if (aiContextText != null) {
-                            sendAiCommand(finalText, aiContextText);
+                            sendAiCommand(finalText, aiContextText,myGen);
                         } else {
                             sendTextReplace(finalText, bc, ac, myGen);
                         }
@@ -2496,7 +2982,7 @@ public class SimonIMEService extends InputMethodService {
                     mainHandler.post(() -> updateStatus("本機辨識無結果，上傳中..."));
                     byte[] wavData = pcmToWav(pcmData, SAMPLE_RATE, 1, 16);
                     if (modeNow == Mode.REPLACE && aiContextText != null) {
-                        sendAiCommandAudio(wavData, aiContextText);
+                        sendAiCommandAudio(wavData, aiContextText,myGen);
                     } else {
                         sendToWTI(wavData, modeNow, false, myGen);
                     }
@@ -2508,7 +2994,7 @@ public class SimonIMEService extends InputMethodService {
         // fallback: 本機 STT 未就緒 → 上傳音訊（舊流程）
         byte[] wavData = pcmToWav(pcmData, SAMPLE_RATE, 1, 16);
         if (currentMode == Mode.REPLACE && aiContextText != null) {
-            sendAiCommandAudio(wavData, aiContextText);
+            sendAiCommandAudio(wavData, aiContextText,myGen);
         } else {
             sendToWTI(wavData, currentMode, myGen);
         }
@@ -2620,6 +3106,8 @@ public class SimonIMEService extends InputMethodService {
                     Log.i(TAG, "Stream finalize success: '" + finalText + "'");
                     streamingUpload.endSession();
                     mainHandler.post(() -> {
+                        if(consumeSilentResult(gen,finalText))return;
+                        serverFinalGenerations.add(gen);
                         if (!finalText.isEmpty()) {
                             // v6.17: 走 commitFinalText 以支援 Termux/Gemini 等不接受 commitText 的 app。
                             if (reserveUtteranceGeneration(gen)) {
@@ -2718,7 +3206,7 @@ public class SimonIMEService extends InputMethodService {
 
         // v6.20 R2: any REPLACE audio path while AI material is armed → /v1/ai-command (insert, never delete)
         if (mode == Mode.REPLACE && aiContextText != null) {
-            sendAiCommandAudio(wavData, aiContextText);
+            sendAiCommandAudio(wavData, aiContextText,gen);
             return;
         }
 
@@ -2727,8 +3215,8 @@ public class SimonIMEService extends InputMethodService {
         String endpoint;
         MultipartBody.Builder bodyBuilder = AppVersion.withAppVersion(new MultipartBody.Builder())
                 .setType(MultipartBody.FORM)
-                .addFormDataPart("file", "recording.wav",
-                        RequestBody.create(wavData, MediaType.parse("audio/wav")));
+                .addFormDataPart("file", "recording.wav", durableOrMemoryAudioBody(gen,wavData))
+                .addFormDataPart("client_session_id",pendingSessionByGeneration.getOrDefault(gen,""));
 
         switch (mode) {
             case REPLACE:
@@ -2778,6 +3266,7 @@ public class SimonIMEService extends InputMethodService {
             @Override
             public void onFailure(Call call, IOException e) {
                 Log.e(TAG, "WTI request failed", e);
+                notePendingGeneration(gen,"http_failure:"+e.getClass().getSimpleName());
                 if (allowOfflineAppendFallback && mode == Mode.APPEND) {
                     runOfflineFullAudioFallback(gen, "HTTP request failed: " + e.getMessage(), false);
                 } else if (mode == Mode.REPLACE && !isWatchService()) {
@@ -2786,6 +3275,7 @@ public class SimonIMEService extends InputMethodService {
                     if (mode == Mode.APPEND) {
                         completeReservedUtteranceWithoutText(gen);
                     }
+                    markPendingGeneration(gen,"http_terminal_failure");
                     mainHandler.post(() -> updateStatus("連線失敗: " + e.getMessage()));
                 }
             }
@@ -2795,6 +3285,7 @@ public class SimonIMEService extends InputMethodService {
                 try {
                     String responseBody = response.body() != null ? response.body().string() : "";
                     if (!response.isSuccessful()) {
+                        notePendingGeneration(gen,"http_status:"+response.code());
                         if (allowOfflineAppendFallback && mode == Mode.APPEND) {
                             runOfflineFullAudioFallback(gen, "HTTP response " + response.code(), false);
                         } else if (mode == Mode.REPLACE && !isWatchService()) {
@@ -2803,19 +3294,18 @@ public class SimonIMEService extends InputMethodService {
                             if (mode == Mode.APPEND) {
                                 completeReservedUtteranceWithoutText(gen);
                             }
+                            markPendingGeneration(gen,"http_status:"+response.code());
                             mainHandler.post(() -> updateStatus("伺服器錯誤: " + response.code()));
                         }
                         return;
                     }
                     JSONObject json = new JSONObject(responseBody);
-                    if (allowOfflineAppendFallback && mode == Mode.APPEND
-                            && json.optString("text", "").trim().isEmpty()) {
-                        runOfflineFullAudioFallback(gen, "HTTP response text empty", false);
-                    } else {
-                        handleWTIResponse(json, mode, gen);
-                    }
+                    VoicePendingQueue.parseSuccessfulResponse(responseBody);
+                    serverFullAudioGenerations.add(gen);
+                    handleWTIResponse(json,mode,gen);
                 } catch (Exception e) {
                     Log.e(TAG, "Error parsing response", e);
+                    notePendingGeneration(gen,"http_parse_failure:"+e.getClass().getSimpleName());
                     if (allowOfflineAppendFallback && mode == Mode.APPEND) {
                         runOfflineFullAudioFallback(gen, "HTTP response parse error: " + e.getMessage(), false);
                     } else if (mode == Mode.REPLACE && !isWatchService()) {
@@ -2824,6 +3314,7 @@ public class SimonIMEService extends InputMethodService {
                         if (mode == Mode.APPEND) {
                             completeReservedUtteranceWithoutText(gen);
                         }
+                        markPendingGeneration(gen,"http_parse_failure");
                         mainHandler.post(() -> updateStatus("解析錯誤"));
                     }
                 }
@@ -2910,50 +3401,12 @@ public class SimonIMEService extends InputMethodService {
                         return;
                     }
                     JSONObject json = new JSONObject(responseBody);
-                    String text = json.optString("text", "").trim();
+                    String text=VoicePendingQueue.parseSuccessfulResponse(responseBody);
                     mainHandler.post(() -> {
-                        if (mode == Mode.APPEND && gen > 0) {
-                            if (!text.isEmpty()) {
-                                if (!utteranceAlreadyReserved && !reserveUtteranceGeneration(gen)) {
-                                    int committedLen = acceptedTextLengths.getOrDefault(gen, 0);
-                                    if (!isWatchService() && TextLossGuard.shouldRescue(
-                                            committedLen, text.length(), rescueExtraChars, rescueRatio)) {
-                                        clipboardHelper.addToHistory(text);
-                                        updateStatus("辨識到更完整版本，已存剪貼簿");
-                                    } else {
-                                        Log.i(TAG, "[TextLossGuard] discard server candidate=" + text.length()
-                                                + " committed=" + committedLen + " gen=" + gen);
-                                    }
-                                    return;
-                                }
-                                completeReservedUtteranceWithText(gen, text);
-                                return;
-                            }
-                            completeAppendProcessTextFailureWithOfflineFallback(
-                                    gen,
-                                    spokenText,
-                                    "process-text empty response",
-                                    utteranceAlreadyReserved,
-                                    "未辨識到文字");
-                            return;
-                        }
-                        InputConnection ic = getCurrentInputConnection();
-                        if (ic != null && !text.isEmpty()) {
-                            settlePendingCorrectionCapture();
-                            TextSnapshot beforeSnapshot = getCurrentTextSnapshotSafely();
-                            if (commitTextProgrammatically(ic, text)) {
-                                recordVoiceCommit(text, beforeSnapshot);
-                            }
-                            String prefix;
-                            switch (mode) {
-                                case SPELL: prefix = "拼字: "; break;
-                                case TRANSLATE: prefix = "翻譯: "; break;
-                                default: prefix = ""; break;
-                            }
-                            updateStatus(prefix + truncate(text, 20));
-                        } else {
-                            updateStatus("未辨識到文字");
-                        }
+                        if(consumeSilentResult(gen,text,mode==Mode.APPEND,mode.name()))return;
+                        if(mode==Mode.APPEND&&gen>0) {
+                            if(utteranceAlreadyReserved||reserveUtteranceGeneration(gen))completeReservedUtteranceWithText(gen,text);
+                        } else handleWTIResponse(json,mode,gen);
                     });
                 } catch (Exception e) {
                     Log.e(TAG, "Error parsing process-text response", e);
@@ -3131,85 +3584,43 @@ public class SimonIMEService extends InputMethodService {
         });
     }
 
-    private void handleWTIResponse(JSONObject json, Mode mode, int gen) {
+    private void handleWTIResponse(JSONObject json,Mode mode,int gen) {
         mainHandler.post(() -> {
+            if(isDiscardedVoiceGeneration(gen))return;
             try {
-                // v6.17: ic null-guard moved into each case.
-                // REPLACE still needs ic for deleteSurroundingText; others use commitFinalText which handles null ic internally.
-                InputConnection ic = getCurrentInputConnection();
-
-                switch (mode) {
-                    case APPEND: {
-                        String text = json.optString("text", "").trim();
-                        if (!text.isEmpty()) {
-                            if (reserveUtteranceGeneration(gen)) {
-                                // v6.17: commitFinalText 支援 Termux/Gemini 備援。
-                                completeReservedUtteranceWithText(gen, text);
-                            }
-                        } else {
-                            completeReservedUtteranceWithoutText(gen);
-                            updateStatus("未辨識到文字");
-                        }
-                        break;
-                    }
-                    case REPLACE: {
-                        String text = json.optString("text", "").trim();
-                        int deleteBefore = json.optInt("delete_before", 0);
-                        int deleteAfter = json.optInt("delete_after", 0);
-                        String insert = json.optString("insert", text);
-                        if (!isWatchService() && insert.length() <= replaceShortChars
-                                && recordingDurationMs.getOrDefault(gen, 0L) >= replaceLongAudioMs) {
-                            rescueReplaceAudio(gen, true);
-                        }
-                        if (ic == null) {
-                            updateStatus("無法取得輸入連線");
-                            return;
-                        }
-
-                        if (deleteBefore > 0 || deleteAfter > 0) {
-                            if (!isWatchService()) {
-                                CharSequence before = deleteBefore > 0 ? ic.getTextBeforeCursor(deleteBefore, 0) : "";
-                                CharSequence after = deleteAfter > 0 ? ic.getTextAfterCursor(deleteAfter, 0) : "";
-                                clipboardHelper.addToHistory((before == null ? "" : before.toString())
-                                        + (after == null ? "" : after.toString()));
-                            }
-                            deleteSurroundingTextProgrammatically(ic, deleteBefore, deleteAfter);
-                        }
-                        if (!insert.isEmpty()) {
-                            // v6.17: commitFinalText 支援 Termux/Gemini 備援。
-                            commitFinalText(insert);
-                            updateStatus("🔄 替換: " + truncate(insert, 20));
-                        } else {
-                            updateStatus("未找到可替換的文字");
-                        }
-                        break;
-                    }
-                    case SPELL: {
-                        String text = json.optString("text", "").trim();
-                        if (!text.isEmpty()) {
-                            // v6.17: commitFinalText 支援 Termux/Gemini 備援。
-                            commitFinalText(text);
-                            updateStatus("✏️ 拼字: " + text);
-                        } else {
-                            updateStatus("拼字失敗");
-                        }
-                        break;
-                    }
-                    case TRANSLATE: {
-                        String text = json.optString("text", "").trim();
-                        if (!text.isEmpty()) {
-                            // v6.17: commitFinalText 支援 Termux/Gemini 備援。
-                            commitFinalText(text);
-                            updateStatus("🌐 翻譯: " + truncate(text, 25));
-                        } else {
-                            updateStatus("翻譯失敗");
-                        }
-                        break;
-                    }
+                String text=VoicePendingQueue.parseSuccessfulResponse(json.toString());
+                String result=mode==Mode.REPLACE?json.optString("insert",text):text;
+                boolean deleteOnly=mode==Mode.REPLACE&&VoiceResultText.isSilence(result)
+                        &&(json.optInt("delete_before",0)>0||json.optInt("delete_after",0)>0);
+                if(!deleteOnly&&consumeSilentResult(gen,result,mode==Mode.APPEND,mode.name()))return;
+                if(mode!=Mode.APPEND)serverFinalGenerations.add(gen);
+                if(mode==Mode.APPEND) {
+                    if(reserveUtteranceGeneration(gen))completeReservedUtteranceWithText(gen,result);
+                    return;
                 }
-            } catch (Exception e) {
-                Log.e(TAG, "Error handling response", e);
-                updateStatus("處理錯誤");
+                deliverVoiceResult(gen,result,deleteOnly,false,() -> {
+                    InputConnection ic=getCurrentInputConnection();
+                    if(mode==Mode.REPLACE) {
+                        if(ic==null) {updateStatus("無法取得輸入連線");return;}
+                        int before=json.optInt("delete_before",0),after=json.optInt("delete_after",0);
+                        if(!deleteOnly&&!isWatchService()&&result.length()<=replaceShortChars
+                                &&recordingDurationMs.getOrDefault(gen,0L)>=replaceLongAudioMs)rescueReplaceAudio(gen,true);
+                        if(before>0||after>0) {
+                            if(!isWatchService()&&clipboardHelper!=null) {
+                                CharSequence b=before>0?ic.getTextBeforeCursor(before,0):"";
+                                CharSequence a=after>0?ic.getTextAfterCursor(after,0):"";
+                                clipboardHelper.addToHistory((b==null?"":b.toString())+(a==null?"":a.toString()));
+                            }
+                            if(!deleteSurroundingTextProgrammatically(ic,before,after))return;
+                            if(deleteOnly) {lastCommitInsertedOrCopied=true;updateStatus("🔄 已刪除指定文字");return;}
+                        }
+                    }
+                    commitFinalText(VoiceResultText.clean(result));
+                    updateStatus((mode==Mode.REPLACE?"🔄 替換: ":mode==Mode.SPELL?"✏️ 拼字: ":"🌐 翻譯: ")+truncate(VoiceResultText.clean(result),25));
+                });
+            } catch(Exception e) {
+                markPendingGeneration(gen,"mode_response_failure:"+e.getClass().getSimpleName());
+                updateStatus("處理錯誤，音訊保留待重試");
             }
         });
     }
@@ -3219,6 +3630,10 @@ public class SimonIMEService extends InputMethodService {
     private void recordBopomofoTouch(View v,String key,MotionEvent e) {
         recordTouchLearning(v,key,e,"bopomofo");
         captureBopomofoKeyTouch(v, key, e);
+        if (!protectedInputField && touchShadow != null && pendingBopomofoKeyTouch != null
+                && (isBopomofoSymbol(key) || "space".equals(key)))
+            pendingBopomofoKeyTouch.shadow = touchShadow.observe(bopomofoKeyboard, key, e);
+        if ("backspace".equals(key) && touchShadow != null) touchShadow.invalidate();
     }
     private void captureBopomofoKeyTouch(View v, String key, MotionEvent e) {
         try {
@@ -3247,7 +3662,7 @@ public class SimonIMEService extends InputMethodService {
         pendingBopomofoKeyTouch = null;
         if (touch != null && key.equals(touch.key)) {
             imeTelemetry.bopomofoKey(key, touch.x, touch.y, touch.centerX, touch.centerY,
-                    keyToCandidateMs, protectedInputField);
+                    keyToCandidateMs, touch.shadow, protectedInputField);
         } else {
             // Programmatic input has no physical touch centre.  Preserve it as a distinct
             // outcome event so it can never replace a real touch-learning key event.
@@ -3257,49 +3672,21 @@ public class SimonIMEService extends InputMethodService {
 
     private static boolean isProtectedInputField(EditorInfo i){if(i==null)return true;int flags=i.imeOptions&EditorInfo.IME_FLAG_NO_PERSONALIZED_LEARNING;int cls=i.inputType&android.text.InputType.TYPE_MASK_CLASS,var=i.inputType&android.text.InputType.TYPE_MASK_VARIATION;boolean password=(cls==android.text.InputType.TYPE_CLASS_TEXT&&(var==android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD||var==android.text.InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD||var==android.text.InputType.TYPE_TEXT_VARIATION_WEB_PASSWORD))||(cls==android.text.InputType.TYPE_CLASS_NUMBER&&var==android.text.InputType.TYPE_NUMBER_VARIATION_PASSWORD);return flags!=0||password;}
 
-    private void recordCandidateEvent(String page,List<String> candidates,int chosen){if(imeTelemetry==null)return;try{JSONArray shown=new JSONArray();if(candidates!=null)for(int i=0;i<Math.min(10,candidates.size());i++)shown.put(candidates.get(i));imeTelemetry.record("candidate",page,new JSONObject().put("shown",shown).put("chosen_index",chosen),protectedInputField);}catch(Exception ignored){}}
+    private void recordCandidateEvent(String page,List<String> candidates,int chosen){
+        if(!protectedInputField&&touchShadow!=null&&"bopomofo".equals(page)&&candidates!=null&&chosen>=0&&chosen<candidates.size()){
+            // Accepting top-1 confirms the physical stream. A corrective choice
+            // lacks key-level ground truth; discard those labels rather than guess.
+            if(chosen==0)touchShadow.confirmChoice();else touchShadow.discardTrace();
+        }
+        if(imeTelemetry==null)return;
+        try{JSONArray shown=new JSONArray();if(candidates!=null)for(int i=0;i<Math.min(10,candidates.size());i++)shown.put(candidates.get(i));
+            imeTelemetry.record("candidate",page,new JSONObject().put("shown",shown).put("chosen_index",chosen),protectedInputField);
+        }catch(Exception error){Log.w(TAG,"candidate telemetry unavailable",error);}
+    }
     private void recordCommitEvent(String page,String text,String first,String ai,boolean corrected){if(imeTelemetry==null)return;try{imeTelemetry.record("commit",page,new JSONObject().put("text",text).put("engine_top1",first==null?"":first).put("ai_suggestion",ai==null?"":ai).put("corrected",corrected),protectedInputField);}catch(Exception ignored){}}
     private void recordCorrectionEvent(String page,String segment,String from,String to,String via){if(imeTelemetry==null)return;try{imeTelemetry.record("correction",page,new JSONObject().put("segment",segment).put("from",from).put("to",to).put("via",via),protectedInputField);}catch(Exception ignored){}}
 
-    private void setupKeyboardSwipe(View page){
-        if (!isWatchService() && page instanceof SwipeInterceptLayout) {
-            ((SwipeInterceptLayout) page).setOnSwipeListener(this::swipeKeyboard);
-        }
-    }
-
-    private void swipeKeyboard(KeyboardPager.Direction direction) {
-        KeyboardMode mode = KeyboardPager.next(currentKeyboardMode, direction);
-        switchKeyboard(mode);
-        View page = mode == KeyboardMode.VOICE ? voiceKeyboard
-                : mode == KeyboardMode.BOPOMOFO ? bopomofoKeyboard
-                : mode == KeyboardMode.ENGLISH ? englishKeyboard : numbersKeyboard;
-        try {
-            page.setTranslationX((direction == KeyboardPager.Direction.LEFT ? 1f : -1f)
-                    * rootView.getWidth() / 3f);
-            page.setAlpha(0.6f);
-            page.animate().translationX(0f).alpha(1f).setDuration(150).start();
-        } catch (RuntimeException e) {
-            Log.w(TAG, "Keyboard animation failed; retaining selected page", e);
-            resetKeyboardAnimation(page);
-        }
-    }
-
-    private void resetKeyboardAnimation(View page) {
-        try {
-            page.animate().cancel();
-        } catch (RuntimeException e) {
-            Log.w(TAG, "Keyboard animation cancellation failed", e);
-        } finally {
-            page.setTranslationX(0f);
-            page.setAlpha(1f);
-        }
-    }
-
     private void switchKeyboard(KeyboardMode mode) {
-        for (View page : new View[] { voiceKeyboard, bopomofoKeyboard, englishKeyboard, numbersKeyboard }) {
-            if (page == null) continue;
-            resetKeyboardAnimation(page);
-        }
         // v6.23: clear English buffer when leaving English keyboard
         if (currentKeyboardMode == KeyboardMode.ENGLISH && mode != KeyboardMode.ENGLISH) {
             clearEnWordBuffer();
@@ -3344,6 +3731,7 @@ public class SimonIMEService extends InputMethodService {
     }
 
     private void onTypingKeyPressed(String key) {
+        if (imeTelemetry != null) imeTelemetry.noteInput();
         InputConnection ic = getCurrentInputConnection();
         if (ic == null) return;
 
@@ -3357,7 +3745,9 @@ public class SimonIMEService extends InputMethodService {
                     learnEnglishWord();
                     clearEnWordBuffer();
                 } else if (currentKeyboardMode == KeyboardMode.BOPOMOFO) {
+                    long started = SystemClock.elapsedRealtime();
                     applyZhuyinState(zhuyinInput.press("space"));
+                    recordBopomofoKeyOutcome("space", SystemClock.elapsedRealtime() - started);
                     return;
                 }
                 commitTextProgrammatically(ic, " ");
@@ -3513,6 +3903,7 @@ public class SimonIMEService extends InputMethodService {
         backspaceView.setOnTouchListener((v, event) -> {
             switch (event.getAction()) {
                 case MotionEvent.ACTION_DOWN:
+                    if (touchShadow != null) touchShadow.invalidate();
                     backspacePressed = true;
                     backspaceRepeatCount = 0;
                     InputConnection ic0 = getCurrentInputConnection();
@@ -3703,6 +4094,8 @@ public class SimonIMEService extends InputMethodService {
                 String top=state.candidates.isEmpty()?"":state.candidates.get(0);
                 recordCommitEvent("bopomofo",state.commitText,top,"",false);
                 commitTextProgrammatically(ic, state.commitText);
+                zhuyinComposingConnection = null;
+                confirmStableZhuyinCommit(ic, state.commitText);
                 if (lastCommittedZhuyinWord != null && zhuyinAssociationHistory != null)
                     zhuyinAssociationHistory.record(lastCommittedZhuyinWord, state.commitText);
                 lastCommittedZhuyinWord = state.commitText;
@@ -3712,15 +4105,43 @@ public class SimonIMEService extends InputMethodService {
                     if (!next.isEmpty()) state = zhuyinInput.showAssociations(new ArrayList<>(next));
                 }
             }
-            if (state.composingText.isEmpty()) ic.finishComposingText();
+            if (state.composingText.isEmpty()) {
+                // finishComposingText only removes spans; replace the owned preedit
+                // first so deleting its last symbol cannot leave committed residue.
+                // An idle/new editor may have selected text that must stay untouched.
+                if (zhuyinComposingConnection == ic) ic.setComposingText("", 1);
+                ic.finishComposingText();
+                zhuyinComposingConnection = null;
+            }
             else {
-                android.text.SpannableString composing=highlightZhuyinTarget(state.composingText,state.cursorPosition);
-                ic.setComposingText(composing, 1); // external text cursor stays after the full composition
+                android.text.SpannableString composing=highlightZhuyinTarget(state.composingText,state.targetStart,state.targetEnd);
+                if (ic.setComposingText(composing, 1)) zhuyinComposingConnection = ic; // cursor stays after the full composition
             }
         }
         if (boCursorLeft != null) boCursorLeft.setVisibility(state.composingText.isEmpty() ? View.INVISIBLE : View.VISIBLE);
         if (boCursorRight != null) boCursorRight.setVisibility(state.composingText.isEmpty() ? View.INVISIBLE : View.VISIBLE);
         renderZhuyinCandidates(state.candidates, state.candidateKind);
+        if (zhuyinInput.isSecondPassActive()) showZhuyinReplaceBubble();
+        else dismissZhuyinReplaceBubble();
+    }
+
+    private void confirmStableZhuyinCommit(InputConnection ic, String committed) {
+        if (protectedInputField || touchShadow == null) return;
+        try {
+            android.view.inputmethod.ExtractedText value = ic.getExtractedText(new android.view.inputmethod.ExtractedTextRequest(), 0);
+            if (value == null || value.text == null || value.selectionStart < committed.length()
+                    || value.selectionStart > value.text.length()) { touchShadow.invalidate(); return; }
+            final String prefix = value.text.subSequence(0, value.selectionStart).toString();
+            if (!prefix.endsWith(committed)) { touchShadow.invalidate(); return; }
+            final String session = touchSessionId;
+            touchShadow.confirmAfterDelay(() -> {
+                if (protectedInputField || !session.equals(touchSessionId)) return false;
+                InputConnection current = getCurrentInputConnection();
+                if (current == null) return false;
+                android.view.inputmethod.ExtractedText after = current.getExtractedText(new android.view.inputmethod.ExtractedTextRequest(), 0);
+                return after != null && after.text != null && after.text.toString().startsWith(prefix);
+            });
+        } catch (Exception error) { touchShadow.invalidate(); Log.w(TAG, "Touch confirmation unavailable", error); }
     }
 
     private void renderZhuyinStreamPreview(String text) {
@@ -3732,8 +4153,12 @@ public class SimonIMEService extends InputMethodService {
         android.text.SpannableString preview = new android.text.SpannableString(text);
         for (int i = 0; i < text.length();) {
             int end = i + Character.charCount(text.codePointAt(i));
+            final int previewIndex = text.codePointCount(0, i);
             preview.setSpan(new android.text.style.ClickableSpan() {
-                @Override public void onClick(View widget) { showZhuyinReplaceBubble(); }
+                @Override public void onClick(View widget) {
+                    if (touchShadow != null) touchShadow.invalidate();
+                    if (zhuyinInput != null) applyZhuyinState(zhuyinInput.moveCursorToPreviewCharacter(previewIndex));
+                }
                 @Override public void updateDrawState(android.text.TextPaint paint) {
                     paint.setUnderlineText(false);
                     paint.setColor(getColor(R.color.key_text));
@@ -3744,46 +4169,66 @@ public class SimonIMEService extends InputMethodService {
         boStreamPreview.setText(preview);
         boStreamPreview.post(() -> {
             android.view.ViewParent parent = boStreamPreview.getParent();
-            if (parent instanceof HorizontalScrollView)
-                ((HorizontalScrollView) parent).fullScroll(View.FOCUS_RIGHT);
+            if (parent instanceof HorizontalScrollView) {
+                HorizontalScrollView scroll=(HorizontalScrollView)parent;
+                ZhuyinInputController.State state=zhuyinInput.state();
+                if(state.targetEnd>state.targetStart&&boStreamPreview.getLayout()!=null){
+                    int count=text.codePointCount(0,text.length());int cp=Math.max(0,Math.min(count,state.targetStart));
+                    int x=(int)boStreamPreview.getLayout().getPrimaryHorizontal(text.offsetByCodePoints(0,cp));
+                    scroll.smoothScrollTo(Math.max(0,x-scroll.getWidth()/2),0);
+                }else scroll.fullScroll(View.FOCUS_RIGHT);
+            }
         });
+    }
+
+    private void dismissZhuyinReplaceBubble() {
+        if (zhuyinReplacePopup != null) {
+            zhuyinReplacePopup.setOnDismissListener(null);
+            zhuyinReplacePopup.dismiss();zhuyinReplacePopup=null;
+        }
     }
 
     private void showZhuyinReplaceBubble() {
         if (boStreamPreview == null || zhuyinInput == null) return;
-        List<String> candidates = zhuyinInput.state().candidates;
-        if (candidates.isEmpty()) return;
-        LinearLayout box = new LinearLayout(this);
-        box.setOrientation(LinearLayout.HORIZONTAL);
-        for (String value : candidates) {
-            TextView item = new TextView(this);
-            item.setText(value);
-            item.setTextColor(Color.WHITE);
-            item.setTextSize(16);
-            item.setGravity(Gravity.CENTER);
-            item.setPadding(dp(12), 0, dp(12), 0);
-            box.addView(item, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(48)));
-        }
-        PopupWindow popup = new PopupWindow(box, ViewGroup.LayoutParams.WRAP_CONTENT, dp(48), true);
-        popup.setOutsideTouchable(true);
-        popup.setBackgroundDrawable(new ColorDrawable(0xff303746));
-        popup.showAsDropDown(boStreamPreview);
-        for (int i = 0; i < box.getChildCount(); i++) {
-            View item = box.getChildAt(i);
-            item.setOnClickListener(view -> {
-                int index = box.indexOfChild(view);
+        dismissZhuyinReplaceBubble();
+        ZhuyinInputController.State state=zhuyinInput.state();
+        LinearLayout box = new LinearLayout(this);box.setOrientation(LinearLayout.HORIZONTAL);
+        HorizontalScrollView scroll=new HorizontalScrollView(this);scroll.addView(box);
+        for (int i=0;i<Math.min(10,state.candidates.size());i++) {
+            final int index=i;
+            TextView item = new TextView(this);item.setText(state.candidates.get(i));
+            item.setTextColor(Color.WHITE);item.setTextSize(16);item.setGravity(Gravity.CENTER);item.setPadding(dp(12),0,dp(12),0);
+            box.addView(item,new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT,dp(48)));
+            item.setOnClickListener(view->{
+                dismissZhuyinReplaceBubble();
+                recordCandidateEvent("bopomofo",state.candidates,index);
                 applyZhuyinState(zhuyinInput.chooseCandidate(index));
-                popup.dismiss();
             });
         }
+        TextView cancel=new TextView(this);cancel.setText("取消");cancel.setTextColor(Color.WHITE);cancel.setPadding(dp(12),0,dp(12),0);cancel.setGravity(Gravity.CENTER);
+        box.addView(cancel,new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT,dp(48)));
+        cancel.setOnClickListener(v->{dismissZhuyinReplaceBubble();if(touchShadow!=null)touchShadow.invalidate();applyZhuyinState(zhuyinInput.cancelSecondPass());});
+        PopupWindow popup=new PopupWindow(scroll,Math.min(dp(300),getResources().getDisplayMetrics().widthPixels),dp(48),false);
+        zhuyinReplacePopup=popup;popup.setOutsideTouchable(false);popup.setBackgroundDrawable(new ColorDrawable(0xff303746));
+        popup.setOnDismissListener(()->{zhuyinReplacePopup=null;if(zhuyinInput.isSecondPassActive()){if(touchShadow!=null)touchShadow.invalidate();applyZhuyinState(zhuyinInput.cancelSecondPass());}});
+        boStreamPreview.post(()->{
+            if(zhuyinReplacePopup!=popup||!boStreamPreview.isAttachedToWindow())return;
+            int cp=Math.min(state.targetStart,state.composingText.codePointCount(0,state.composingText.length()));
+            int offset=state.composingText.offsetByCodePoints(0,cp);
+            android.text.Layout layout=boStreamPreview.getLayout();
+            int x=layout==null?0:(int)layout.getPrimaryHorizontal(offset)+boStreamPreview.getPaddingLeft();
+            popup.showAsDropDown(boStreamPreview,x,-boStreamPreview.getHeight()-dp(48));
+        });
     }
 
-    private static android.text.SpannableString highlightZhuyinTarget(String value,int cursorCodePoints){
+    private static android.text.SpannableString highlightZhuyinTarget(String value,int selectionStart,int selectionEnd){
         android.text.SpannableString span=new android.text.SpannableString(value);
         if(value==null||value.isEmpty())return span;
         int count=value.codePointCount(0,value.length());
-        int cp=Math.max(0,Math.min(count-1,cursorCodePoints>=count?count-1:cursorCodePoints));
-        int start=value.offsetByCodePoints(0,cp),end=value.offsetByCodePoints(start,1);
+        int startCp=Math.max(0,Math.min(count,selectionStart));
+        int endCp=Math.max(startCp,Math.min(count,selectionEnd));
+        if(endCp==startCp)return span;
+        int start=value.offsetByCodePoints(0,startCp),end=value.offsetByCodePoints(0,endCp);
         span.setSpan(new android.text.style.BackgroundColorSpan(0xffffc857),start,end,android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
         span.setSpan(new android.text.style.ForegroundColorSpan(0xff1a1a2e),start,end,android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
         return span;
@@ -3865,6 +4310,8 @@ public class SimonIMEService extends InputMethodService {
 
     /** Leaving the Zhuyin page discards unfinished composition and clears the editor underline. */
     private void clearBopomofoBuffer() {
+        dismissZhuyinReplaceBubble();
+        if (touchShadow != null) touchShadow.invalidate();
         if (zhuyinInput != null) applyZhuyinState(zhuyinInput.clear());
         InputConnection ic = getCurrentInputConnection();
         if (ic != null) ic.finishComposingText();
@@ -3925,6 +4372,7 @@ public class SimonIMEService extends InputMethodService {
     // ==================== Helpers ====================
 
     protected void updateStatus(String text) {
+        silenceStatusGeneration++;
         if (text != null && text.startsWith("聆聽中")) {
             lastRecognitionStatusMs = android.os.SystemClock.elapsedRealtime();
         }
@@ -3968,14 +4416,21 @@ public class SimonIMEService extends InputMethodService {
      * 只在 WS 失敗或 final 為空時呼叫。須在錄音停止後（fullPcmBuffer 寫入已完成）呼叫。
      */
     private void httpFallbackFullAudio(int gen) {
-        // v6.25: 終局守衛——同一 generation 只允許一次 commit/fallback，擋 WS 晚到回呼造成的重複提交
-        if (!reserveUtteranceGeneration(gen)) return;
-        byte[] pcm = getFullPcmForGeneration(gen);
-        if (pcm == null || pcm.length < 3200) {
-            completeReservedUtteranceWithoutText(gen);
-            mainHandler.post(() -> updateStatus("沒有可用的音訊，請再試一次"));
-            return;
+        if((isRecording||recordingFinalizing)&&gen==activeUtteranceGeneration) {
+            afterRecordingFinalization.add(() -> httpFallbackFullAudio(gen));return;
         }
+        // v6.25: 終局守衛——同一 generation 只允許一次 commit/fallback，擋 WS 晚到回呼造成的重複提交
+        if(isDiscardedVoiceGeneration(gen)||deliveredVoiceGenerations.contains(gen)||serverFinalGenerations.contains(gen)
+                ||acceptedTextLengths.containsKey(gen)||!fullAudioRequests.add(gen))return;
+        reserveUtteranceGeneration(gen);
+        byte[] pcm = getFullPcmForGeneration(gen);
+        String id=pendingSessionByGeneration.get(gen);
+        boolean durable=id!=null&&voicePendingQueue!=null&&!voicePendingQueue.backupFailed(id);
+        if (!durable&&(pcm==null||pcm.length==0)) {
+            completeReservedUtteranceWithoutText(gen);
+            mainHandler.post(() -> updateStatus("沒有可用的音訊，請再試一次"));return;
+        }
+        if(pcm==null)pcm=new byte[0];
         byte[] wavData = pcmToWav(pcm, SAMPLE_RATE, 1, 16);
         Log.i(TAG, "[AudioStream] 整段音訊 HTTP fallback (" + pcm.length + " bytes)");
         sendFullAudioHttpFallback(gen, wavData, pcm);
@@ -3990,7 +4445,8 @@ public class SimonIMEService extends InputMethodService {
         MultipartBody.Builder bodyBuilder = AppVersion.withAppVersion(new MultipartBody.Builder())
                 .setType(MultipartBody.FORM)
                 .addFormDataPart("file", "recording.wav",
-                        RequestBody.create(wavData, MediaType.parse("audio/wav")));
+                        durableOrMemoryAudioBody(gen,wavData))
+                .addFormDataPart("client_session_id",pendingSessionByGeneration.getOrDefault(gen,""));
 
         String auth = getAuthPassword();
         Request.Builder reqBuilder = new Request.Builder()
@@ -4017,21 +4473,21 @@ public class SimonIMEService extends InputMethodService {
                         return;
                     }
 
-                    JSONObject json = new JSONObject(responseBody);
-                    String text = json.optString("text", "").trim();
-                    if (text.isEmpty()) {
-                        Log.w(TAG, "[AudioStream] HTTP fallback returned empty text");
-                        runOfflineFullAudioFallback(gen, "HTTP fallback text empty", true, pcm);
-                        return;
-                    }
-
-                    completeReservedUtteranceWithText(gen, text);
+                    String text=VoicePendingQueue.parseSuccessfulResponse(responseBody);
+                    serverFullAudioGenerations.add(gen);
+                    completeReservedUtteranceWithText(gen,text);
                 } catch (Exception e) {
                     Log.e(TAG, "[AudioStream] HTTP fallback parse error", e);
                     runOfflineFullAudioFallback(gen, "HTTP fallback parse error: " + e.getMessage(), true, pcm);
                 }
             }
         });
+    }
+
+    private RequestBody durableOrMemoryAudioBody(int gen,byte[] wavData){
+        String id=pendingSessionByGeneration.get(gen);
+        if(id!=null&&voicePendingQueue!=null&&!voicePendingQueue.backupFailed(id)){java.io.File full=voicePendingQueue.pcmFile(id);return pcmWavBody(full,SAMPLE_RATE);}
+        return RequestBody.create(wavData,MediaType.parse("audio/wav"));
     }
 
     private void runOfflineFullAudioFallback(int gen, String reason, boolean utteranceAlreadyReserved) {
@@ -4066,7 +4522,7 @@ public class SimonIMEService extends InputMethodService {
             long sttMs = System.currentTimeMillis() - t0;
             if (text != null) text = englishMapper.apply(text.trim());
 
-            if (text != null && !text.isEmpty()) {
+            if (!VoiceResultText.isSilence(text)&&!VoiceResultText.isHallucinationMarker(text)) {
                 final String finalText = text;
                 Log.i(TAG, "[OfflineFallback] SenseVoice success after " + reason
                         + " (" + sttMs + "ms), routing to server correction: '"
@@ -4075,8 +4531,9 @@ public class SimonIMEService extends InputMethodService {
                 sendTextProcess(finalText, Mode.APPEND, gen, true);
             } else {
                 Log.e(TAG, "[OfflineFallback] SenseVoice returned empty after server failure: " + reason);
+                markPendingGeneration(gen,"offline_empty_unconfirmed");
                 completeReservedUtteranceWithoutText(gen);
-                mainHandler.post(() -> updateStatus("離線辨識無結果"));
+                mainHandler.post(() -> updateStatus("離線辨識無結果，音訊保留待補傳"));
             }
         }, "OfflineFallback-SenseVoice").start();
     }
@@ -4137,7 +4594,9 @@ public class SimonIMEService extends InputMethodService {
      * v6.20 R2: 文字指令 → POST /v1/ai-command，回傳答案「插入」游標處（絕不刪除周圍）。
      * 空回應 → 保留武裝供重試；欄位已切換（fieldGeneration 變動）→ 丟棄不插入。
      */
-    private void sendAiCommand(String instruction, String context) {
+    private void sendAiCommand(String instruction,String context) {sendAiCommand(instruction,context,-1);}
+    private void sendAiCommand(String instruction, String context,int audioGeneration) {
+        if(consumeSilentResult(audioGeneration,instruction,false,"AI_COMMAND"))return;
         if (instruction == null || instruction.trim().isEmpty()) {
             updateStatus("未辨識到指令");
             return;
@@ -4155,10 +4614,11 @@ public class SimonIMEService extends InputMethodService {
         if (auth != null && !auth.isEmpty()) rb.addHeader("Authorization", "Bearer " + auth);
         httpClient.newCall(rb.build()).enqueue(new Callback() {
             @Override public void onFailure(@NonNull Call call, @NonNull IOException e) {
+                keepPendingModeResult(audioGeneration,"AI_COMMAND","ai_instruction_http_failure");
                 mainHandler.post(() -> updateStatus("AI 指令失敗，素材保留可重試"));
             }
             @Override public void onResponse(@NonNull Call call, @NonNull Response response) throws IOException {
-                handleAiCommandResponse(response, capturedGeneration);
+                handleAiCommandResponse(response, capturedGeneration, audioGeneration);
             }
         });
     }
@@ -4166,7 +4626,7 @@ public class SimonIMEService extends InputMethodService {
     /**
      * v6.20 R2: 音訊指令（本機 STT 未取得文字時）→ POST /v1/ai-command（file 由伺服器轉錄為指令）。
      */
-    private void sendAiCommandAudio(byte[] wavData, String context) {
+    private void sendAiCommandAudio(byte[] wavData, String context,int gen) {
         if (wavData == null || wavData.length == 0) {
             updateStatus("沒有可用的音訊，素材保留可重試");
             return;
@@ -4176,6 +4636,7 @@ public class SimonIMEService extends InputMethodService {
                 .setType(MultipartBody.FORM)
                 .addFormDataPart("file", "recording.wav",
                         RequestBody.create(wavData, MediaType.parse("audio/wav")))
+                .addFormDataPart("client_session_id",pendingSessionByGeneration.getOrDefault(gen,""))
                 .addFormDataPart("context", context != null ? context : "")
                 .addFormDataPart("language", "zh-TW")
                 .build();
@@ -4186,16 +4647,18 @@ public class SimonIMEService extends InputMethodService {
         if (auth != null && !auth.isEmpty()) rb.addHeader("Authorization", "Bearer " + auth);
         httpClient.newCall(rb.build()).enqueue(new Callback() {
             @Override public void onFailure(@NonNull Call call, @NonNull IOException e) {
+                keepPendingModeResult(gen,"AI_COMMAND","ai_command_audio_http_failure");
                 mainHandler.post(() -> updateStatus("AI 指令失敗，素材保留可重試"));
             }
             @Override public void onResponse(@NonNull Call call, @NonNull Response response) throws IOException {
-                handleAiCommandResponse(response, capturedGeneration);
+                handleAiCommandResponse(response, capturedGeneration, gen);
             }
         });
     }
 
     /** v6.20 R2: 共用 /v1/ai-command 回應處理（marshal 回主緒後 insert）。 */
-    private void handleAiCommandResponse(Response response, int capturedGeneration) {
+    private void handleAiCommandResponse(Response response, int capturedGeneration) { handleAiCommandResponse(response,capturedGeneration,-1); }
+    private void handleAiCommandResponse(Response response, int capturedGeneration, int audioGeneration) {
         String bodyStr;
         boolean ok;
         int code;
@@ -4204,6 +4667,7 @@ public class SimonIMEService extends InputMethodService {
             ok = r.isSuccessful();
             bodyStr = r.body() != null ? r.body().string() : "";
         } catch (Exception e) {
+            keepPendingModeResult(audioGeneration,"AI_COMMAND","ai_command_response_failure");
             mainHandler.post(() -> updateStatus("AI 指令失敗，素材保留可重試"));
             return;
         }
@@ -4211,25 +4675,27 @@ public class SimonIMEService extends InputMethodService {
         final int fcode = code;
         final String fbody = bodyStr;
         mainHandler.post(() -> {
+            if(isDiscardedVoiceGeneration(audioGeneration))return;
             if (!fok) {
+                keepPendingModeResult(audioGeneration,"AI_COMMAND","ai_command_http_status:"+fcode);
                 updateStatus("AI 伺服器錯誤 " + fcode + "，素材保留");
                 return; // keep armed
             }
-            String text = "";
-            try {
-                text = new JSONObject(fbody).optString("text", "").trim();
-            } catch (Exception ignore) {}
-            if (text.isEmpty()) {
-                updateStatus("AI 無回應，素材保留可重試"); // keep armed
-                return;
-            }
+            final String text;
+            try {text=VoicePendingQueue.parseSuccessfulResponse(fbody);}
+            catch(Exception e) {keepPendingModeResult(audioGeneration,"AI_COMMAND","ai_command_malformed_response");updateStatus("AI 回應錯誤，音訊保留");return;}
+            if(consumeSilentResult(audioGeneration,text,false,"AI_COMMAND"))return;
+            serverFinalGenerations.add(audioGeneration);
             if (capturedGeneration != fieldGeneration) {
                 Log.w(TAG, "AI response discarded: field switched");
+                keepPendingModeResult(audioGeneration,"AI_COMMAND","ai_command_field_changed");
                 return;
             }
-            commitFinalText(text);       // pure insert at cursor (no deleteSurroundingText)
-            updateStatus("🤖 " + truncate(text, 20));
-            clearAiState();              // single-use disarm
+            deliverVoiceResult(audioGeneration,text,false,false,() -> {
+                commitFinalText(VoiceResultText.clean(text));
+                updateStatus("🤖 " + truncate(VoiceResultText.clean(text),20));
+                if(lastCommitInsertedOrCopied)clearAiState();
+            });
         });
     }
 
@@ -4700,6 +5166,7 @@ public class SimonIMEService extends InputMethodService {
     @Override
     public void onUpdateSelection(int oldSelStart, int oldSelEnd, int newSelStart, int newSelEnd,
                                   int candidatesStart, int candidatesEnd) {
+        if (touchShadow != null && newSelStart < oldSelStart) touchShadow.invalidate();
         try {
             if (mIgnoreNextUpdateSelection) {
                 mIgnoreNextUpdateSelection = false;
@@ -4728,8 +5195,29 @@ public class SimonIMEService extends InputMethodService {
         }
     }
 
+    private void flushPendingVoiceAudio(boolean bounded) {
+        if(voicePendingQueue==null)return;
+        try {
+            if(bounded) {
+                if(!voicePendingQueue.flushAllBounded())Log.w(TAG,"Pending PCM flush still queued after 100 ms");
+            } else voicePendingQueue.flushAll();
+        }
+        catch(IOException e) {Log.e(TAG,"Pending PCM lifecycle fsync failed",e);}
+    }
+
+    @Override public void onLowMemory() {
+        flushPendingVoiceAudio(true);
+        super.onLowMemory();
+    }
+
+    @Override public void onTrimMemory(int level) {
+        flushPendingVoiceAudio(false);
+        super.onTrimMemory(level);
+    }
+
     @Override
     public void onFinishInputView(boolean finishingInput) {
+        flushPendingVoiceAudio(false);
         dismissSymbolPopup();
         if (!isWatchService() && zhuyinInput != null) clearBopomofoBuffer();
         if (mainHandler != null) {
@@ -4744,11 +5232,14 @@ public class SimonIMEService extends InputMethodService {
 
     @Override
     public void onDestroy() {
+        flushPendingVoiceAudio(true);
         dismissSymbolPopup();
         if (zhuyinInput != null) zhuyinInput.close();
         if (zhuyinWordIndex != null) zhuyinWordIndex.close();
         if (touchLearning != null) touchLearning.close();
         if (isRecording) {
+            String pendingId=activePendingSessionId;
+            if(pendingId!=null&&voicePendingQueue!=null){voicePendingQueue.execute(() -> voicePendingQueue.markPending(pendingId,"service_destroyed"));recordVoiceEvent("pending_saved",pendingId,voicePendingQueue.audioMs(pendingId),0,0,"","",voicePendingQueue.totalBytes(),0);}
             isRecording = false;
             streamingMode = false;
             synchronized (recorderRestartLock) {
@@ -4760,6 +5251,7 @@ public class SimonIMEService extends InputMethodService {
                 }
             }
         }
+        try{ConnectivityManager cm=(ConnectivityManager)getSystemService(CONNECTIVITY_SERVICE);if(cm!=null&&voiceNetworkCallback!=null)cm.unregisterNetworkCallback(voiceNetworkCallback);}catch(Exception ignored){}
         // v6.1: safety net 釋放螢幕常亮（IME 被系統回收時）
         if (rootView != null) rootView.setKeepScreenOn(false);
         // v5.6: safety net 釋放 WakeLock（IME 被系統殺掉時）
@@ -4788,6 +5280,8 @@ public class SimonIMEService extends InputMethodService {
         if (onDeviceCorrection != null) {
             onDeviceCorrection.release();
         }
+        pendingVoiceExecutor.shutdown();
+        synchronized(this){if(pendingDrainTask!=null)pendingDrainTask.cancel(false);}
         super.onDestroy();
     }
 }
