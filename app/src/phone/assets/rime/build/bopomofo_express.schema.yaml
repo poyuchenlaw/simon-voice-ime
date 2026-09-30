@@ -3,16 +3,16 @@ __build_info:
   timestamps:
     bopomofo.custom: 0
     bopomofo.schema: 1790572749
-    bopomofo_express.schema: 1790621750
+    bopomofo_express.schema: 1790741119
     default: 1790572763
     default.custom: 0
-    grammar: 1790689425
+    grammar: 1790741119
     grammar.custom: 0
-    key_bindings: 1790572749
+    key_bindings: 1790741119
     key_bindings.custom: 0
-    punctuation: 1790572749
+    punctuation: 1790741119
     punctuation.custom: 0
-    zhuyin: 1790572749
+    zhuyin: 1790741119
     zhuyin.custom: 0
 custom_phrase:
   db_class: stabledb
@@ -269,7 +269,7 @@ speller:
     - "xform/er/R/"
     - "xform/eh/E/"
     - "xform/([iv])e/$1E/"
-    - "abbrev/^([bpmfdtnlgkhjqxZCSrzcs]).+$/$1/"
+    - "abbrev/^([bpmfdtnlgkhjqxZCSrzcs])(?=[bpmfdtnlgkhjqxZCSrzcs]).+$/$1/"
     - "abbrev/^([A-Za-z]+)\\d$/$1/"
     - "abbrev/^([bpmfdtnlgkhjqxZCSrzcs]).+(\\d)$/$1$2/"
     - "xlit|bpmfdtnlgkhjqxZCSrzcsiuvaoeEAIOUMNKGR12345|1qaz2wsxedcrfv5tgbyhnujm8ik,9ol.0p;/- 6347|"

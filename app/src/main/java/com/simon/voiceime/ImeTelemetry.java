@@ -89,6 +89,33 @@ final class ImeTelemetry {
     void key(String page,String key,float x,float y,float cx,float cy,boolean protectedField) {
         try{record("key",page,new JSONObject().put("key",key).put("x",x).put("y",y).put("key_center_x",cx).put("key_center_y",cy),protectedField);}catch(Exception ignored){}
     }
+    static JSONObject makeBopomofoKeyEvent(long ts, String session, String version, String key,
+                                            float x, float y, float cx, float cy,
+                                            long keyToCandidateMs) throws Exception {
+        JSONObject fields = new JSONObject().put("key", key).put("x", x).put("y", y)
+                .put("key_center_x", cx).put("key_center_y", cy)
+                .put("key_to_candidate_ms", Math.max(0L, keyToCandidateMs));
+        return makeEvent(ts, session, version, "key", "bopomofo", fields, false);
+    }
+    void bopomofoKey(String key, float x, float y, float cx, float cy,
+                     long keyToCandidateMs, boolean protectedField) {
+        try {
+            record("key", "bopomofo", new JSONObject().put("key", key).put("x", x).put("y", y)
+                    .put("key_center_x", cx).put("key_center_y", cy)
+                    .put("key_to_candidate_ms", Math.max(0L, keyToCandidateMs)), protectedField);
+        } catch (Exception ignored) {}
+    }
+    /**
+     * Records the app-local part of a Bopomofo key press.  This is deliberately
+     * an event field rather than a new endpoint: phone telemetry can therefore
+     * measure the A10 key-to-candidate budget without exposing input text.
+     */
+    void keyOutcome(String page, String key, long keyToCandidateMs, boolean protectedField) {
+        try {
+            record("key_outcome", page, new JSONObject().put("key", key)
+                    .put("key_to_candidate_ms", Math.max(0L, keyToCandidateMs)), protectedField);
+        } catch (Exception ignored) {}
+    }
     void init(String step,long ms,boolean ok,String message) {
         try{JSONObject j=new JSONObject().put("step",step).put("ms",ms).put("ok",ok);if(message!=null&&!message.isEmpty())j.put("message",message);record("rime_init","bopomofo",j,false);}catch(Exception ignored){}
     }

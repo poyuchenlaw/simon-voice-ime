@@ -75,7 +75,7 @@ final class ZhuyinInputController {
                 if (abbreviationIndex.hasPrefix(extended) || abbreviationIndex.hasSegmentedPrefix(extended)) {
                     abbreviationKeys.append(key);
                     engine.key(key);
-                    abbreviationEntries = abbreviationKeys.length() >= 2 ? abbreviationIndex.lookup(extended) : Collections.emptyList();
+                    abbreviationEntries = abbreviationIndex.lookup(extended);
                     if (abbreviationKeys.length() >= 4) abbreviationEntries = mergeEntries(abbreviationEntries, abbreviationIndex.segmented(extended));
                     return mixedSnapshot(true);
                 }
@@ -83,6 +83,7 @@ final class ZhuyinInputController {
             } else if (abbreviationIndex.hasPrefix(key)) {
                 abbreviationKeys.append(key);
                 engine.key(key);
+                abbreviationEntries = abbreviationIndex.lookup(key);
                 return mixedSnapshot(true);
             }
         }
@@ -103,7 +104,7 @@ final class ZhuyinInputController {
             if(selected.entry!=null){engine.learnPhrase(selected.entry.word,selected.entry.pronunciation);abbreviationIndex.rememberPersonal(selected.entry);engine.clear();abbreviationKeys.setLength(0);abbreviationEntries=Collections.emptyList();return new State("",Collections.emptyList(),selected.entry.word,true,0,"abbreviation",Collections.emptyList());}
             engine.choose(selected.engineIndex);abbreviationKeys.setLength(0);abbreviationEntries=Collections.emptyList();return snapshot(true,true);
         }
-        if (abbreviationKeys.length() >= 2) {
+        if (abbreviationKeys.length() >= 1) {
             if (index < 0 || index >= abbreviationEntries.size()) return abbreviationSnapshot();
             ZhuyinWordIndex.Entry selected = abbreviationEntries.get(index);
             engine.learnPhrase(selected.word, selected.pronunciation);
@@ -118,13 +119,19 @@ final class ZhuyinInputController {
     }
     String candidateOrigin(int index){
         if(!mixedChoices.isEmpty()&&index>=0&&index<mixedChoices.size())return mixedChoices.get(index).entry==null?"engine":"abbreviation";
-        return abbreviationKeys.length()>=2?"abbreviation":"engine";
+        return abbreviationKeys.length()>=1?"abbreviation":"engine";
     }
 
     State moveCursorLeft() { mixedChoices=Collections.emptyList(); engine.moveCursor("left"); return snapshot(true, true); }
     State moveCursorRight() { mixedChoices=Collections.emptyList(); engine.moveCursor("right"); return snapshot(true, true); }
 
     State clear() { abbreviationKeys.setLength(0); abbreviationEntries = Collections.emptyList(); mixedChoices=Collections.emptyList(); associationCandidates = Collections.emptyList(); engine.clear(); return snapshot(true, true); }
+    State flushForPunctuation() {
+        if (engine.composingText() == null || engine.composingText().isEmpty()) return snapshot(true, true);
+        abbreviationKeys.setLength(0); abbreviationEntries = Collections.emptyList(); mixedChoices = Collections.emptyList(); associationCandidates = Collections.emptyList();
+        engine.space();
+        return snapshot(true, true);
+    }
     State state() { return snapshot(false, false); }
     State showAssociations(List<String> candidates) {
         associationCandidates = candidates == null ? Collections.emptyList() : new ArrayList<>(candidates);

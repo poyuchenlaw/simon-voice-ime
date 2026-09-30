@@ -244,10 +244,19 @@ python3 - "$FINAL" "$DEST/update-manifest.json" "$VERSION" "$PHONE_VERSION_CODE"
 import hashlib, json, os, sys
 apk, manifest, name, code, *rows = sys.argv[1:]
 patches=[]
+seen_versions={}
 for row in rows:
     old, old_code, old_sha, filename, sha, size = row.split('|')
-    patches.append({'from_versionCode': int(old_code), 'from_sha256': old_sha,
-                    'name': filename, 'sha256': sha, 'size': int(size)})
+    patch={'from_versionCode': int(old_code), 'from_sha256': old_sha,
+           'name': filename, 'sha256': sha, 'size': int(size)}
+    # A locally supplied extra base may be the same release selected above.
+    # Keep one record for that base; divergent duplicate metadata is unsafe.
+    prior=seen_versions.get(old)
+    if prior is None:
+        seen_versions[old]=patch
+        patches.append(patch)
+    elif prior != patch:
+        raise SystemExit('conflicting patch records for base version '+old)
 with open(apk,'rb') as f: full_sha=hashlib.sha256(f.read()).hexdigest()
 result={'versionName':name, 'versionCode':int(code), 'sha256':full_sha,
         'size':os.path.getsize(apk), 'normalized':True,

@@ -14,12 +14,14 @@ import android.media.MediaRecorder;
 import android.os.Handler;
 import android.os.Looper;
 import android.os.PowerManager;
+import android.os.SystemClock;
 import android.util.Log;
 import android.view.Gravity;
 import android.view.LayoutInflater;
 import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewGroup;
+import android.view.ViewConfiguration;
 import android.graphics.drawable.ColorDrawable;
 import android.view.inputmethod.EditorInfo;
 import android.view.inputmethod.InputConnection;
@@ -174,6 +176,14 @@ public class SimonIMEService extends InputMethodService {
     /** Blocks telemetry and local learning for password/no-personalized-learning editors. */
     private boolean protectedInputField = false;
     private String touchSessionId = java.util.UUID.randomUUID().toString();
+    private BopomofoKeyTouch pendingBopomofoKeyTouch;
+
+    private static final class BopomofoKeyTouch {
+        final String key; final float x; final float y; final float centerX; final float centerY;
+        BopomofoKeyTouch(String key, float x, float y, float centerX, float centerY) {
+            this.key = key; this.x = x; this.y = y; this.centerX = centerX; this.centerY = centerY;
+        }
+    }
 
     // Streaming state (APPEND mode with VAD)
     private volatile boolean streamingMode = false;
@@ -361,6 +371,7 @@ public class SimonIMEService extends InputMethodService {
         catch (Exception error) { Log.e(TAG, "Initial-symbol dictionary unavailable", error); }
         zhuyinAssociationHistory = new ZhuyinAssociationHistory(new java.io.File(getFilesDir(), "zhuyin_associations.tsv"));
         zhuyinInput = new ZhuyinInputController(createZhuyinEngine(), zhuyinWordIndex);
+        if (zhuyinWordIndex != null) RemotePrivateVocabSync.refreshOnce(this, zhuyinWordIndex);
         touchLearning = new TouchLearningStore(this);
 
         // 背景初始化本機 STT
@@ -594,10 +605,44 @@ public class SimonIMEService extends InputMethodService {
 
     private void setupPunctuationKey(View key, String fullWidth, String halfWidth) {
         if (key == null) return;
-        key.setOnClickListener(v -> commitPunctuation(fullWidth));
-        key.setOnLongClickListener(v -> {
+        final boolean[] down = {false};
+        final boolean[] longPress = {false};
+        final Runnable[] longPressTask = new Runnable[1];
+        longPressTask[0] = () -> {
+            if (!down[0] || longPress[0]) return;
+            longPress[0] = true;
             commitPunctuation(halfWidth);
-            return true;
+            recordBopomofoKeyOutcome("，", 0L);
+        };
+        key.setClickable(true);
+        key.setLongClickable(true);
+        key.setOnTouchListener((v, event) -> {
+            switch (event.getActionMasked()) {
+                case MotionEvent.ACTION_DOWN:
+                    captureBopomofoKeyTouch(v, "，", event);
+                    down[0] = true;
+                    longPress[0] = false;
+                    v.setPressed(true);
+                    v.postDelayed(longPressTask[0], ViewConfiguration.getLongPressTimeout());
+                    return true;
+                case MotionEvent.ACTION_UP:
+                    v.removeCallbacks(longPressTask[0]);
+                    v.setPressed(false);
+                    if (down[0] && !longPress[0]) {
+                        long started = SystemClock.elapsedRealtime();
+                        commitPunctuation(fullWidth);
+                        recordBopomofoKeyOutcome("，", SystemClock.elapsedRealtime() - started);
+                    }
+                    down[0] = false;
+                    return true;
+                case MotionEvent.ACTION_CANCEL:
+                    v.removeCallbacks(longPressTask[0]);
+                    v.setPressed(false);
+                    down[0] = false;
+                    return true;
+                default:
+                    return true;
+            }
         });
     }
 
@@ -698,6 +743,14 @@ public class SimonIMEService extends InputMethodService {
     }
 
     private void commitPunctuation(String text) {
+        if (currentKeyboardMode == KeyboardMode.BOPOMOFO && zhuyinInput != null) {
+            ZhuyinInputController.State state = zhuyinInput.flushForPunctuation();
+            applyZhuyinState(state);
+            if (state.commitText != null && !state.commitText.isEmpty()) {
+                InputConnection pending = getCurrentInputConnection();
+                if (pending != null) commitTextProgrammatically(pending, state.commitText);
+            }
+        }
         InputConnection ic = getCurrentInputConnection();
         if (ic != null) commitTextProgrammatically(ic, text);
         else commitTextSafely(text);
@@ -3161,14 +3214,43 @@ public class SimonIMEService extends InputMethodService {
 
     // ==================== Keyboard Switching ====================
 
-    private void recordBopomofoTouch(View v,String key,MotionEvent e){recordKeyTouch(v,key,e,"bopomofo");}
+    private void recordBopomofoTouch(View v,String key,MotionEvent e) {
+        recordTouchLearning(v,key,e,"bopomofo");
+        captureBopomofoKeyTouch(v, key, e);
+    }
+    private void captureBopomofoKeyTouch(View v, String key, MotionEvent e) {
+        try {
+            int[] p = new int[2]; v.getLocationOnScreen(p);
+            float cx = p[0] + v.getWidth() / 2f, cy = p[1] + v.getHeight() / 2f;
+            pendingBopomofoKeyTouch = new BopomofoKeyTouch(key, e.getRawX() - cx, e.getRawY() - cy, cx, cy);
+        } catch (Exception ignored) {}
+    }
     private void recordKeyTouch(View v,String key,MotionEvent e,String page){
+        recordTouchLearning(v,key,e,page);
+        try{int[] p=new int[2];v.getLocationOnScreen(p);float cx=p[0]+v.getWidth()/2f,cy=p[1]+v.getHeight()/2f;
+            float dx=e.getRawX()-cx,dy=e.getRawY()-cy;
+            if(imeTelemetry!=null)imeTelemetry.key(page,key,dx,dy,cx,cy,protectedInputField);
+        }catch(Exception ignored){}
+    }
+    private void recordTouchLearning(View v,String key,MotionEvent e,String page){
         try{int[] p=new int[2];v.getLocationOnScreen(p);float cx=p[0]+v.getWidth()/2f,cy=p[1]+v.getHeight()/2f;
             float dx=e.getRawX()-cx,dy=e.getRawY()-cy;EditorInfo info=getCurrentInputEditorInfo();
             if(touchLearning!=null&&!protectedInputField)
                 touchLearning.touch(System.currentTimeMillis(),page,key,dx,dy,cx,cy,info==null?"":info.packageName,touchSessionId);
-            if(imeTelemetry!=null)imeTelemetry.key(page,key,dx,dy,cx,cy,protectedInputField);
         }catch(Exception ignored){}
+    }
+    private void recordBopomofoKeyOutcome(String key, long keyToCandidateMs) {
+        if (imeTelemetry == null) return;
+        BopomofoKeyTouch touch = pendingBopomofoKeyTouch;
+        pendingBopomofoKeyTouch = null;
+        if (touch != null && key.equals(touch.key)) {
+            imeTelemetry.bopomofoKey(key, touch.x, touch.y, touch.centerX, touch.centerY,
+                    keyToCandidateMs, protectedInputField);
+        } else {
+            // Programmatic input has no physical touch centre.  Preserve it as a distinct
+            // outcome event so it can never replace a real touch-learning key event.
+            imeTelemetry.keyOutcome("bopomofo", key, keyToCandidateMs, protectedInputField);
+        }
     }
 
     private static boolean isProtectedInputField(EditorInfo i){if(i==null)return true;int flags=i.imeOptions&EditorInfo.IME_FLAG_NO_PERSONALIZED_LEARNING;int cls=i.inputType&android.text.InputType.TYPE_MASK_CLASS,var=i.inputType&android.text.InputType.TYPE_MASK_VARIATION;boolean password=(cls==android.text.InputType.TYPE_CLASS_TEXT&&(var==android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD||var==android.text.InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD||var==android.text.InputType.TYPE_TEXT_VARIATION_WEB_PASSWORD))||(cls==android.text.InputType.TYPE_CLASS_NUMBER&&var==android.text.InputType.TYPE_NUMBER_VARIATION_PASSWORD);return flags!=0||password;}
@@ -3244,7 +3326,9 @@ public class SimonIMEService extends InputMethodService {
             Object tag = child.getTag();
             if (tag != null && tag.toString().startsWith("key:")) {
                 String key = tag.toString().substring(4);
-                if (key.equals("backspace")) {
+                if (key.equals("comma")) {
+                    setupPunctuationKey(child, "，", ",");
+                } else if (key.equals("backspace")) {
                     setupBackspaceTouch(child);
                 } else {
                     if(traditionalBopomofo)child.setOnTouchListener((v,e)->{if(e.getAction()==MotionEvent.ACTION_UP)recordBopomofoTouch(v,key,e);return false;});
@@ -3303,7 +3387,9 @@ public class SimonIMEService extends InputMethodService {
                 break;
             default:
                 if (currentKeyboardMode == KeyboardMode.BOPOMOFO && isBopomofoSymbol(key)) {
+                    long started = SystemClock.elapsedRealtime();
                     applyZhuyinState(zhuyinInput.press(key));
+                    recordBopomofoKeyOutcome(key, SystemClock.elapsedRealtime() - started);
                     break;
                 }
                 // Regular character — apply shift for letters only
