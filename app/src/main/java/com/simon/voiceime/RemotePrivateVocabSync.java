@@ -7,6 +7,7 @@ import java.io.File;
 import java.io.FileOutputStream;
 import java.nio.charset.StandardCharsets;
 import java.util.HashSet;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.TimeUnit;
 import okhttp3.Call;
 import okhttp3.Callback;
@@ -20,8 +21,10 @@ import org.json.JSONObject;
 final class RemotePrivateVocabSync {
     private static final String TAG = "RemotePrivateVocab";
     private static final int MAX_ENTRIES = 2000, MAX_BYTES = 512 * 1024;
+    private static final AtomicInteger generation = new AtomicInteger();
     private RemotePrivateVocabSync() {}
     static void refreshOnce(Context context, ZhuyinWordIndex index) {
+        final int requestGeneration = generation.get();
         Context app = context.getApplicationContext();
         SharedPreferences prefs = app.getSharedPreferences("simon_ime_prefs", Context.MODE_PRIVATE);
         if (!prefs.getBoolean("auto_vocab_enabled", true) || prefs.getBoolean("private_vocab_refresh_started", false)) return;
@@ -34,6 +37,7 @@ final class RemotePrivateVocabSync {
                     @Override public void onFailure(Call call, java.io.IOException error) { Log.w(TAG, "private refresh unavailable"); }
                     @Override public void onResponse(Call call, Response response) {
                         try {
+                            if (requestGeneration != generation.get()) return;
                             if (!response.isSuccessful() || response.body() == null) return;
                             String body = response.body().string();
                             if (body.getBytes(StandardCharsets.UTF_8).length > MAX_BYTES) return;
@@ -49,16 +53,19 @@ final class RemotePrivateVocabSync {
                                 if (out.length() + line.getBytes(StandardCharsets.UTF_8).length > MAX_BYTES) return;
                                 out.append(line);
                             }
+                            if (requestGeneration != generation.get()) return;
                             File target = new File(app.getFilesDir(), "zhuyin_remote_private.tsv");
                             File temp = new File(app.getFilesDir(), "zhuyin_remote_private.tsv.tmp");
                             try (FileOutputStream stream = new FileOutputStream(temp)) { stream.write(out.toString().getBytes(StandardCharsets.UTF_8)); }
-                            if (!temp.renameTo(target)) { temp.delete(); return; }
+                            if (requestGeneration != generation.get() || !temp.renameTo(target)) { temp.delete(); return; }
                             index.reloadRemote();
                         } catch (Exception ignored) { Log.w(TAG, "private refresh rejected"); }
                         finally { response.close(); }
                     }
                 });
     }
+    /** Invalidates any in-flight response before it can write private vocabulary. */
+    static void cancelForProtectedField() { generation.incrementAndGet(); }
     private static String keyFor(String reading) {
         String symbols = "ㄅㄆㄇㄈㄉㄊㄋㄌㄍㄎㄏㄐㄑㄒㄓㄔㄕㄖㄗㄘㄙㄧㄨㄩㄚㄛㄜㄝㄞㄟㄠㄡㄢㄣㄤㄥㄦ";
         StringBuilder key = new StringBuilder();

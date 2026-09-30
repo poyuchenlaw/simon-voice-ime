@@ -47,9 +47,13 @@ final class ZhuyinInputController {
     private final Engine engine;
     private final ZhuyinWordIndex abbreviationIndex;
     private final StringBuilder abbreviationKeys = new StringBuilder();
+    // The engine may reject a syntactically bad stream.  Keep the user's glyphs
+    // independently so an engine failure can never turn physical keycodes into text.
+    private final StringBuilder rawZhuyinKeys = new StringBuilder();
     private List<ZhuyinWordIndex.Entry> abbreviationEntries = Collections.emptyList();
     private List<MixedChoice> mixedChoices = Collections.emptyList();
     private List<String> associationCandidates = Collections.emptyList();
+    private boolean learningEnabled = true;
     ZhuyinInputController(Engine engine) { this.engine = engine == null ? DisabledEngine.INSTANCE : engine; this.abbreviationIndex = null; }
     ZhuyinInputController(Engine engine, ZhuyinWordIndex index) {
         this.engine = engine == null ? DisabledEngine.INSTANCE : engine;
@@ -61,12 +65,27 @@ final class ZhuyinInputController {
     }
 
     State press(String key) {
+        if (isZhuyin(key)) rawZhuyinKeys.append(key);
         if ("backspace".equals(key) && abbreviationKeys.length() > 0) {
             engine.backspace();
             abbreviationKeys.setLength(abbreviationKeys.length() - 1);
+            if (rawZhuyinKeys.length() > 0) rawZhuyinKeys.setLength(rawZhuyinKeys.length() - 1);
             abbreviationEntries = abbreviationKeys.length() >= 2 ? abbreviationIndex.lookup(abbreviationKeys.toString()) : Collections.emptyList();
             if (abbreviationKeys.length() == 0) { mixedChoices=Collections.emptyList(); return snapshot(true, true); }
             return mixedSnapshot(true);
+        }
+        if ("backspace".equals(key) && rawZhuyinKeys.length() > 0) {
+            engine.backspace();
+            rawZhuyinKeys.setLength(rawZhuyinKeys.length() - 1);
+            return snapshot(true, true);
+        }
+        if (("space".equals(key) || "enter".equals(key)) && rawZhuyinKeys.length() > 0
+                && (engine.candidates() == null || engine.candidates().isEmpty())) {
+            String glyphs = rawZhuyinKeys.toString();
+            rawZhuyinKeys.setLength(0); abbreviationKeys.setLength(0);
+            abbreviationEntries = Collections.emptyList(); mixedChoices = Collections.emptyList();
+            engine.clear();
+            return new State("", Collections.emptyList(), glyphs, true, 0, "no_parse", Collections.emptyList());
         }
         if (isZhuyin(key) && abbreviationIndex != null
                 && (abbreviationKeys.length() > 0 || engine.composingText().isEmpty())) {
@@ -89,8 +108,8 @@ final class ZhuyinInputController {
         }
         if (abbreviationKeys.length() > 0) { abbreviationKeys.setLength(0); abbreviationEntries=Collections.emptyList(); mixedChoices=Collections.emptyList(); }
         associationCandidates = Collections.emptyList();
-        if ("space".equals(key)) engine.space();
-        else if ("enter".equals(key)) engine.enter();
+        if ("space".equals(key)) { engine.space(); rawZhuyinKeys.setLength(0); }
+        else if ("enter".equals(key)) { engine.enter(); rawZhuyinKeys.setLength(0); }
         else if ("backspace".equals(key)) engine.backspace();
         else if (isZhuyin(key)) engine.key(key);
         else return snapshot(false, false);
@@ -101,20 +120,19 @@ final class ZhuyinInputController {
         if (!mixedChoices.isEmpty()) {
             if(index<0||index>=mixedChoices.size())return mixedSnapshot(false);
             MixedChoice selected=mixedChoices.get(index);mixedChoices=Collections.emptyList();
-            if(selected.entry!=null){engine.learnPhrase(selected.entry.word,selected.entry.pronunciation);abbreviationIndex.rememberPersonal(selected.entry);engine.clear();abbreviationKeys.setLength(0);abbreviationEntries=Collections.emptyList();return new State("",Collections.emptyList(),selected.entry.word,true,0,"abbreviation",Collections.emptyList());}
-            engine.choose(selected.engineIndex);abbreviationKeys.setLength(0);abbreviationEntries=Collections.emptyList();return snapshot(true,true);
+            if(selected.entry!=null){if(learningEnabled){engine.learnPhrase(selected.entry.word,selected.entry.pronunciation);abbreviationIndex.rememberPersonal(selected.entry);}engine.clear();abbreviationKeys.setLength(0);rawZhuyinKeys.setLength(0);abbreviationEntries=Collections.emptyList();return new State("",Collections.emptyList(),selected.entry.word,true,0,"abbreviation",Collections.emptyList());}
+            engine.choose(selected.engineIndex);abbreviationKeys.setLength(0);rawZhuyinKeys.setLength(0);abbreviationEntries=Collections.emptyList();return snapshot(true,true);
         }
         if (abbreviationKeys.length() >= 1) {
             if (index < 0 || index >= abbreviationEntries.size()) return abbreviationSnapshot();
             ZhuyinWordIndex.Entry selected = abbreviationEntries.get(index);
-            engine.learnPhrase(selected.word, selected.pronunciation);
-            abbreviationIndex.rememberPersonal(selected);
-            abbreviationKeys.setLength(0); abbreviationEntries = Collections.emptyList();
+            if (learningEnabled) { engine.learnPhrase(selected.word, selected.pronunciation); abbreviationIndex.rememberPersonal(selected); }
+            abbreviationKeys.setLength(0); rawZhuyinKeys.setLength(0); abbreviationEntries = Collections.emptyList();
             return new State("", Collections.emptyList(), selected.word, true, 0, "abbreviation", Collections.emptyList());
         }
         List<String> candidates = engine.candidates();
         if (index < 0 || index >= candidates.size()) return snapshot(false, false);
-        engine.choose(index);
+        engine.choose(index); rawZhuyinKeys.setLength(0);
         return snapshot(true, true);
     }
     String candidateOrigin(int index){
@@ -125,7 +143,7 @@ final class ZhuyinInputController {
     State moveCursorLeft() { mixedChoices=Collections.emptyList(); engine.moveCursor("left"); return snapshot(true, true); }
     State moveCursorRight() { mixedChoices=Collections.emptyList(); engine.moveCursor("right"); return snapshot(true, true); }
 
-    State clear() { abbreviationKeys.setLength(0); abbreviationEntries = Collections.emptyList(); mixedChoices=Collections.emptyList(); associationCandidates = Collections.emptyList(); engine.clear(); return snapshot(true, true); }
+    State clear() { abbreviationKeys.setLength(0); rawZhuyinKeys.setLength(0); abbreviationEntries = Collections.emptyList(); mixedChoices=Collections.emptyList(); associationCandidates = Collections.emptyList(); engine.clear(); return snapshot(true, true); }
     State flushForPunctuation() {
         if (engine.composingText() == null || engine.composingText().isEmpty()) return snapshot(true, true);
         abbreviationKeys.setLength(0); abbreviationEntries = Collections.emptyList(); mixedChoices = Collections.emptyList(); associationCandidates = Collections.emptyList();
@@ -143,6 +161,7 @@ final class ZhuyinInputController {
         associationCandidates = Collections.emptyList();
         return new State("", Collections.emptyList(), value, true, 0, "association", Collections.emptyList());
     }
+    void setLearningEnabled(boolean enabled) { learningEnabled = enabled; }
     void close() {
         if (engine instanceof AutoCloseable) {
             try { ((AutoCloseable) engine).close(); } catch (Exception ignored) { }
@@ -154,6 +173,10 @@ final class ZhuyinInputController {
         if (composing == null) composing = "";
         List<String> candidates = engine.candidates();
         if (candidates == null) candidates = Collections.emptyList();
+        if (rawZhuyinKeys.length() > 0 && candidates.isEmpty()) {
+            return new State(rawZhuyinKeys.toString(), Collections.emptyList(), "", accepted,
+                    rawZhuyinKeys.codePointCount(0, rawZhuyinKeys.length()), "no_parse", Collections.emptyList());
+        }
         return new State(composing, Collections.unmodifiableList(new ArrayList<>(candidates)),
                 drainCommit ? engine.takeCommit() : "", accepted, engine.cursorPosition());
     }
@@ -174,7 +197,13 @@ final class ZhuyinInputController {
     private State mixedSnapshot(boolean accepted) {
         List<MixedChoice> all=new ArrayList<>();
         int input=abbreviationKeys.codePointCount(0,abbreviationKeys.length());
-        boolean mergeNative=hasConvertedText(engine.composingText());
+        // Preserve both derivations.  An abbreviated entry must never hide an
+        // engine candidate merely because its preedit is still Zhuyin glyphs;
+        // the mixed ranking lets the complete-syllable parse occupy the first
+        // visible row while leaving every 6.41 abbreviation derivation intact.
+        boolean mergeNative=hasConvertedText(engine.composingText())
+                || (engine instanceof RimeZhuyinEngine
+                && engine.candidates()!=null&&!engine.candidates().isEmpty());
         for(ZhuyinWordIndex.Entry e:abbreviationEntries)all.add(new MixedChoice(e.word,e,-1,e.personal,e.frequency,e.word.codePointCount(0,e.word.length())==input));
         List<String> nativeCandidates=mergeNative?engine.candidates():Collections.emptyList();if(nativeCandidates!=null)for(int i=0;i<nativeCandidates.size();i++){
             String word=nativeCandidates.get(i);all.add(new MixedChoice(word,null,i,false,1_000_000L-i,word.codePointCount(0,word.length())==input));

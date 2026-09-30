@@ -371,7 +371,6 @@ public class SimonIMEService extends InputMethodService {
         catch (Exception error) { Log.e(TAG, "Initial-symbol dictionary unavailable", error); }
         zhuyinAssociationHistory = new ZhuyinAssociationHistory(new java.io.File(getFilesDir(), "zhuyin_associations.tsv"));
         zhuyinInput = new ZhuyinInputController(createZhuyinEngine(), zhuyinWordIndex);
-        if (zhuyinWordIndex != null) RemotePrivateVocabSync.refreshOnce(this, zhuyinWordIndex);
         touchLearning = new TouchLearningStore(this);
 
         // 背景初始化本機 STT
@@ -410,6 +409,9 @@ public class SimonIMEService extends InputMethodService {
     public void onStartInput(EditorInfo attribute, boolean restarting) {
         super.onStartInput(attribute, restarting);
         protectedInputField = isProtectedInputField(attribute);
+        if (zhuyinInput != null) zhuyinInput.setLearningEnabled(!protectedInputField);
+        if (protectedInputField) RemotePrivateVocabSync.cancelForProtectedField();
+        else if (zhuyinWordIndex != null) RemotePrivateVocabSync.refreshOnce(this, zhuyinWordIndex);
         if (!restarting) touchSessionId = java.util.UUID.randomUUID().toString();
         // v6.20: only treat a genuinely new field (not an internal restart) as a field switch.
         // On a real switch, bump the generation guard and disarm any pending AI material so it
@@ -3392,6 +3394,10 @@ public class SimonIMEService extends InputMethodService {
                     recordBopomofoKeyOutcome(key, SystemClock.elapsedRealtime() - started);
                     break;
                 }
+                // A Zhuyin-page event is always consumed.  The controller owns
+                // failure rendering; falling through would commit the physical
+                // QWERTY keysym into the application.
+                if (currentKeyboardMode == KeyboardMode.BOPOMOFO) return;
                 // Regular character — apply shift for letters only
                 String ch = key;
                 if (shiftActive && key.length() == 1 && Character.isLetter(key.charAt(0))) {

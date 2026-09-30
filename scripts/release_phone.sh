@@ -46,20 +46,54 @@ if [[ ! -x "$COMPAT_APKSIGNER" ]]; then
   chmod +x "$COMPAT_APKSIGNER"
 fi
 
+github_release_meta() {
+  # A base APK may be already present locally.  Ask GitHub only for the
+  # authoritative asset digest first; never start a large asset download until
+  # that local copy has been ruled out.
+  local tag="$1" attempt=1
+  while (( attempt <= 3 )); do
+    if gh api "repos/poyuchenlaw/simon-voice-ime/releases/tags/v$tag" \
+      --jq '[.assets[] | select(.name | startswith("simon-voice-ime-phone-") and endswith(".apk"))][0] | [.name,.digest] | @tsv'; then
+      return 0
+    fi
+    (( attempt++ ))
+    sleep 1
+  done
+  echo "could not fetch GitHub release metadata for v$tag" >&2
+  return 1
+}
+
+find_verified_local_base() {
+  local version="$1" digest="$2" candidate actual
+  # release_* is the normal local staging location; dist/simon-* is retained
+  # for older release workflows.  Both must match GitHub's release digest.
+  for candidate in \
+    "$ROOT/dist/release_$version/simon-voice-ime-phone-$version.apk" \
+    "$ROOT/dist/simon-voice-ime-v$version-phone.apk"; do
+    [[ -s "$candidate" ]] || continue
+    actual="sha256:$(sha256sum "$candidate" | cut -d' ' -f1)"
+    if [[ "$actual" == "$digest" ]]; then
+      printf '%s\n' "$candidate"
+      return 0
+    fi
+  done
+  return 1
+}
+
 mapfile -t PREVIOUS_TAGS < <(gh release list --repo poyuchenlaw/simon-voice-ime --limit 30 --json tagName --jq '.[].tagName' \
   | sed -n 's/^v//p' | awk -v current="$VERSION" '$0 != current' | sort -Vr | head -2)
 LATEST_TAG="${PREVIOUS_TAGS[0]:-}"
 if [[ -n "$LATEST_TAG" ]]; then
   LATEST_DIR="$WORK/v$LATEST_TAG"
   mkdir -p "$LATEST_DIR"
-  LATEST_META="$(gh api "repos/poyuchenlaw/simon-voice-ime/releases/tags/v$LATEST_TAG" --jq '[.assets[] | select(.name | startswith("simon-voice-ime-phone-") and endswith(".apk"))][0] | [.name,.digest] | @tsv')"
+  LATEST_META="$(github_release_meta "$LATEST_TAG")"
   LATEST_ASSET="${LATEST_META%%$'\t'*}"
   LATEST_DIGEST="${LATEST_META#*$'\t'}"
-  LATEST_LOCAL="$ROOT/dist/simon-voice-ime-v$LATEST_TAG-phone.apk"
+  LATEST_LOCAL="$(find_verified_local_base "$LATEST_TAG" "$LATEST_DIGEST" || true)"
   if [[ -z "$LATEST_ASSET" || "$LATEST_ASSET" == null ]]; then
     echo "latest release v$LATEST_TAG has no phone APK" >&2; exit 2
   fi
-  if [[ -f "$LATEST_LOCAL" && "$LATEST_DIGEST" == "sha256:$(sha256sum "$LATEST_LOCAL" | cut -d' ' -f1)" ]]; then
+  if [[ -n "$LATEST_LOCAL" ]]; then
     cp "$LATEST_LOCAL" "$LATEST_DIR/$LATEST_ASSET"
   else
     gh release download "v$LATEST_TAG" --repo poyuchenlaw/simon-voice-ime --pattern "$LATEST_ASSET" --dir "$LATEST_DIR" --clobber
@@ -169,38 +203,16 @@ PATCH_RECORDS=()
 for old_version in "${PREVIOUS_TAGS[@]}"; do
   OLD_DIR="$WORK/v$old_version"
   mkdir -p "$OLD_DIR"
-  OLD_ASSETS="$(gh api "repos/poyuchenlaw/simon-voice-ime/releases/tags/v$old_version" --jq '[.assets[].name] | .[]')"
-  if ! printf '%s\n' "$OLD_ASSETS" | rg -qx 'update-manifest\.json'; then
-    continue
-  fi
-  gh release download "v$old_version" --repo poyuchenlaw/simon-voice-ime --pattern update-manifest.json --dir "$OLD_DIR" --clobber >/dev/null
-  if [[ "$old_version" == "$LATEST_TAG" ]]; then
-    OLD_APK="$OLD_DIR/$LATEST_ASSET"
+  OLD_RELEASE_META="$(github_release_meta "$old_version")"
+  OLD_ASSET="${OLD_RELEASE_META%%$'\t'*}"
+  OLD_DIGEST="${OLD_RELEASE_META#*$'\t'}"
+  [[ -n "$OLD_ASSET" && "$OLD_ASSET" != null ]] || { echo "release v$old_version has no phone APK" >&2; exit 2; }
+  OLD_APK="$OLD_DIR/$OLD_ASSET"
+  OLD_LOCAL="$(find_verified_local_base "$old_version" "$OLD_DIGEST" || true)"
+  if [[ -n "$OLD_LOCAL" ]]; then
+    cp "$OLD_LOCAL" "$OLD_APK"
   else
-    OLD_META="$(printf '%s\n' "$OLD_ASSETS" | rg '^simon-voice-ime-phone-.*\.apk$' | head -1)"
-    [[ -n "$OLD_META" && "$OLD_META" != null ]] || continue
-    OLD_APK="$OLD_DIR/$OLD_META"
-    OLD_LOCAL="$ROOT/dist/simon-voice-ime-v$old_version-phone.apk"
-    if [[ -s "$OLD_LOCAL" ]] && python3 - "$OLD_DIR/update-manifest.json" "$OLD_LOCAL" <<'PY'
-import hashlib, json, sys
-m=json.load(open(sys.argv[1])); h=hashlib.sha256(open(sys.argv[2],'rb').read()).hexdigest()
-sys.exit(0 if m.get('normalized') is True and m.get('sha256') == h else 1)
-PY
-    then
-      cp "$OLD_LOCAL" "$OLD_APK"
-    else
-      gh release download "v$old_version" --repo poyuchenlaw/simon-voice-ime --pattern "$OLD_META" --dir "$OLD_DIR" --clobber
-    fi
-  fi
-  OLD_MANIFEST="$OLD_DIR/update-manifest.json"
-  if ! python3 - "$OLD_MANIFEST" "$OLD_APK" <<'PY'
-import hashlib, json, sys
-m=json.load(open(sys.argv[1]))
-h=hashlib.sha256(open(sys.argv[2],'rb').read()).hexdigest()
-sys.exit(0 if m.get('normalized') is True and m.get('sha256') == h else 1)
-PY
-  then
-    continue
+    gh release download "v$old_version" --repo poyuchenlaw/simon-voice-ime --pattern "$OLD_ASSET" --dir "$OLD_DIR" --clobber
   fi
   OLD_CODE="$("$AAPT" dump badging "$OLD_APK" | sed -n "s/.*versionCode='\([0-9][0-9]*\)'.*/\1/p" | head -1)"
   OLD_SHA="$(sha256sum "$OLD_APK" | cut -d' ' -f1)"
