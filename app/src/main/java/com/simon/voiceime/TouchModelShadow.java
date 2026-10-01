@@ -19,11 +19,13 @@ final class TouchModelShadow {
     private final List<Sample> trace = new ArrayList<>();
     private final Map<Long,Confirmation> waiting = new LinkedHashMap<>();
     private long sequence;
+    private List<TouchModel.Alternative> lastPosterior=Collections.emptyList();
+    List<TouchModel.Alternative> posterior(){return lastPosterior;}
     TouchModelShadow(TouchModel model){this.model=model;}
     List<TouchModel.Alternative> press(String screen,String physicalKey,double x,double y) {
         // Validate the label independently of the prediction.
         model.parameters(screen,physicalKey);
-        List<TouchModel.Alternative> posterior=model.predict(screen,x,y);
+        List<TouchModel.Alternative> posterior=model.predict(screen,x,y);lastPosterior=posterior;
         if(trace.size()>=512) invalidate();
         trace.add(new Sample(screen,physicalKey,x,y));
         List<TouchModel.Alternative> alternatives=new ArrayList<>();

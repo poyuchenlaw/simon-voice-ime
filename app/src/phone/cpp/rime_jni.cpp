@@ -124,7 +124,10 @@ extern "C" JNIEXPORT jlong JNICALL Java_com_simon_voiceime_RimeZhuyinNative_nati
     RimeSessionId id=api->create_session();
     if(!id){if(--g_users==0)api->finalize();return 0;}
     if(!api->select_schema(id,"bopomofo_express")){api->destroy_session(id);if(--g_users==0)api->finalize();return 0;}
-    return (jlong)(intptr_t)new Session{api,id,{}, {}};
+    auto* result=new Session{api,id,{}, {}};
+    result->regroup.prism=std::make_unique<rime::Prism>(rime::path(sh+"/build/bopomofo_express.prism.bin"));
+    if(!result->regroup.prism->Load())result->regroup.prism.reset();
+    return (jlong)(intptr_t)result;
 }
 // Reload the installed table only at an idle boundary; in-flight selections keep their menu.
 extern "C" JNIEXPORT jboolean JNICALL Java_com_simon_voiceime_RimeZhuyinNative_nativeRefreshVocabulary(JNIEnv*,jclass,jlong h) {
@@ -147,10 +150,11 @@ extern "C" JNIEXPORT void JNICALL Java_com_simon_voiceime_RimeZhuyinNative_nativ
 }
 extern "C" JNIEXPORT void JNICALL Java_com_simon_voiceime_RimeZhuyinNative_nativeProcessKey(JNIEnv*,jclass,jlong h,jint key) {
     Session* s=state(h); if(!s) return;
-    s->regroup.options.clear();s->regroup.boundary=-1;s->regroup.focus_start=s->regroup.focus_end=-1;
+    s->regroup.unparsed_mode=false;s->regroup.options.clear();s->regroup.boundary=-1;s->regroup.focus_start=s->regroup.focus_end=-1;
     if (!s->unparsed.empty()) {
         if (key == 0xff08) {
             if (s->unparsed_caret > 0) s->unparsed.erase(--s->unparsed_caret, 1);
+            for(auto it=s->regroup.touches.lower_bound(s->unparsed_caret);it!=s->regroup.touches.end();)it=s->regroup.touches.erase(it);
         }
         else if (key == 0xff0d || key == 0x20) {
             s->pending += glyph_text(s->unparsed); s->unparsed.clear();
@@ -163,6 +167,9 @@ extern "C" JNIEXPORT void JNICALL Java_com_simon_voiceime_RimeZhuyinNative_nativ
     std::string before = input ? input : "";
     size_t last_syllable = trailing_syllable_keys(preedit(s));
     s->api->process_key(s->id,key,0);
+    const char* after_raw=s->api->get_input(s->id);std::string after=after_raw?after_raw:"";
+    size_t same=0;while(same<before.size()&&same<after.size()&&before[same]==after[same])++same;
+    for(auto it=s->regroup.touches.lower_bound(same);it!=s->regroup.touches.end();)it=s->regroup.touches.erase(it);
     if (key < 128 && key != 0x20 && has_unparsed_preedit_keys(preedit(s, true))) {
         input = s->api->get_input(s->id);
         std::string raw = input ? input : "";
@@ -177,10 +184,28 @@ extern "C" JNIEXPORT void JNICALL Java_com_simon_voiceime_RimeZhuyinNative_nativ
         s->api->clear_composition(s->id);
         s->unparsed = raw.substr(boundary);
         s->unparsed_caret = s->unparsed.size();
+        std::map<size_t,RepairTouch> shifted;for(const auto& touch:s->regroup.touches)if(touch.first>=boundary)shifted[touch.first-boundary]=touch.second;
+        s->regroup.touches=std::move(shifted);
     }
 }
+extern "C" JNIEXPORT void JNICALL Java_com_simon_voiceime_RimeZhuyinNative_nativeRecordTouch(JNIEnv* env,jclass,jlong h,jintArray keys,jdoubleArray probabilities,jbooleanArray adjacent) {
+    auto* s=state(h);if(!s||!keys||!probabilities||!adjacent)return;
+    auto* ctx=context(s->id);if(!ctx||(ctx->input().empty()&&s->unparsed.empty()))return;
+    int n=env->GetArrayLength(keys);if(n!=env->GetArrayLength(probabilities)||n!=env->GetArrayLength(adjacent))return;
+    std::vector<jint> k(n);std::vector<jdouble> p(n);std::vector<jboolean> a(n);
+    env->GetIntArrayRegion(keys,0,n,k.data());env->GetDoubleArrayRegion(probabilities,0,n,p.data());env->GetBooleanArrayRegion(adjacent,0,n,a.data());
+    size_t position=s->unparsed.empty()?ctx->input().size()-1:s->unparsed.size()-1;RepairTouch sample;sample.literal=s->unparsed.empty()?ctx->input().back():s->unparsed.back();
+    for(int i=0;i<n;i++){if(k[i]<0||k[i]>127||!std::isfinite(p[i])||p[i]<0||p[i]>1)continue;sample.probability[k[i]]=p[i];if(a[i])sample.neighbours.insert(k[i]);}
+    s->regroup.touches[position]=std::move(sample);s->regroup.cache.clear();
+}
+extern "C" JNIEXPORT jobjectArray JNICALL Java_com_simon_voiceime_RimeZhuyinNative_nativeRegroupReadings(JNIEnv* env,jclass,jlong h) {
+    auto* s=state(h);jclass cls=env->FindClass("[B");int n=s?s->regroup.options.size():0;
+    auto result=env->NewObjectArray(n,cls,nullptr);
+    for(int i=0;i<n;i++)env->SetObjectArrayElement(result,i,bytes(env,std::to_string(s->regroup.stops[s->regroup.options[i].start])+":"+std::to_string(s->regroup.stops[s->regroup.options[i].end])+":"+s->regroup.options[i].repaired_code));
+    return result;
+}
 extern "C" JNIEXPORT void JNICALL Java_com_simon_voiceime_RimeZhuyinNative_nativeSelect(JNIEnv*,jclass,jlong h,jint index){Session*s=state(h);if(s&&index>=0)s->api->select_candidate(s->id,(size_t)index);}
-extern "C" JNIEXPORT void JNICALL Java_com_simon_voiceime_RimeZhuyinNative_nativeClear(JNIEnv*,jclass,jlong h){Session*s=state(h);if(s){s->api->clear_composition(s->id);s->unparsed.clear();s->pending.clear();s->regroup.input.clear();s->regroup.stops.clear();s->regroup.cache.clear();s->regroup.glyph_preedit.clear();s->regroup.options.clear();s->regroup.boundary=-1;s->regroup.focus_start=s->regroup.focus_end=-1;drain_commit(s);}}
+extern "C" JNIEXPORT void JNICALL Java_com_simon_voiceime_RimeZhuyinNative_nativeClear(JNIEnv*,jclass,jlong h){Session*s=state(h);if(s){s->api->clear_composition(s->id);s->unparsed.clear();s->pending.clear();s->regroup.input.clear();s->regroup.stops.clear();s->regroup.touches.clear();s->regroup.unparsed_mode=false;s->regroup.cache.clear();s->regroup.glyph_preedit.clear();s->regroup.options.clear();s->regroup.boundary=-1;s->regroup.focus_start=s->regroup.focus_end=-1;drain_commit(s);}}
 extern "C" JNIEXPORT jint JNICALL Java_com_simon_voiceime_RimeZhuyinNative_nativeCursor(JNIEnv*,jclass,jlong h){Session*s=state(h);return s ? static_cast<jint>(s->unparsed.empty() ? s->api->get_caret_pos(s->id) : s->unparsed_caret) : 0;}
 extern "C" JNIEXPORT void JNICALL Java_com_simon_voiceime_RimeZhuyinNative_nativeMoveCursor(JNIEnv*,jclass,jlong h,jboolean right){Session*s=state(h);if(!s)return;
     if(!s->unparsed.empty()) {
@@ -263,10 +288,21 @@ extern "C" JNIEXPORT jbyteArray JNICALL Java_com_simon_voiceime_RimeZhuyinNative
 }
 
 extern "C" JNIEXPORT jboolean JNICALL Java_com_simon_voiceime_RimeZhuyinNative_nativeRegroup(JNIEnv*,jclass,jlong h,jint boundary) {
-    Session* s=state(h);return s&&s->unparsed.empty()&&regroup(s->regroup,s->api,s->id,boundary);
+    Session* s=state(h);if(!s)return false;
+    auto& r=s->regroup;
+    if(s->unparsed.empty())return regroup(r,s->api,s->id,boundary);
+    if(boundary<0||static_cast<size_t>(boundary)>s->unparsed.size())return false;
+    r.unparsed_mode=true;r.input=s->unparsed;r.original=r.preedit=glyph_text(s->unparsed);r.stops.clear();r.literal_pieces.clear();
+    for(size_t i=0;i<=s->unparsed.size();++i)r.stops.push_back(i);
+    s->unparsed_caret=boundary;return regroup(r,s->api,s->id,boundary,true);
 }
 extern "C" JNIEXPORT jboolean JNICALL Java_com_simon_voiceime_RimeZhuyinNative_nativeChooseRegroup(JNIEnv*,jclass,jlong h,jint index) {
-    Session* s=state(h);return s&&select_regroup(s->regroup,s->id,index);
+    Session* s=state(h);if(!s)return false;
+    bool unparsed=s->regroup.unparsed_mode;
+    if(unparsed&&index>=0&&static_cast<size_t>(index)<s->regroup.options.size()&&s->regroup.options[index].literal){s->regroup.boundary=-1;s->regroup.options.clear();s->regroup.unparsed_mode=false;return true;}
+    bool accepted=select_regroup(s->regroup,s->id,index);
+    if(accepted&&unparsed){s->unparsed.clear();s->unparsed_caret=0;s->regroup.unparsed_mode=false;}
+    return accepted;
 }
 extern "C" JNIEXPORT jobjectArray JNICALL Java_com_simon_voiceime_RimeZhuyinNative_nativeRegroupLabels(JNIEnv* env,jclass,jlong h) {
     Session* s=state(h);jclass b=env->FindClass("[B");int n=s?s->regroup.options.size():0;
@@ -279,7 +315,9 @@ extern "C" JNIEXPORT jbyteArray JNICALL Java_com_simon_voiceime_RimeZhuyinNative
     return bytes(env,preedit(s,true)+glyph_text(s->unparsed));
 }
 extern "C" JNIEXPORT jbyteArray JNICALL Java_com_simon_voiceime_RimeZhuyinNative_nativeReading(JNIEnv* env,jclass,jlong h) {
-    Session* s=state(h);if(!s)return bytes(env,"");const char* raw=s->api->get_input(s->id);
+    Session* s=state(h);if(!s)return bytes(env,"");
+    if(!s->unparsed.empty())return bytes(env,glyph_text(s->unparsed.substr(0,s->unparsed_caret))+(s->regroup.boundary>=0?"│":"")+glyph_text(s->unparsed.substr(s->unparsed_caret)));
+    const char* raw=s->api->get_input(s->id);
     std::string input=raw?raw:"",out;size_t cursor=s->api->get_caret_pos(s->id);
     for(size_t i=0;i<=input.size();++i){if(s->regroup.boundary>=0&&i==cursor)out+="│";if(i<input.size())out+=glyph_text(input.substr(i,1));}
     return bytes(env,out+glyph_text(s->unparsed));
@@ -301,7 +339,8 @@ extern "C" JNIEXPORT jintArray JNICALL Java_com_simon_voiceime_RimeZhuyinNative_
 extern "C" JNIEXPORT jobjectArray JNICALL Java_com_simon_voiceime_RimeZhuyinNative_nativeReadingSyllables(JNIEnv* env,jclass,jlong h) {
     Session* s=state(h);jclass b=env->FindClass("[B");std::vector<std::string> parts;
     if(s){auto& r=s->regroup;
-        if((r.boundary>=0||r.focus_start>=0||capture(r,s->id))&&!r.stops.empty())
+        if(!s->unparsed.empty()){for(char key:s->unparsed)parts.push_back(glyph_text(std::string(1,key)));}
+        else if((r.boundary>=0||r.focus_start>=0||capture(r,s->id))&&!r.stops.empty())
             for(size_t i=1;i<r.stops.size();++i)parts.push_back(glyph_text(r.input.substr(r.stops[i-1],r.stops[i]-r.stops[i-1])));
     }
     auto out=env->NewObjectArray(parts.size(),b,nullptr);

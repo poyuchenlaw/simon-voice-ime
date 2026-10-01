@@ -41,6 +41,8 @@ final class RimeZhuyinNative implements AutoCloseable {
     void space() { key(KEYSYM_SPACE); }
     void choose(int index) { commitReading = decode(nativeVocabularyReading(handle)); nativeSelect(handle, index); }
     boolean focusCharacter(int index) { return nativeFocusCharacter(handle,index); }
+    void recordTouch(int[] keys,double[] probabilities,boolean[] adjacent){nativeRecordTouch(handle,keys,probabilities,adjacent);}
+    String[] regroupReadings(){byte[][] values=nativeRegroupReadings(handle);String[] out=new String[values.length];for(int i=0;i<values.length;i++)out[i]=decode(values[i]);return out;}
     boolean regroup(int boundary) { return nativeRegroup(handle,boundary); }
     boolean chooseRegroup(int index) { return nativeChooseRegroup(handle,index); }
     String[] regroupLabels() { byte[][] values=nativeRegroupLabels(handle);String[] out=new String[values.length];for(int i=0;i<values.length;i++)out[i]=decode(values[i]);return out; }
@@ -81,6 +83,8 @@ final class RimeZhuyinNative implements AutoCloseable {
     private static String decode(byte[] value) {
         return value == null ? "" : new String(value, StandardCharsets.UTF_8);
     }
+    private static native void nativeRecordTouch(long h,int[] keys,double[] probabilities,boolean[] adjacent);
+    private static native byte[][] nativeRegroupReadings(long h);
     private static native boolean nativeFocusCharacter(long h,int index);
     private static native boolean nativeRegroup(long h,int boundary);
     private static native boolean nativeChooseRegroup(long h,int index);

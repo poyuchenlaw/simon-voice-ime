@@ -31,6 +31,8 @@ final class RimeZhuyinEngine implements ZhuyinInputController.Engine, AutoClosea
         nativeEngine = new RimeZhuyinNative(shared.getAbsolutePath(), user.getAbsolutePath());
     }
 
+    @Override public void recordTouch(int[] keys,double[] probabilities,boolean[] adjacent){nativeEngine.recordTouch(keys,probabilities,adjacent);}
+    String[] regroupReadings(){return nativeEngine.regroupReadings();}
     @Override public boolean regroup(int boundary) { return nativeEngine.regroup(boundary); }
     @Override public boolean chooseRegroup(int index) { return nativeEngine.chooseRegroup(index); }
     @Override public List<String> regroupLabels() { return java.util.Arrays.asList(nativeEngine.regroupLabels()); }

@@ -112,7 +112,7 @@ fi
 
 scripts/build_apkdiffpatch_android.sh > "$EVIDENCE/native-build.log" 2>&1
 make -C "$ROOT/third_party/ApkDiffPatch" -j2 > "$EVIDENCE/host-tools-build.log" 2>&1
-GRADLE_USER_HOME="$GRADLE_HOME" "$ROOT/gradlew" --project-cache-dir "$PROJECT_CACHE_DIR" --offline --no-daemon \
+GRADLE_USER_HOME="$GRADLE_HOME" "$ROOT/gradlew" --project-cache-dir "$PROJECT_CACHE_DIR" --offline --no-daemon --offline \
   -PphoneVersionName="$VERSION" -PphoneVersionCode="$PHONE_VERSION_CODE" \
   testPhoneReleaseUnitTest assemblePhoneRelease > "$EVIDENCE/gradle-build.log" 2>&1
 BUILT="$ROOT/app/build/outputs/apk/phone/release/app-phone-release.apk"

@@ -2,4 +2,5 @@
 <resources>
     <string name="app_name">Simon Voice IME</string>
     <string name="ime_name">Simon 語音輸入</string>
+    <string name="zhuyin_complete_typing_hint">請看著鍵盤，每個字打完整注音和聲調（一聲按空白鍵）；打錯時把游標拉過去選。</string>
 </resources>

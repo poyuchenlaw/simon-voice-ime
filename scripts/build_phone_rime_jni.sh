@@ -9,7 +9,7 @@ mkdir -p "$OUT"
 test -f "$PREFIX/lib/librime.so"
 "$TOOL" --target=aarch64-linux-android26 -std=c++17 -O2 -fPIC -shared -static-libstdc++ \
   -I"$PREFIX/include" -I"$ROOT/app/src/phone/cpp/rime_headers" "$ROOT/app/src/phone/cpp/rime_jni.cpp" \
-  -L"$PREFIX/lib" -Wl,-z,defs -Wl,-soname,librime_jni.so -lrime \
+  -L"$PREFIX/lib" -Wl,-z,defs -Wl,-soname,librime_jni.so -lrime -ldl \
   -o "$OUT/librime_jni.so"
 cp "$PREFIX/lib/librime.so" "$OUT/librime.so"
 "$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-readelf" -h "$OUT/librime_jni.so" | grep -E 'Class:|Machine:'

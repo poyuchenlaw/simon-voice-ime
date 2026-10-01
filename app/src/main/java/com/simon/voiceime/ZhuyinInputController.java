@@ -7,6 +7,7 @@ import java.util.List;
 /** Thin UI-facing adapter. The conversion, candidate ranking and learning remain in libchewing. */
 final class ZhuyinInputController {
     interface Engine {
+        default void recordTouch(int[] keys,double[] probabilities,boolean[] adjacent) { }
         default boolean regroup(int boundary) { return false; }
         default boolean chooseRegroup(int index) { return false; }
         default List<String> regroupLabels() { return Collections.emptyList(); }
@@ -98,6 +99,7 @@ final class ZhuyinInputController {
     private final List<int[]> fixedWordRanges=new ArrayList<>();
     private boolean previewFocused;
     private int previewBoundary=-1;
+    void recordTouch(int[] keys,double[] probabilities,boolean[] adjacent){if(retype!=null)retype.recordTouch(keys,probabilities,adjacent);else engine.recordTouch(keys,probabilities,adjacent);}
     int previewBoundary() { return previewBoundary; }
     String previewText() { return retype!=null||!fixedComposition.isEmpty()?state().composingText:engine.previewText(); }
     String phoneticText() {

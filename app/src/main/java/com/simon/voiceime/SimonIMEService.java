@@ -837,6 +837,7 @@ public class SimonIMEService extends InputMethodService {
         });
 
         applyZhuyinState(zhuyinInput.state());
+        updateCompleteTypingHint(false);
         updateModeUI();
         updateArmedIndicator();
         return rootView;
@@ -3629,6 +3630,7 @@ public class SimonIMEService extends InputMethodService {
     // ==================== Keyboard Switching ====================
 
     private void recordBopomofoTouch(View v,String key,MotionEvent e) {
+        updateCompleteTypingHint(true);
         recordTouchLearning(v,key,e,"bopomofo");
         captureBopomofoKeyTouch(v, key, e);
         if (!protectedInputField && touchShadow != null && pendingBopomofoKeyTouch != null
@@ -3677,7 +3679,7 @@ public class SimonIMEService extends InputMethodService {
         if(!protectedInputField&&touchShadow!=null&&"bopomofo".equals(page)&&candidates!=null&&chosen>=0&&chosen<candidates.size()){
             // Accepting top-1 confirms the physical stream. A corrective choice
             // lacks key-level ground truth; discard those labels rather than guess.
-            if(chosen==0)touchShadow.confirmChoice();else touchShadow.discardTrace();
+            if(chosen==0&&zhuyinInput.previewBoundary()<0)touchShadow.confirmChoice();else touchShadow.discardTrace();
         }
         if(imeTelemetry==null)return;
         try{JSONArray shown=new JSONArray();if(candidates!=null)for(int i=0;i<Math.min(10,candidates.size());i++)shown.put(candidates.get(i));
@@ -3696,6 +3698,7 @@ public class SimonIMEService extends InputMethodService {
             clearBopomofoBuffer();
         }
         currentKeyboardMode = mode;
+        updateCompleteTypingHint(false);
         voiceKeyboard.setVisibility(mode == KeyboardMode.VOICE ? View.VISIBLE : View.GONE);
         bopomofoKeyboard.setVisibility(mode == KeyboardMode.BOPOMOFO ? View.VISIBLE : View.GONE);
         englishKeyboard.setVisibility(mode == KeyboardMode.ENGLISH ? View.VISIBLE : View.GONE);
@@ -3731,8 +3734,21 @@ public class SimonIMEService extends InputMethodService {
         }
     }
 
+    private void updateCompleteTypingHint(boolean firstKey){
+        if(bopomofoKeyboard==null)return;
+        View hint=bopomofoKeyboard.findViewById(R.id.boCompleteTypingHint);if(hint==null)return;
+        android.content.SharedPreferences prefs=getSharedPreferences("zhuyin_hint",MODE_PRIVATE);
+        if(firstKey&&hint.getVisibility()==View.VISIBLE)prefs.edit().putBoolean("v650_complete_seen",true).apply();
+        hint.setVisibility(!firstKey&&currentKeyboardMode==KeyboardMode.BOPOMOFO&&!prefs.getBoolean("v650_complete_seen",false)?View.VISIBLE:View.GONE);
+    }
+    private ZhuyinInputController.State pressZhuyinWithTouch(String key){
+        ZhuyinInputController.State state=zhuyinInput.press(key);
+        if(!protectedInputField&&touchShadow!=null&&pendingBopomofoKeyTouch!=null&&key.equals(pendingBopomofoKeyTouch.key)&&pendingBopomofoKeyTouch.shadow!=null)touchShadow.recordRepairTouch(zhuyinInput);
+        return state;
+    }
     private void onTypingKeyPressed(String key) {
         if (imeTelemetry != null) imeTelemetry.noteInput();
+        if(currentKeyboardMode==KeyboardMode.BOPOMOFO)updateCompleteTypingHint(true);
         InputConnection ic = getCurrentInputConnection();
         if (ic == null) return;
 
@@ -3747,7 +3763,7 @@ public class SimonIMEService extends InputMethodService {
                     clearEnWordBuffer();
                 } else if (currentKeyboardMode == KeyboardMode.BOPOMOFO) {
                     long started = SystemClock.elapsedRealtime();
-                    applyZhuyinState(zhuyinInput.press("space"));
+                    applyZhuyinState(pressZhuyinWithTouch("space"));
                     recordBopomofoKeyOutcome("space", SystemClock.elapsedRealtime() - started);
                     return;
                 }
@@ -3781,7 +3797,7 @@ public class SimonIMEService extends InputMethodService {
             default:
                 if (currentKeyboardMode == KeyboardMode.BOPOMOFO && isBopomofoSymbol(key)) {
                     long started = SystemClock.elapsedRealtime();
-                    applyZhuyinState(zhuyinInput.press(key));
+                    applyZhuyinState(pressZhuyinWithTouch(key));
                     recordBopomofoKeyOutcome(key, SystemClock.elapsedRealtime() - started);
                     break;
                 }
@@ -4125,7 +4141,7 @@ public class SimonIMEService extends InputMethodService {
         if (boCursorLeft != null) boCursorLeft.setVisibility(state.composingText.isEmpty() ? View.INVISIBLE : View.VISIBLE);
         if (boCursorRight != null) boCursorRight.setVisibility(state.composingText.isEmpty() ? View.INVISIBLE : View.VISIBLE);
         renderZhuyinCandidates(state.candidates, state.candidateKind);
-        if (zhuyinInput.isSecondPassActive()) showZhuyinReplaceBubble();
+        if (zhuyinInput.isSecondPassActive()||zhuyinInput.previewBoundary()>=0) showZhuyinReplaceBubble();
         else dismissZhuyinReplaceBubble();
     }
 
@@ -4181,7 +4197,7 @@ public class SimonIMEService extends InputMethodService {
                     int utf=layout.getOffsetForHorizontal(0,x);int cp=shown.codePointCount(0,Math.min(utf,shown.length()));
                     if(cp>0&&layout.getPrimaryHorizontal(utf)>x)cp--;
                     if(touchShadow!=null)touchShadow.invalidate();
-                    applyZhuyinState(zhuyinInput.moveCursorToPreviewCharacter(Math.min(count-1,cp)));
+                    applyZhuyinState(zhuyinInput.moveCursorToPreviewBoundary(Math.min(count,cp+1)));
                 }else if(boundary&&nearest!=lastBoundary){
                     lastBoundary=nearest;if(touchShadow!=null)touchShadow.invalidate();
                     applyZhuyinState(zhuyinInput.moveCursorToPreviewBoundary(nearest));
@@ -4219,7 +4235,9 @@ public class SimonIMEService extends InputMethodService {
         ZhuyinInputController.State state=zhuyinInput.state();
         LinearLayout box = new LinearLayout(this);box.setOrientation(LinearLayout.HORIZONTAL);
         HorizontalScrollView scroll=new HorizontalScrollView(this);scroll.addView(box);
-        for (int i=0;i<Math.min(10,state.candidates.size());i++) {
+        LinearLayout bubble=new LinearLayout(this);bubble.setOrientation(LinearLayout.HORIZONTAL);
+        bubble.addView(scroll,new LinearLayout.LayoutParams(0,dp(48),1));
+        for (int i=0;i<Math.min(5,state.candidates.size());i++) {
             final int index=i;
             TextView item = new TextView(this);item.setText(state.candidates.get(i));
             item.setTextColor(Color.WHITE);item.setTextSize(16);item.setGravity(Gravity.CENTER);item.setPadding(dp(12),0,dp(12),0);
@@ -4231,18 +4249,21 @@ public class SimonIMEService extends InputMethodService {
             });
         }
         TextView cancel=new TextView(this);cancel.setText("取消");cancel.setTextColor(Color.WHITE);cancel.setPadding(dp(12),0,dp(12),0);cancel.setGravity(Gravity.CENTER);
-        box.addView(cancel,new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT,dp(48)));
+        bubble.addView(cancel,new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT,dp(48)));
         cancel.setOnClickListener(v->{dismissZhuyinReplaceBubble();if(touchShadow!=null)touchShadow.invalidate();applyZhuyinState(zhuyinInput.cancelSecondPass());});
-        PopupWindow popup=new PopupWindow(scroll,Math.min(dp(300),getResources().getDisplayMetrics().widthPixels),dp(48),false);
+        PopupWindow popup=new PopupWindow(bubble,Math.min(dp(300),getResources().getDisplayMetrics().widthPixels),dp(48),false);
         zhuyinReplacePopup=popup;popup.setOutsideTouchable(false);popup.setBackgroundDrawable(new ColorDrawable(0xff303746));
         popup.setOnDismissListener(()->{zhuyinReplacePopup=null;if(zhuyinInput.isSecondPassActive()){if(touchShadow!=null)touchShadow.invalidate();applyZhuyinState(zhuyinInput.cancelSecondPass());}});
         boStreamPreview.post(()->{
             if(zhuyinReplacePopup!=popup||!boStreamPreview.isAttachedToWindow())return;
-            int cp=Math.min(state.targetStart,state.composingText.codePointCount(0,state.composingText.length()));
-            int offset=state.composingText.offsetByCodePoints(0,cp);
+            String visible=boStreamPreview.getText().toString();
+            int cp=Math.min(zhuyinInput.previewBoundary()>=0?zhuyinInput.previewBoundary():state.targetStart,visible.codePointCount(0,visible.length()));
+            int offset=visible.offsetByCodePoints(0,cp);
             android.text.Layout layout=boStreamPreview.getLayout();
             int x=layout==null?0:(int)layout.getPrimaryHorizontal(offset)+boStreamPreview.getPaddingLeft();
-            popup.showAsDropDown(boStreamPreview,x,-boStreamPreview.getHeight()-dp(48));
+            int[] location=new int[2];boStreamPreview.getLocationOnScreen(location);
+            int left=Math.max(0,Math.min(getResources().getDisplayMetrics().widthPixels-popup.getWidth(),location[0]+x-boStreamPreview.getScrollX()));
+            popup.showAsDropDown(boStreamPreview,left-location[0],-boStreamPreview.getHeight()-dp(48));
         });
     }
 

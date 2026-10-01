@@ -23,6 +23,20 @@ final class TouchShadowLearning {
     private TouchModelShadow current;
     private String currentId;
     private long resetEpoch;
+    private List<TouchModel.Key> lastGeometry=Collections.emptyList();
+    private String lastPhysical;
+    void recordRepairTouch(ZhuyinInputController controller){
+        if(current==null||lastPhysical==null)return;
+        List<TouchModel.Alternative> posterior=current.posterior();
+        int[] keys=new int[posterior.size()];double[] probs=new double[keys.length];boolean[] adjacent=new boolean[keys.length];
+        TouchModel.Key pressed=null;for(TouchModel.Key k:lastGeometry)if(k.key.equals(lastPhysical)){pressed=k;break;}
+        if(pressed==null)return;
+        for(int i=0;i<keys.length;i++){
+            TouchModel.Alternative alt=posterior.get(i);keys[i]="space".equals(alt.key)?32:"1qaz2wsxedcrfv5tgbyhnujm8ik,9ol.0p;/-6347".charAt("ㄅㄆㄇㄈㄉㄊㄋㄌㄍㄎㄏㄐㄑㄒㄓㄔㄕㄖㄗㄘㄙㄧㄨㄩㄚㄛㄜㄝㄞㄟㄠㄡㄢㄣㄤㄥㄦˊˇˋ˙".indexOf(alt.key));probs[i]=alt.probability;
+            for(TouchModel.Key k:lastGeometry)if(k.key.equals(alt.key))adjacent[i]=Math.hypot(k.x-pressed.x,k.y-pressed.y)<=1.25*Math.max(Math.max(k.pitchX,k.pitchY),Math.max(pressed.pitchX,pressed.pitchY));
+        }
+        controller.recordTouch(keys,probs,adjacent);
+    }
     TouchShadowLearning(Context c,Handler h){prefs=c.getSharedPreferences(PREFS,Context.MODE_PRIVATE);handler=h;resetEpoch=prefs.getLong("reset_epoch",0);}
     static void resetDefaults(Context c){
         SharedPreferences p=c.getSharedPreferences(PREFS,Context.MODE_PRIVATE);
@@ -42,7 +56,7 @@ final class TouchShadowLearning {
     }
     JSONObject observe(View root,String physicalKey,MotionEvent e) {
         try {
-            checkReset();
+            lastPhysical=null;checkReset();
             List<View> views=new ArrayList<>();collect(root,views);if(views.isEmpty())return new JSONObject();
             int[] origin=new int[2];root.getLocationOnScreen(origin);
             String screen=root.getResources().getConfiguration().screenWidthDp+"x"+root.getResources().getConfiguration().screenHeightDp
@@ -63,6 +77,7 @@ final class TouchShadowLearning {
                     if(layouts.size()>4)layouts.remove(layouts.keySet().iterator().next());
                 }
             }
+            lastGeometry=keys;lastPhysical=physicalKey;
             List<TouchModel.Alternative> alternatives=current.press(screen,physicalKey,e.getRawX()-origin[0],e.getRawY()-origin[1]);
             return fields(alternatives,screen);
         }catch(Exception failure){Log.w("TouchShadow","observation skipped",failure);return new JSONObject();}
