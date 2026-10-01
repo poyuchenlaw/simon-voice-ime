@@ -3,6 +3,7 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 RIME="$ROOT/third_party/librime"
+bash "$ROOT/scripts/apply_librime_patches.sh"
 NDK="${ANDROID_NDK_HOME:-/home/simon/android-sdk/ndk/26.3.11579264}"
 TOOLCHAIN="$NDK/build/cmake/android.toolchain.cmake"
 BUILD="$ROOT/evidence/rime_spike/build/android"

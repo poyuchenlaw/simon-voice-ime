@@ -1,0 +1,47 @@
+--- a/src/rime/algo/syllabifier.cc
++++ b/src/rime/algo/syllabifier.cc
+@@ -7,6 +7,7 @@
+ //
+ #include <algorithm>
+ #include <queue>
++#include <cstring>
+ #include <boost/range/adaptor/reversed.hpp>
+ #include <rime/algo/syllabifier.h>
+ #include <rime/dict/corrector.h>
+@@ -249,6 +250,36 @@
+   DLOG(INFO) << "input length: " << graph->input_length;
+   DLOG(INFO) << "syllabified length: " << graph->interpreted_length;
+ 
++  // Prefer a complete Zhuyin syllable over splitting its initial into an
++  // abbreviation. Initial-only sequences have no normal toned edge here.
++  // Keep the competing edge; only lower its log credibility.
++  constexpr double kCompleteSyllablePenalty = 12.0;
++  for (auto& start : graph->edges) {
++    bool normal_toned = false;
++    for (const auto& end : start.second) {
++      if (end.first <= start.first || end.first > input.size() ||
++          !std::strchr(" 6347", input[end.first - 1]))
++        continue;
++      for (const auto& spelling : end.second) {
++        if (spelling.second.type == kNormalSpelling &&
++            !spelling.second.is_correction) {
++          normal_toned = true;
++          break;
++        }
++      }
++    }
++    if (!normal_toned || start.first >= input.size() ||
++        !std::strchr("1qaz2wsxedcrfv5tgbyhn", input[start.first]))
++      continue;
++    auto initial = start.second.find(start.first + 1);
++    if (initial == start.second.end())
++      continue;
++    for (auto& spelling : initial->second) {
++      if (spelling.second.type == kAbbreviation)
++        spelling.second.credibility -= kCompleteSyllablePenalty;
++    }
++  }
++
+   Transpose(graph);
+ 
+   return farthest;
