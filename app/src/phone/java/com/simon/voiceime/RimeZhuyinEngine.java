@@ -43,6 +43,7 @@ final class RimeZhuyinEngine implements ZhuyinInputController.Engine, AutoClosea
     String[] regroupReadings(){return nativeEngine.regroupReadings();}
     @Override public boolean regroup(int boundary) { return nativeEngine.regroup(boundary); }
     @Override public boolean chooseRegroup(int index) { return nativeEngine.chooseRegroup(index); }
+    @Override public List<String> optionKinds(){return java.util.Arrays.asList(nativeEngine.optionKinds());}
     @Override public List<String> regroupLabels() { return java.util.Arrays.asList(nativeEngine.regroupLabels()); }
     @Override public String previewText() { return nativeEngine.preview(); }
     @Override public int[] previewEditRange() { return nativeEngine.editRange(); }
@@ -54,6 +55,8 @@ final class RimeZhuyinEngine implements ZhuyinInputController.Engine, AutoClosea
         int key = ZhuyinKeyMap.physicalKey(symbol);
         if (key >= 0) nativeEngine.key(key);
     }
+    @Override public boolean keyCaret(int at){return nativeEngine.keyCaret(at);}
+    @Override public int keyPreviewCaret(){return nativeEngine.keyPreviewCaret();}
     @Override public void backspace() { nativeEngine.backspace(); }
     @Override public void space() { nativeEngine.space(); }
     @Override public void enter() { nativeEngine.enter(); }

@@ -40,6 +40,10 @@ final class RimeZhuyinNative implements AutoCloseable {
     boolean prepareSentence(String physicalKeys,String text){return nativePrepareSentence(handle,physicalKeys,text);}
     private static native byte[] nativeSentenceKeys(long h);
     private static native boolean nativePrepareSentence(long h,String keys,String text);
+    boolean keyCaret(int at){return nativeKeyCaret(handle,at);}
+    int keyPreviewCaret(){return nativeKeyPreviewCaret(handle);}
+    private static native boolean nativeKeyCaret(long h,int at);
+    private static native int nativeKeyPreviewCaret(long h);
     void backspace() { key(KEYSYM_BACKSPACE); }
     void enter() { key(KEYSYM_RETURN); }
     void space() { key(KEYSYM_SPACE); }
@@ -49,6 +53,8 @@ final class RimeZhuyinNative implements AutoCloseable {
     String[] regroupReadings(){byte[][] values=nativeRegroupReadings(handle);String[] out=new String[values.length];for(int i=0;i<values.length;i++)out[i]=decode(values[i]);return out;}
     boolean regroup(int boundary) { return nativeRegroup(handle,boundary); }
     boolean chooseRegroup(int index) { return nativeChooseRegroup(handle,index); }
+    String[] optionKinds(){return nativeOptionKinds(handle);}
+    private static native String[] nativeOptionKinds(long h);
     String[] regroupLabels() { byte[][] values=nativeRegroupLabels(handle);String[] out=new String[values.length];for(int i=0;i<values.length;i++)out[i]=decode(values[i]);return out; }
     String preview() { return decode(nativePreview(handle)); }
     int[] editRange() { return nativeEditRange(handle); }

@@ -55,6 +55,7 @@ struct RegroupOption {
     double touch_score=0;
     bool neighbour=false;
     bool literal=false;
+    bool homophone=false;
     int grouping_start=-1,grouping_end=-1;
     rime::an<rime::Candidate> repaired_grouping;
 
@@ -111,12 +112,27 @@ static bool capture(RegroupState& r,RimeSessionId id) {
     if(r.stops.empty()) {
         r.stops.push_back(0);
         for(auto& seg:ctx->composition()) {
+            if(seg.start==seg.end)continue;
             auto cand=seg.GetSelectedCandidate();
             auto phrase=cand?native_phrase(cand):nullptr;
-            
-            if(!phrase){r.stops.clear();return false;}
-            auto spans=phrase->spans();size_t at=spans.start();
-            while(at<spans.end()) {size_t next=spans.NextStop(at);if(next<=at)break;r.stops.push_back(next);at=next;}
+            if(!cand){r.stops.clear();return false;}
+            std::vector<size_t> ends;
+            if(phrase){auto spans=phrase->spans();size_t at=spans.start();
+                while(at<spans.end()){size_t next=spans.NextStop(at);if(next<=at)break;ends.push_back(next);at=next;}
+            }
+            if(ends.size()!=static_cast<size_t>(cp_count(cand->text()))||ends.empty()||ends.back()!=cand->end()) {
+                // user_table phrases have no dictionary spans. Only recover
+                // boundaries explicitly present in the typed reading; ambiguous
+                // multi-syllable inputs stay with Rime's ordinary menu.
+                ends.clear();
+                if(cand->type()=="user_table"){
+                    for(size_t at=cand->start();at<cand->end();++at)
+                        if(std::string(" 6347").find(r.input[at])!=std::string::npos)ends.push_back(at+1);
+                    if(ends.empty()||ends.back()!=cand->end())ends.push_back(cand->end());
+                }
+                if(ends.size()!=static_cast<size_t>(cp_count(cand->text()))||ends.empty()) {r.stops.clear();return false;}
+            }
+            r.stops.insert(r.stops.end(),ends.begin(),ends.end());
         }
     }
     return r.stops.size()==static_cast<size_t>(cp_count(r.original)+1) && r.stops.back()==r.input.size();
@@ -363,9 +379,9 @@ static bool regroup(RegroupState& r,const RimeApi* api,RimeSessionId id,int boun
     r.cache[boundary]=r.options;
     }
     // Boundary edits address the decoded preview directly. Mapping every
-    // native caret back through the translator here re-decoded the sentence
-    // once per syllable; character-focus still uses its legacy preedit map.
-    r.boundary=boundary;if(!unparsed&&api->get_caret_pos(id)!=r.stops[boundary])api->set_caret_pos(id,r.stops[boundary]);return true;
+    // native caret back through the translator would re-decode untouched words.
+    // Both boundary and word focus retain the live composition until a choice.
+    r.boundary=boundary;return true;
 }
 static bool select_regroup(RegroupState& r,RimeSessionId id,int index) {
     auto* ctx=context(id);
@@ -390,11 +406,11 @@ static bool select_regroup(RegroupState& r,RimeSessionId id,int index) {
         auto phrase=native_phrase(candidate);if(!phrase)return;
         auto spans=phrase->spans();size_t at=spans.start();while(at<spans.end()){size_t stop=spans.NextStop(at);if(stop<=at)break;next.push_back(stop);at=stop;}
     };
-    if(option.literal)next=r.stops;
+    if(option.literal||option.homophone)next=r.stops;
     else if(option.pieces.empty())append_stops(option.candidate);else for(const auto& piece:option.pieces)append_stops(piece);
-    if(!option.literal)next.insert(next.end(),r.stops.begin()+option.end+1,r.stops.end());
+    if(!option.literal&&!option.homophone)next.insert(next.end(),r.stops.begin()+option.end+1,r.stops.end());
     r.stops=std::move(next);r.input=ctx->input();r.original=ctx->GetCommitText();r.cache.clear();r.touches.erase(option.changed_key);
-    r.options.clear();r.boundary=-1;return true;
+    r.options.clear();r.boundary=-1;r.focus_start=r.focus_end=-1;return true;
 }
 
 static bool focus_character(RegroupState& r,RimeSessionId id,int target) {
@@ -412,9 +428,38 @@ static bool focus_character(RegroupState& r,RimeSessionId id,int target) {
         if(found)break;
     }
     r.glyph_stops.clear();
-    for(size_t stop:r.stops){ctx->set_caret_pos(stop);auto p=ctx->GetPreedit();r.glyph_stops.push_back(cp_count(p.text.substr(0,p.caret_pos)));}
-    rime::Composition prefix;prefix.Reset(r.input);
+    // Focus is a view operation. Moving the live Rime caret through pinned
+    // spans would silently retranslate the untouched suffix.
+    for(size_t i=0;i<r.stops.size();++i)r.glyph_stops.push_back(static_cast<int>(i));
+    // Build the same-reading menu in its own session. The live sentence stays
+    // intact until a choice explicitly pins just this span.
+    if(!regroup(r,rime_get_api(),id,b))return false;
+    std::vector<RegroupOption> regrouped,repairs,homophones;
+    for(const auto& option:r.options) {
+        if(option.repaired_input.empty())regrouped.push_back(option);
+        else repairs.push_back(option);
+    }
+    auto* probe=context(r.probe);if(!probe)return false;
+    probe->Clear();probe->set_input(r.input.substr(0,r.stops[b]));
+    rime::Composition prefix;prefix.Reset(probe->input());
     pin_text(prefix,0,r.stops[a],cp_slice(r.original,0,a));
-    prefix.Forward();ctx->set_composition(std::move(prefix));ctx->set_caret_pos(r.stops[b]);
+    prefix.Forward();probe->set_composition(std::move(prefix));probe->set_caret_pos(r.stops[b]);
+    if(!probe->composition().empty())for(int i=0;i<200;++i) {
+        auto candidate=probe->composition().back().GetCandidateAt(i);if(!candidate)break;
+        auto phrase=native_phrase(candidate);
+        if(!phrase||candidate->start()!=r.stops[a]||candidate->end()!=r.stops[b]||cp_count(candidate->text())!=b-a)continue;
+        if(candidate->type()!="user_table") {
+            auto spans=phrase->spans();size_t at=spans.start();int slot=a;
+            bool same=at==r.stops[a];
+            while(same&&at<spans.end()){size_t end=spans.NextStop(at);if(end<=at||++slot>b||end!=r.stops[slot]){same=false;break;}at=end;}
+            if(!same||slot!=b||at!=r.stops[b])continue;
+        }
+        RegroupOption option{a,b,candidate->text(),candidate,phrase->weight()};option.homophone=true;
+        homophones.push_back(std::move(option));
+    }
+    r.options=std::move(homophones);
+    r.options.insert(r.options.end(),regrouped.begin(),regrouped.end());
+    r.options.insert(r.options.end(),repairs.begin(),repairs.end());
+    r.boundary=-1;
     r.focus_start=a;r.focus_end=b;return true;
 }

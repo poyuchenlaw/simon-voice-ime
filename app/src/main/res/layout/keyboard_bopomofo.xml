@@ -15,7 +15,7 @@
     </HorizontalScrollView>
 
     <HorizontalScrollView android:layout_width="match_parent" android:layout_height="26dp" android:scrollbars="none">
-        <TextView android:id="@+id/boPhoneticPreview" android:layout_width="wrap_content" android:layout_height="match_parent" android:gravity="center_vertical" android:paddingStart="12dp" android:paddingEnd="12dp" android:textSize="15sp" android:textColor="@color/key_text" android:singleLine="true"/>
+        <com.simon.voiceime.PreviewCursorView android:id="@+id/boPhoneticPreview" android:layout_width="wrap_content" android:layout_height="match_parent" android:gravity="center_vertical" android:paddingStart="12dp" android:paddingEnd="12dp" android:textSize="15sp" android:textColor="@color/key_text" android:singleLine="true"/>
     </HorizontalScrollView>
     <LinearLayout android:id="@+id/boCandidateBar" android:layout_width="match_parent" android:layout_height="38dp" android:orientation="horizontal" android:layout_marginBottom="2dp">
         <TextView android:id="@+id/boCursorLeft" android:layout_width="38dp" android:layout_height="match_parent" android:gravity="center" android:text="◀" android:textSize="15sp" android:textColor="@color/key_text" android:background="@color/key_bg" android:layout_marginEnd="2dp"/>
