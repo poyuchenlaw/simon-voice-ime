@@ -92,6 +92,16 @@ public class SettingsActivity extends Activity {
                     prefs.edit().putBoolean("auto_vocab_enabled", isChecked).apply());
         }
 
+        android.widget.Spinner sentenceMode=findViewById(R.id.aiSentenceMode);
+        if(sentenceMode!=null){
+            String[] modes={"off","shadow","suggestions"};String[] labels={"關閉","背景比對（預設）","顯示選項"};
+            sentenceMode.setAdapter(new android.widget.ArrayAdapter<>(this,android.R.layout.simple_spinner_dropdown_item,labels));
+            String saved=prefs.getString("ai_sentence_mode","shadow");int selected=1;for(int i=0;i<modes.length;i++)if(modes[i].equals(saved))selected=i;
+            sentenceMode.setSelection(selected);sentenceMode.setOnItemSelectedListener(new android.widget.AdapterView.OnItemSelectedListener(){
+                public void onNothingSelected(android.widget.AdapterView<?> parent){}
+                public void onItemSelected(android.widget.AdapterView<?> parent,android.view.View view,int position,long id){prefs.edit().putString("ai_sentence_mode",modes[position]).apply();}
+            });
+        }
         CheckBox checkImeAutoUpload = findViewById(R.id.checkImeAutoUpload);
         ImeTelemetry telemetry=ImeTelemetry.install(this);
         TextView uploadStatus=findViewById(R.id.tvImeUploadStatus);

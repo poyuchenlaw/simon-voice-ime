@@ -346,3 +346,61 @@ extern "C" JNIEXPORT jobjectArray JNICALL Java_com_simon_voiceime_RimeZhuyinNati
     auto out=env->NewObjectArray(parts.size(),b,nullptr);
     for(size_t i=0;i<parts.size();++i){auto v=bytes(env,parts[i]);env->SetObjectArrayElement(out,i,v);env->DeleteLocalRef(v);}return out;
 }
+
+// Isolated validation sessions only. No key processing, selection commits or learning.
+extern "C" JNIEXPORT jbyteArray JNICALL Java_com_simon_voiceime_RimeZhuyinNative_nativeSentenceKeys(JNIEnv* env,jclass,jlong h) {
+    auto* s=state(h);if(!s)return bytes(env,"");
+    const char* raw=s->api->get_input(s->id);
+    return bytes(env,glyph_text(std::string(raw?raw:"")+s->unparsed));
+}
+struct SentencePiece {size_t start,end;std::string text;rime::an<rime::Candidate> candidate;};
+static bool sentence_map(Session* s,const std::string& raw,const std::string& text,size_t start,size_t text_start,
+                         std::vector<SentencePiece>& pieces,std::set<std::pair<size_t,size_t>>& failed,
+                         InitClock::time_point deadline) {
+    if(start==raw.size())return text_start==text.size();
+    if(text_start>=text.size()||InitClock::now()>deadline||failed.count({start,text_start}))return false;
+    auto* ctx=context(s->id);if(!ctx)return false;
+    for(size_t end=raw.size();end>start;--end) {
+        if(InitClock::now()>deadline)return false;
+        ctx->Clear();ctx->set_input(raw.substr(0,end));
+        rime::Composition prefix;prefix.Reset(ctx->input());
+        for(const auto& p:pieces)pin(prefix,p.start,p.end,p.candidate);
+        prefix.Forward();ctx->set_composition(std::move(prefix));ctx->set_caret_pos(end);
+        if(ctx->composition().empty())continue;
+        std::vector<rime::an<rime::Candidate>> matches;
+        for(int i=0;i<200;i++) {
+            auto candidate=ctx->composition().back().GetCandidateAt(i);if(!candidate)break;
+            auto phrase=native_phrase(candidate);
+            if(!phrase||candidate->start()!=start||candidate->end()!=end)continue;
+            auto value=candidate->text();if(value.empty()||text.compare(text_start,value.size(),value)!=0)continue;
+            // Verify complete dictionary syllabification, not an unparsed glyph candidate.
+            // Installed user_table phrases have no dictionary syllable spans.
+            // Their native translator already matches the complete local table code;
+            // preserve exact source start/end and text matching for this path.
+            if(candidate->type()!="user_table") {
+                auto spans=phrase->spans();size_t pos=spans.start();int syllables=0;
+                while(pos<spans.end()){size_t next=spans.NextStop(pos);if(next<=pos)break;pos=next;++syllables;}
+                if(spans.start()!=start||pos!=end||syllables!=cp_count(value))continue;
+            }
+            matches.push_back(candidate);
+        }
+        for(const auto& candidate:matches){auto value=candidate->text();pieces.push_back({start,end,value,candidate});
+            if(sentence_map(s,raw,text,end,text_start+value.size(),pieces,failed,deadline))return true;
+            pieces.pop_back();}
+    }
+    failed.insert({start,text_start});return false;
+}
+extern "C" JNIEXPORT jboolean JNICALL Java_com_simon_voiceime_RimeZhuyinNative_nativePrepareSentence(JNIEnv* env,jclass,jlong h,jstring keys,jstring literal) {
+    auto* s=state(h);if(!s)return false;std::string raw=jstr(env,keys),text=jstr(env,literal);
+    if(raw.empty()||raw.size()>128||text.empty()||cp_count(text)>64)return false;
+    for(char c:raw)if(kPhysical.find(c)==std::string::npos)return false;
+    std::vector<SentencePiece> pieces;std::set<std::pair<size_t,size_t>> failed;
+    bool valid=sentence_map(s,raw,text,0,0,pieces,failed,InitClock::now()+std::chrono::milliseconds(35));
+    auto* ctx=context(s->id);if(!ctx)return false;ctx->Clear();
+    if(!valid)return false;
+    ctx->set_input(raw);rime::Composition mapped;mapped.Reset(ctx->input());
+    for(const auto& piece:pieces)pin(mapped,piece.start,piece.end,piece.candidate);
+    mapped.Forward();ctx->set_composition(std::move(mapped));ctx->set_caret_pos(raw.size());
+    s->regroup.input.clear();s->regroup.stops.clear();s->regroup.cache.clear();s->regroup.boundary=-1;
+    return ctx->GetCommitText()==text;
+}

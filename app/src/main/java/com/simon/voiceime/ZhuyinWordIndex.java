@@ -85,6 +85,12 @@ final class ZhuyinWordIndex {
         } catch (Exception ignored) { return ""; }
         finally { if (db != null) db.close(); }
     }
+    synchronized boolean isInstalledWord(String word){
+        for(Entry e:personalEntries.values())if(e.word.equals(word))return true;
+        for(Entry e:remoteEntries.values())if(e.word.equals(word))return true;
+        for(Entry e:entries)if(e.personal&&e.word.equals(word))return true;
+        return false;
+    }
     boolean hasPrefix(String key) {
         for (Entry e : personalEntries.values()) if (e.key.startsWith(key)) return true;
         for (Entry e : remoteEntries.values()) if (e.key.startsWith(key)) return true;

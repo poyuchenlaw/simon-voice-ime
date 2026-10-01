@@ -1,0 +1,1062 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:ime:sentence-candidates:v1",
+  "title": "IME sentence candidates v1 request/response contract",
+  "description": "Design-only normative contract. Validate root or a named $defs schema. Limits are Unicode scalar counts except separately enforced UTF-8 byte caps. Examples are illustrative 10/1 repair fixtures, not measured outputs. Semantic checks listed below are mandatory gateway checks outside JSON Schema.",
+  "oneOf": [
+    {
+      "$ref": "#/$defs/request"
+    },
+    {
+      "$ref": "#/$defs/response"
+    }
+  ],
+  "$defs": {
+    "symbol": {
+      "type": "string",
+      "enum": [
+        "ㄅ",
+        "ㄆ",
+        "ㄇ",
+        "ㄈ",
+        "ㄉ",
+        "ㄊ",
+        "ㄋ",
+        "ㄌ",
+        "ㄍ",
+        "ㄎ",
+        "ㄏ",
+        "ㄐ",
+        "ㄑ",
+        "ㄒ",
+        "ㄓ",
+        "ㄔ",
+        "ㄕ",
+        "ㄖ",
+        "ㄗ",
+        "ㄘ",
+        "ㄙ",
+        "ㄧ",
+        "ㄨ",
+        "ㄩ",
+        "ㄚ",
+        "ㄛ",
+        "ㄜ",
+        "ㄝ",
+        "ㄞ",
+        "ㄟ",
+        "ㄠ",
+        "ㄡ",
+        "ㄢ",
+        "ㄣ",
+        "ㄤ",
+        "ㄥ",
+        "ㄦ",
+        " ",
+        "ˊ",
+        "ˇ",
+        "ˋ",
+        "˙"
+      ],
+      "description": "One physical zhuyin/tone slot. U+0020 is first tone, not a formatting separator."
+    },
+    "generation": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991
+    },
+    "request_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64,
+      "pattern": "^[A-Za-z0-9_-]+$"
+    },
+    "candidate_id": {
+      "type": "string",
+      "enum": [
+        "c1",
+        "c2",
+        "c3"
+      ]
+    },
+    "probability": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1
+    },
+    "installed_span": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "start",
+        "end",
+        "kind"
+      ],
+      "properties": {
+        "start": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 31
+        },
+        "end": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 32
+        },
+        "kind": {
+          "const": "installed_word"
+        }
+      },
+      "description": "Half-open Unicode-scalar range in left_context.text. Gateway additionally checks start < end, in-range, sorted and nonoverlapping."
+    },
+    "left_context": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "text",
+        "installed_word_spans"
+      ],
+      "properties": {
+        "text": {
+          "type": "string",
+          "minLength": 0,
+          "maxLength": 32
+        },
+        "installed_word_spans": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/installed_span"
+          },
+          "minItems": 0,
+          "maxItems": 8
+        }
+      }
+    },
+    "touch_option": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "symbol",
+        "probability"
+      ],
+      "properties": {
+        "symbol": {
+          "$ref": "#/$defs/symbol"
+        },
+        "probability": {
+          "$ref": "#/$defs/probability"
+        }
+      }
+    },
+    "touch_position": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "key_slot",
+        "alternatives"
+      ],
+      "properties": {
+        "key_slot": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 127
+        },
+        "alternatives": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/touch_option"
+          },
+          "minItems": 2,
+          "maxItems": 2
+        }
+      },
+      "description": "Original-array slot; two distinct symbols, total probability <= 1. Remaining mass is unspecified."
+    },
+    "repair": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "operation",
+        "key_slot",
+        "source_symbol",
+        "target_symbol"
+      ],
+      "properties": {
+        "operation": {
+          "type": "string",
+          "enum": [
+            "replace",
+            "insert",
+            "delete"
+          ]
+        },
+        "key_slot": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 128
+        },
+        "source_symbol": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/symbol"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "target_symbol": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/symbol"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "oneOf": [
+        {
+          "properties": {
+            "operation": {
+              "const": "replace"
+            },
+            "key_slot": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 127
+            },
+            "source_symbol": {
+              "$ref": "#/$defs/symbol"
+            },
+            "target_symbol": {
+              "$ref": "#/$defs/symbol"
+            }
+          }
+        },
+        {
+          "properties": {
+            "operation": {
+              "const": "insert"
+            },
+            "source_symbol": {
+              "type": "null"
+            },
+            "target_symbol": {
+              "$ref": "#/$defs/symbol"
+            }
+          }
+        },
+        {
+          "properties": {
+            "operation": {
+              "const": "delete"
+            },
+            "key_slot": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 127
+            },
+            "source_symbol": {
+              "$ref": "#/$defs/symbol"
+            },
+            "target_symbol": {
+              "type": "null"
+            }
+          }
+        }
+      ],
+      "description": "Index addresses original request key_slots. Insert is before slot, n appends. Gateway checks actual n, source match, ascending distinct indices and repaired length."
+    },
+    "candidate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "text",
+        "repairs"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/candidate_id"
+        },
+        "text": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "repairs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/repair"
+          },
+          "minItems": 0,
+          "maxItems": 2
+        }
+      }
+    },
+    "keep": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "text",
+        "repairs"
+      ],
+      "properties": {
+        "id": {
+          "const": "keep"
+        },
+        "text": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "repairs": {
+          "type": "array",
+          "maxItems": 0
+        }
+      },
+      "description": "Gateway copies request.literal exactly; never supplied by model."
+    },
+    "server_times": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "server_receive_ms",
+        "gemini_done_ms",
+        "jev_start_ms",
+        "jev_done_ms",
+        "response_send_ms",
+        "clock_domain"
+      ],
+      "properties": {
+        "server_receive_ms": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "gemini_done_ms": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "jev_start_ms": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "jev_done_ms": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "response_send_ms": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "clock_domain": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 80
+        }
+      },
+      "description": "Monotonic milliseconds within one declared voice-server clock domain. Null means stage did not complete before response; eventual gateway completion belongs in correlated telemetry."
+    },
+    "decision": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "display",
+        "selected_id",
+        "jev_status",
+        "choice_confidence",
+        "meaning_probability",
+        "reason"
+      ],
+      "properties": {
+        "display": {
+          "type": "string",
+          "enum": [
+            "chip",
+            "bubble",
+            "none"
+          ]
+        },
+        "selected_id": {
+          "type": "string",
+          "enum": [
+            "keep",
+            "none",
+            "c1",
+            "c2",
+            "c3"
+          ]
+        },
+        "jev_status": {
+          "type": "string",
+          "enum": [
+            "ok",
+            "late",
+            "unavailable",
+            "not_called",
+            "rejected"
+          ]
+        },
+        "choice_confidence": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/probability"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "meaning_probability": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/probability"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "reason": {
+          "type": "string",
+          "enum": [
+            "ready",
+            "no_match",
+            "jev_late",
+            "jev_unavailable",
+            "jev_rejected",
+            "gemini_late",
+            "gemini_invalid",
+            "quota",
+            "frozen",
+            "egress"
+          ]
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "display": {
+                "const": "chip"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "selected_id": {
+                "$ref": "#/$defs/candidate_id"
+              },
+              "jev_status": {
+                "const": "ok"
+              },
+              "choice_confidence": {
+                "type": "number",
+                "minimum": 0.85,
+                "maximum": 1
+              },
+              "meaning_probability": {
+                "type": "number",
+                "minimum": 0.85,
+                "maximum": 1
+              },
+              "reason": {
+                "const": "ready"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "display": {
+                "const": "bubble"
+              },
+              "jev_status": {
+                "const": "ok"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "selected_id": {
+                "$ref": "#/$defs/candidate_id"
+              },
+              "choice_confidence": {
+                "type": "number",
+                "minimum": 0.6,
+                "exclusiveMaximum": 0.85
+              },
+              "meaning_probability": {
+                "type": "number",
+                "minimum": 0.85,
+                "maximum": 1
+              },
+              "reason": {
+                "const": "ready"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "display": {
+                "const": "bubble"
+              },
+              "jev_status": {
+                "not": {
+                  "const": "ok"
+                }
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "selected_id": {
+                "const": "none"
+              },
+              "jev_status": {
+                "enum": [
+                  "late",
+                  "unavailable"
+                ]
+              },
+              "choice_confidence": {
+                "type": "null"
+              },
+              "meaning_probability": {
+                "type": "null"
+              },
+              "reason": {
+                "enum": [
+                  "jev_late",
+                  "jev_unavailable"
+                ]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "display": {
+                "const": "none"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "selected_id": {
+                "enum": [
+                  "keep",
+                  "none"
+                ]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "jev_status": {
+                "const": "late"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "choice_confidence": {
+                "type": "null"
+              },
+              "meaning_probability": {
+                "type": "null"
+              },
+              "reason": {
+                "const": "jev_late"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "jev_status": {
+                "const": "unavailable"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "choice_confidence": {
+                "type": "null"
+              },
+              "meaning_probability": {
+                "type": "null"
+              },
+              "reason": {
+                "const": "jev_unavailable"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "jev_status": {
+                "enum": [
+                  "not_called",
+                  "rejected"
+                ]
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "display": {
+                "const": "none"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "jev_status": {
+                "const": "not_called"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "choice_confidence": {
+                "type": "null"
+              },
+              "meaning_probability": {
+                "type": "null"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "jev_status": {
+                "const": "rejected"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "reason": {
+                "const": "jev_rejected"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "request": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "schema_version",
+        "op",
+        "request_id",
+        "editor_generation",
+        "composition_generation",
+        "key_slots",
+        "literal",
+        "touch_alternatives",
+        "left_context"
+      ],
+      "properties": {
+        "kind": {
+          "const": "request"
+        },
+        "schema_version": {
+          "const": 1
+        },
+        "op": {
+          "const": "sentence_candidates"
+        },
+        "request_id": {
+          "$ref": "#/$defs/request_id"
+        },
+        "editor_generation": {
+          "$ref": "#/$defs/generation"
+        },
+        "composition_generation": {
+          "$ref": "#/$defs/generation"
+        },
+        "key_slots": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/symbol"
+          },
+          "minItems": 1,
+          "maxItems": 128
+        },
+        "literal": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "touch_alternatives": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/touch_position"
+          },
+          "minItems": 0,
+          "maxItems": 8
+        },
+        "left_context": {
+          "$ref": "#/$defs/left_context"
+        }
+      }
+    },
+    "provider_response": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "candidates"
+      ],
+      "properties": {
+        "candidates": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/candidate"
+          },
+          "minItems": 0,
+          "maxItems": 3
+        }
+      },
+      "description": "Only envelope generated by Gemini; excludes trusted identity, billing, keep, Jev scores, versions and timestamps."
+    },
+    "response": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "schema_version",
+        "request_id",
+        "editor_generation",
+        "composition_generation",
+        "mode",
+        "keep",
+        "candidates",
+        "decision",
+        "gemini_model",
+        "jev_model",
+        "policy_version",
+        "server_times"
+      ],
+      "properties": {
+        "kind": {
+          "const": "response"
+        },
+        "schema_version": {
+          "const": 1
+        },
+        "request_id": {
+          "$ref": "#/$defs/request_id"
+        },
+        "editor_generation": {
+          "$ref": "#/$defs/generation"
+        },
+        "composition_generation": {
+          "$ref": "#/$defs/generation"
+        },
+        "mode": {
+          "type": "string",
+          "enum": [
+            "shadow",
+            "suggestions"
+          ]
+        },
+        "keep": {
+          "$ref": "#/$defs/keep"
+        },
+        "candidates": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/candidate"
+          },
+          "minItems": 0,
+          "maxItems": 3
+        },
+        "decision": {
+          "$ref": "#/$defs/decision"
+        },
+        "gemini_model": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 80
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "jev_model": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 80
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "policy_version": {
+          "const": "sentence-r2-v1"
+        },
+        "server_times": {
+          "$ref": "#/$defs/server_times"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "decision": {
+                "properties": {
+                  "display": {
+                    "enum": [
+                      "chip",
+                      "bubble"
+                    ]
+                  }
+                }
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "candidates": {
+                "minItems": 1
+              },
+              "gemini_model": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 80
+              }
+            }
+          }
+        }
+      ],
+      "description": "Gateway validates candidates; voice server composes trusted Jev decision/timestamps using the same gateway-owned contract validator in-process, without a new RPC or provider call. Phone suppresses all UI in shadow, regardless of display hint."
+    }
+  },
+  "x-gateway-invariants": [
+    "Reject duplicate JSON keys, non-finite numbers and surrogate code points; ingress <= 6144 UTF-8 bytes, prompt <= 8192 bytes, provider/final response <= 4096 bytes, output plus thinking <= 512 tokens.",
+    "Request ID is unique for the authenticated admission and generations; idempotent duplicates never dispatch twice. Gateway policy owns mode, model and tariffs.",
+    "Touch positions are distinct and < len(key_slots); the two alternative symbols are distinct and probabilities sum <= 1.",
+    "Installed-word spans satisfy 0 <= start < end <= scalar length(text); sorted, nonoverlapping and whole committed installed words only; phone verifies provenance.",
+    "Repair indices are ascending and distinct in ORIGINAL array coordinates. Replace/delete index < n and source_symbol equals key_slots[index]; insert index <= n and source is null; replace source != target.",
+    "One original-array pass applies repairs, with insertion before slot and index n appending. Final key length is 1..128. Phone validates complete repaired reading and text using shipped Rime/local installed readings.",
+    "Candidate IDs and texts are distinct; each suggested text differs from keep.text; selected c1/c2/c3 must exist; keep.text equals request.literal; identity echoes match request.",
+    "Voice wraps trusted decision and server times and validates the final envelope with the same gateway-owned contract validator in-process, with no finalize RPC. Phone also validates schema and freshness before display/tap.",
+    "All present server times are ordered server_receive <= gemini_done <= jev_start <= jev_done <= response_send with omitted stages skipped, same clock_domain; late done remains null in immediate response.",
+    "Shadow mode always suppresses UI despite hypothetical display decision. Chip requires actual healthy Jev values; explicit Jev semantic rejection never takes outage fallback.",
+    "Protected or unknown editor state suppresses phone context read and network scheduling; no caller supplied context rewrite or dictionary."
+  ],
+  "examples": [
+    {
+      "kind": "request",
+      "schema_version": 1,
+      "op": "sentence_candidates",
+      "request_id": "case-tone-20261001",
+      "editor_generation": 1,
+      "composition_generation": 7,
+      "key_slots": [
+        "ㄉ",
+        "ㄨ",
+        "ㄛ",
+        "ˋ",
+        "ㄩ",
+        "ˊ"
+      ],
+      "literal": "舵餘",
+      "touch_alternatives": [
+        {
+          "key_slot": 3,
+          "alternatives": [
+            {
+              "symbol": "ˋ",
+              "probability": 0.55
+            },
+            {
+              "symbol": " ",
+              "probability": 0.4
+            }
+          ]
+        }
+      ],
+      "left_context": {
+        "text": "這是",
+        "installed_word_spans": []
+      }
+    },
+    {
+      "kind": "response",
+      "schema_version": 1,
+      "request_id": "case-tone-20261001",
+      "editor_generation": 1,
+      "composition_generation": 7,
+      "mode": "suggestions",
+      "keep": {
+        "id": "keep",
+        "text": "舵餘",
+        "repairs": []
+      },
+      "candidates": [
+        {
+          "id": "c1",
+          "text": "多餘",
+          "repairs": [
+            {
+              "operation": "replace",
+              "key_slot": 3,
+              "source_symbol": "ˋ",
+              "target_symbol": " "
+            }
+          ]
+        }
+      ],
+      "decision": {
+        "display": "bubble",
+        "selected_id": "none",
+        "jev_status": "late",
+        "choice_confidence": null,
+        "meaning_probability": null,
+        "reason": "jev_late"
+      },
+      "gemini_model": "fixture-gateway-pinned-model",
+      "jev_model": null,
+      "policy_version": "sentence-r2-v1",
+      "server_times": {
+        "server_receive_ms": 1000,
+        "gemini_done_ms": 1500,
+        "jev_start_ms": 1500,
+        "jev_done_ms": null,
+        "response_send_ms": 1765,
+        "clock_domain": "fixture-voice-boot-1"
+      }
+    },
+    {
+      "kind": "request",
+      "schema_version": 1,
+      "op": "sentence_candidates",
+      "request_id": "case-neighbour-20261001",
+      "editor_generation": 1,
+      "composition_generation": 7,
+      "key_slots": [
+        "ㄑ",
+        "ㄧ",
+        "ㄦ",
+        "ˊ"
+      ],
+      "literal": "妻兒",
+      "touch_alternatives": [
+        {
+          "key_slot": 2,
+          "alternatives": [
+            {
+              "symbol": "ㄦ",
+              "probability": 0.6
+            },
+            {
+              "symbol": "ㄢ",
+              "probability": 0.35
+            }
+          ]
+        }
+      ],
+      "left_context": {
+        "text": "接續之",
+        "installed_word_spans": []
+      }
+    },
+    {
+      "kind": "response",
+      "schema_version": 1,
+      "request_id": "case-neighbour-20261001",
+      "editor_generation": 1,
+      "composition_generation": 7,
+      "mode": "suggestions",
+      "keep": {
+        "id": "keep",
+        "text": "妻兒",
+        "repairs": []
+      },
+      "candidates": [
+        {
+          "id": "c1",
+          "text": "前",
+          "repairs": [
+            {
+              "operation": "replace",
+              "key_slot": 2,
+              "source_symbol": "ㄦ",
+              "target_symbol": "ㄢ"
+            }
+          ]
+        }
+      ],
+      "decision": {
+        "display": "bubble",
+        "selected_id": "none",
+        "jev_status": "late",
+        "choice_confidence": null,
+        "meaning_probability": null,
+        "reason": "jev_late"
+      },
+      "gemini_model": "fixture-gateway-pinned-model",
+      "jev_model": null,
+      "policy_version": "sentence-r2-v1",
+      "server_times": {
+        "server_receive_ms": 1000,
+        "gemini_done_ms": 1500,
+        "jev_start_ms": 1500,
+        "jev_done_ms": null,
+        "response_send_ms": 1765,
+        "clock_domain": "fixture-voice-boot-1"
+      }
+    }
+  ]
+}

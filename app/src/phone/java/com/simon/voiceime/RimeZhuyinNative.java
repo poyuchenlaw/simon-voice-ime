@@ -36,6 +36,10 @@ final class RimeZhuyinNative implements AutoCloseable {
         java.io.File table = new java.io.File(userDirectory, "custom_phrase.txt");
         return table.lastModified() * 31 + table.length() + RimeVocabularyInstaller.revision();
     }
+    String sentenceKeys(){return decode(nativeSentenceKeys(handle)).replace("ˉ"," ");}
+    boolean prepareSentence(String physicalKeys,String text){return nativePrepareSentence(handle,physicalKeys,text);}
+    private static native byte[] nativeSentenceKeys(long h);
+    private static native boolean nativePrepareSentence(long h,String keys,String text);
     void backspace() { key(KEYSYM_BACKSPACE); }
     void enter() { key(KEYSYM_RETURN); }
     void space() { key(KEYSYM_SPACE); }
