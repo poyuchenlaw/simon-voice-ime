@@ -20,13 +20,31 @@ public class ZhuyinInputControllerTest {
         String learnedPronunciation = "";
         StringBuilder receivedKeys = new StringBuilder();
         List<String[]> personalPhrases = java.util.Collections.emptyList();
+        int previewCharacter = -1;
+        String beforeSegment = "";
+        String segment = "";
+        String afterSegment = "";
+        List<String> segmentCandidates = java.util.Collections.emptyList();
         @Override public void moveCursor(String direction) { lastCursorKey = direction; cursor = Math.max(0, cursor + ("left".equals(direction) ? -1 : 1)); }
+        @Override public boolean moveCursorToPreviewCharacter(int codePointIndex) {
+            previewCharacter = codePointIndex;
+            candidates = segmentCandidates;
+            return true;
+        }
         @Override public int cursorPosition() { return cursor; }
         @Override public void key(String key) { receivedKeys.append(key); composing += key; }
         @Override public void backspace() { composing = ""; }
         @Override public void space() { composing = "你好"; }
         @Override public void enter() { committed += composing; composing = ""; }
-        @Override public void choose(int index) { chosen = index; composing = candidates.get(index); }
+        @Override public void choose(int index) {
+            chosen = index;
+            if (!segment.isEmpty() && index >= 0 && index < candidates.size()) {
+                segment = candidates.get(index);
+                composing = beforeSegment + segment + afterSegment;
+            } else {
+                composing = candidates.get(index);
+            }
+        }
         @Override public String composingText() { return composing; }
         @Override public List<String> candidates() { return candidates; }
         @Override public String takeCommit() { String out = committed; committed = ""; return out; }
@@ -259,6 +277,22 @@ public class ZhuyinInputControllerTest {
         assertFalse(service.contains("setupKeyboardSwipe"));
         assertFalse(java.nio.file.Files.exists(root.resolve(
                 "app/src/main/java/com/simon/voiceime/SwipeGestureJudge.java")));
+    }
+
+    @Test public void preview_tap_targets_preceding_segment_and_candidate_replaces_only_that_segment() {
+        FakeEngine engine = new FakeEngine();
+        engine.composing = "現在會辨識";
+        engine.beforeSegment = "現在";
+        engine.segment = "會";
+        engine.afterSegment = "辨識";
+        engine.segmentCandidates = Arrays.asList("會", "回");
+        ZhuyinInputController controller = new ZhuyinInputController(engine);
+
+        ZhuyinInputController.State focused = controller.moveCursorToPreviewCharacter(2);
+        assertEquals(2, engine.previewCharacter);
+        assertEquals(Arrays.asList("會", "回"), focused.candidates);
+        ZhuyinInputController.State chosen = controller.chooseCandidate(1);
+        assertEquals("現在回辨識", chosen.composingText);
     }
 
     @Test public void zhuyin_keys_map_to_libchewing_standard_physical_layout() {

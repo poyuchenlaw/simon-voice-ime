@@ -32,5 +32,14 @@ translator:
   enable_user_dict: true
   enable_sentence: true
 
+custom_phrase:
+  initial_quality: 100
+  delimiter: " '"
+
 __patch:
   - grammar:/hant?
+  - taiwan_defaults
+
+taiwan_defaults:
+  switches/@2/reset: 3
+  zh_hant_tw/excluded_types: [reverse_lookup, user_table]

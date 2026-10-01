@@ -30,7 +30,7 @@ public class ZhuyinV644SafetyGateTest {
         @Override public void clear() { raw.setLength(0); }
         @Override public void learnPhrase(String word, String pronunciation) { learned = word; }
     }
-    private static void assertNoAscii(String text) { assertFalse(text.matches(".*[a-z0-9;,./-].*")); }
+    private static void assertNoAscii(String text) { for(int i=0;i<text.length();i++) assertFalse("keysym in ["+text+"]", "1qaz2wsxedcrfv5tgbyhnujm8ik,9ol.0p;/-6347 ".indexOf(text.charAt(i))>=0); }
 
     @Test public void named_incident_and_10000_fuzzed_streams_never_commit_keymap_ascii() {
         Random random = new Random(644L);

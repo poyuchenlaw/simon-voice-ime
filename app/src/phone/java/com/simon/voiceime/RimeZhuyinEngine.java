@@ -10,6 +10,8 @@ import java.util.List;
 final class RimeZhuyinEngine implements ZhuyinInputController.Engine, AutoCloseable {
     private final RimeZhuyinNative nativeEngine;
 
+    RimeZhuyinEngine(String shared,String user) { nativeEngine=new RimeZhuyinNative(shared,user); }
+
     RimeZhuyinEngine(Context context) throws Exception {
         Context app = context.getApplicationContext();
         File files = app.getFilesDir();
@@ -29,6 +31,13 @@ final class RimeZhuyinEngine implements ZhuyinInputController.Engine, AutoClosea
         nativeEngine = new RimeZhuyinNative(shared.getAbsolutePath(), user.getAbsolutePath());
     }
 
+    @Override public boolean regroup(int boundary) { return nativeEngine.regroup(boundary); }
+    @Override public boolean chooseRegroup(int index) { return nativeEngine.chooseRegroup(index); }
+    @Override public List<String> regroupLabels() { return java.util.Arrays.asList(nativeEngine.regroupLabels()); }
+    @Override public String previewText() { return nativeEngine.preview(); }
+    @Override public int[] previewEditRange() { return nativeEngine.editRange(); }
+    @Override public List<String> phoneticSyllables() { return java.util.Arrays.asList(nativeEngine.readingSyllables()); }
+    @Override public String phoneticText() { return nativeEngine.reading(); }
     @Override public boolean preservesUnparsedInput() { return true; }
 
     @Override public void key(String symbol) {
@@ -44,7 +53,7 @@ final class RimeZhuyinEngine implements ZhuyinInputController.Engine, AutoClosea
         else if ("right".equals(direction)) nativeEngine.moveCursor(true);
     }
     @Override public boolean moveCursorToPreviewCharacter(int codePointIndex) {
-        return nativeEngine.moveCursorToPreviewCharacter(codePointIndex);
+        return nativeEngine.focusCharacter(codePointIndex);
     }
     @Override public void moveCursorToEnd() { nativeEngine.moveCursorToEnd(); }
     @Override public int[] previewSelectionRange() { return nativeEngine.previewSelectionRange(); }

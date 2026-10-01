@@ -646,6 +646,7 @@ public class SimonIMEService extends InputMethodService {
             Log.i(TAG,"Voice recording discarded after protected-field switch");
         }
         if (zhuyinInput != null) zhuyinInput.setLearningEnabled(!protectedInputField);
+        RimeVocabularyInstaller.setLearningEnabled(!protectedInputField);
         if (protectedInputField) RemotePrivateVocabSync.cancelForProtectedField();
         else if (zhuyinWordIndex != null) RemotePrivateVocabSync.refreshOnce(this, zhuyinWordIndex);
         if (!restarting) touchSessionId = java.util.UUID.randomUUID().toString();
@@ -4087,7 +4088,10 @@ public class SimonIMEService extends InputMethodService {
 
     private void applyZhuyinState(ZhuyinInputController.State state) {
         if (state == null) return;
-        renderZhuyinStreamPreview(state.composingText);
+        renderZhuyinStreamPreview(zhuyinInput.previewText());
+        if(boStreamPreview instanceof PreviewCursorView)((PreviewCursorView)boStreamPreview).setBoundary(zhuyinInput.previewBoundary());
+        TextView reading=bopomofoKeyboard==null?null:bopomofoKeyboard.findViewById(R.id.boPhoneticPreview);
+        if(reading!=null)reading.setText(zhuyinInput.phoneticText());
         InputConnection ic = getCurrentInputConnection();
         if (ic != null) {
             if (!state.commitText.isEmpty()) {
@@ -4150,24 +4154,45 @@ public class SimonIMEService extends InputMethodService {
             boStreamPreview.setText("");
             return;
         }
-        android.text.SpannableString preview = new android.text.SpannableString(text);
-        for (int i = 0; i < text.length();) {
-            int end = i + Character.charCount(text.codePointAt(i));
-            final int previewIndex = text.codePointCount(0, i);
-            preview.setSpan(new android.text.style.ClickableSpan() {
-                @Override public void onClick(View widget) {
-                    if (touchShadow != null) touchShadow.invalidate();
-                    if (zhuyinInput != null) applyZhuyinState(zhuyinInput.moveCursorToPreviewCharacter(previewIndex));
+        boStreamPreview.setText(text);
+        if(boStreamPreview.getTag(R.id.boStreamPreview)==null){
+        boStreamPreview.setTag(R.id.boStreamPreview,Boolean.TRUE);
+        boStreamPreview.setOnTouchListener(new View.OnTouchListener() {
+            float downX,downY;boolean dragging;int lastBoundary=-1;
+            @Override public boolean onTouch(View v,MotionEvent event) {
+                android.text.Layout layout=boStreamPreview.getLayout();if(layout==null||zhuyinInput==null)return false;
+                float x=event.getX()-boStreamPreview.getTotalPaddingLeft()+boStreamPreview.getScrollX();
+                int action=event.getActionMasked();
+                if(action==MotionEvent.ACTION_DOWN){
+                    downX=event.getX();downY=event.getY();dragging=false;lastBoundary=-1;
+                    v.getParent().requestDisallowInterceptTouchEvent(true);return true;
                 }
-                @Override public void updateDrawState(android.text.TextPaint paint) {
-                    paint.setUnderlineText(false);
-                    paint.setColor(getColor(R.color.key_text));
+                if(action==MotionEvent.ACTION_CANCEL){v.getParent().requestDisallowInterceptTouchEvent(false);return true;}
+                if(action!=MotionEvent.ACTION_MOVE&&action!=MotionEvent.ACTION_UP)return true;
+                if(Math.abs(event.getX()-downX)>dp(4)||Math.abs(event.getY()-downY)>dp(4))dragging=true;
+                String shown=boStreamPreview.getText().toString();int count=shown.codePointCount(0,shown.length());
+                int nearest=0;float distance=Float.MAX_VALUE;
+                for(int cp=0;cp<=count;cp++){
+                    float at=layout.getPrimaryHorizontal(shown.offsetByCodePoints(0,cp));
+                    float d=Math.abs(x-at);if(d<distance){nearest=cp;distance=d;}
                 }
-            }, i, end, android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
-            i = end;
+                boolean boundary=dragging||distance<=dp(4);
+                if(action==MotionEvent.ACTION_UP&&!boundary){
+                    int utf=layout.getOffsetForHorizontal(0,x);int cp=shown.codePointCount(0,Math.min(utf,shown.length()));
+                    if(cp>0&&layout.getPrimaryHorizontal(utf)>x)cp--;
+                    if(touchShadow!=null)touchShadow.invalidate();
+                    applyZhuyinState(zhuyinInput.moveCursorToPreviewCharacter(Math.min(count-1,cp)));
+                }else if(boundary&&nearest!=lastBoundary){
+                    lastBoundary=nearest;if(touchShadow!=null)touchShadow.invalidate();
+                    applyZhuyinState(zhuyinInput.moveCursorToPreviewBoundary(nearest));
+                }
+                if(action==MotionEvent.ACTION_UP)v.getParent().requestDisallowInterceptTouchEvent(false);
+                return true;
+            }
+        });
         }
-        boStreamPreview.setText(preview);
         boStreamPreview.post(() -> {
+            if(zhuyinInput.previewBoundary()>=0)return;
             android.view.ViewParent parent = boStreamPreview.getParent();
             if (parent instanceof HorizontalScrollView) {
                 HorizontalScrollView scroll=(HorizontalScrollView)parent;

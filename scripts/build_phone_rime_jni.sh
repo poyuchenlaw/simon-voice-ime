@@ -8,7 +8,7 @@ OUT="$ROOT/app/src/phone/jniLibs/arm64-v8a"
 mkdir -p "$OUT"
 test -f "$PREFIX/lib/librime.so"
 "$TOOL" --target=aarch64-linux-android26 -std=c++17 -O2 -fPIC -shared -static-libstdc++ \
-  -I"$PREFIX/include" "$ROOT/app/src/phone/cpp/rime_jni.cpp" \
+  -I"$PREFIX/include" -I"$ROOT/app/src/phone/cpp/rime_headers" "$ROOT/app/src/phone/cpp/rime_jni.cpp" \
   -L"$PREFIX/lib" -Wl,-z,defs -Wl,-soname,librime_jni.so -lrime \
   -o "$OUT/librime_jni.so"
 cp "$PREFIX/lib/librime.so" "$OUT/librime.so"

@@ -2,8 +2,8 @@ plugins {
     id 'com.android.application'
 }
 
-def phoneVersionCodeValue = rootProject.findProperty("phoneVersionCode")?.toString() ?: "84"
-def phoneVersionNameValue = rootProject.findProperty("phoneVersionName")?.toString() ?: "6.49"
+def phoneVersionCodeValue = rootProject.findProperty("phoneVersionCode")?.toString() ?: "85"
+def phoneVersionNameValue = rootProject.findProperty("phoneVersionName")?.toString() ?: "6.50"
 
 android {
     namespace 'com.simon.voiceime'
@@ -85,7 +85,7 @@ def buildZhuyinIndex = tasks.register("buildPhoneZhuyinIndex", Exec) {
 }
 def buildPhoneRime = tasks.register("buildPhoneRime", Exec) {
     workingDir rootProject.projectDir
-    inputs.files(file("src/phone/cpp/rime_jni.cpp"), file("../evidence/rime_spike/android-prefix/lib/librime.so"),
+    inputs.files(file("src/phone/cpp/rime_jni.cpp"), fileTree("src/phone/cpp/rime_headers"), file("src/phone/cpp/rime_regroup.h"), file("../evidence/rime_spike/android-prefix/lib/librime.so"),
             file("../scripts/build_phone_rime_jni.sh"),
             file("../scripts/check_phone_rime_assets.py"), fileTree("src/phone/assets/rime") { include "*.schema.yaml", "*.yaml", "*.gram" })
     outputs.files(file("src/phone/jniLibs/arm64-v8a/librime.so"), file("src/phone/jniLibs/arm64-v8a/librime_jni.so"),

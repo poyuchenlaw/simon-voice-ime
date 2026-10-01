@@ -51,7 +51,7 @@ final class ZhuyinWordIndex {
     private final LinkedHashMap<String,Entry> personalEntries = new LinkedHashMap<>();
     private final LinkedHashMap<String,Entry> remoteEntries = new LinkedHashMap<>();
     private ZhuyinWordIndex(List<Entry> entries) { this.entries = entries; this.database = null; this.personalFile = null; this.remoteFile = null; }
-    private ZhuyinWordIndex(SQLiteDatabase database, File personalFile, File remoteFile) { this.entries = Collections.emptyList(); this.database = database; this.personalFile = personalFile; this.remoteFile = remoteFile; loadPersonal(); loadRemote(); }
+    private ZhuyinWordIndex(SQLiteDatabase database, File personalFile, File remoteFile) { this.entries = Collections.emptyList(); this.database = database; this.personalFile = personalFile; this.remoteFile = remoteFile; loadPersonal(); loadRemote(); publishRimeVocabulary(); }
 
     static ZhuyinWordIndex open(Context context) throws Exception {
         File file = new File(context.getFilesDir(), "zhuyin_initials.db");
@@ -237,6 +237,7 @@ final class ZhuyinWordIndex {
             for (Entry e : personalEntries.values()) out.write(e.key + "\t" + e.word + "\t" + e.pronunciation + "\n");
         } catch (Exception ignored) { temp.delete(); return; }
         if (!temp.renameTo(personalFile)) { personalFile.delete(); temp.renameTo(personalFile); }
+        publishRimeVocabulary();
     }
     synchronized void rememberPersonal(String word, String pronunciation) {
         String key = keyFor(pronunciation);
@@ -251,7 +252,7 @@ final class ZhuyinWordIndex {
             }
         } catch (Exception ignored) { personalEntries.clear(); }
     }
-    synchronized void reloadRemote() { loadRemote(); }
+    synchronized void reloadRemote() { loadRemote(); publishRimeVocabulary(); }
     private void loadRemote() {
         remoteEntries.clear();
         if (remoteFile == null || !remoteFile.isFile() || remoteFile.length() > 512 * 1024) return;
@@ -267,6 +268,18 @@ final class ZhuyinWordIndex {
             }
         } catch (Exception ignored) { remoteEntries.clear(); }
     }
+    private void publishRimeVocabulary() {
+        if (personalFile == null) return;
+        List<String[]> installed = new ArrayList<>();
+        for (Entry e : personalEntries.values()) installed.add(new String[]{e.word, e.pronunciation});
+        for (Entry e : remoteEntries.values()) installed.add(new String[]{e.word, e.pronunciation});
+        if (database != null) try (Cursor c = database.rawQuery("SELECT word,pronunciation FROM words WHERE personal=1", null)) {
+            while(c.moveToNext()) installed.add(new String[]{c.getString(0), c.getString(1)});
+        }
+        try { RimeVocabularyInstaller.install(new File(personalFile.getParentFile(), "rime/user"), installed); }
+        catch (java.io.IOException error) { android.util.Log.w("ZhuyinWordIndex", "Rime vocabulary install failed; retry on next refresh", error); }
+    }
+
     private static String keyFor(String pronunciation) {
         StringBuilder key = new StringBuilder();
         for (String syllable : pronunciation.split("\\s+")) {

@@ -1,0 +1,185 @@
+package com.simon.voiceime;
+
+import java.util.*;
+
+/** Expected editor semantics: finish clears spans; replacement changes text. */
+public final class DeleteResidueHost {
+    static final class InputConnection {
+        String text; int cursor, anchor, start=-1, end=-1, surroundingDeletes;
+        InputConnection(String original){text=original;anchor=cursor=text.length();}
+        boolean replace(CharSequence value, boolean composing) {
+            int from=start<0?Math.min(anchor,cursor):start, to=end<0?Math.max(anchor,cursor):end;
+            text=text.substring(0,from)+value+text.substring(to);
+            anchor=cursor=from+value.length();
+            start=composing && value.length()>0?from:-1;
+            end=start<0?-1:cursor;
+            return true;
+        }
+        boolean setComposingText(CharSequence value,int position){check(position==1,"cursor policy");return replace(value,true);}
+        boolean commitText(CharSequence value,int position){check(position==1,"commit cursor policy");return replace(value,false);}
+        boolean finishComposingText(){start=end=-1;return true;}
+        void delete(int count){surroundingDeletes++;int from=Math.max(0,cursor-count);text=text.substring(0,from)+text.substring(cursor);anchor=cursor=from;}
+    }
+    interface Listener {boolean touch(View v,MotionEvent e);}
+    static class View {
+        static final int VISIBLE=0,INVISIBLE=4; Listener listener;
+        void setVisibility(int v){}void setPressed(boolean b){}
+        <T extends View>T findViewById(int id){return null;}
+        void setOnTouchListener(Listener l){listener=l;}
+        void touch(int action){check(listener.touch(this,new MotionEvent(action)),"unhandled touch");}
+    }
+    static class TextView extends View{void setText(String s){}}
+    static class PreviewCursorView extends TextView{void setBoundary(int b){}}
+    static class R{static class id{static final int boPhoneticPreview=1;}}
+    final View boStreamPreview=null,bopomofoKeyboard=null;
+    static final class MotionEvent {
+        static final int ACTION_DOWN=0,ACTION_UP=1,ACTION_CANCEL=3;
+        final int action;MotionEvent(int a){action=a;}int getAction(){return action;}
+    }
+    static final class Handler {
+        Runnable next;void postDelayed(Runnable r,long delay){next=r;}
+        void removeCallbacks(Runnable r){if(next==r)next=null;}
+        void tick(){Runnable r=next;next=null;check(r!=null,"repeat not scheduled");r.run();}
+    }
+    static final class Shadow {void invalidate(){}}
+    static final class History {void record(String a,String b){}List<String> nextWords(String s){return Collections.emptyList();}}
+    // Noncommitting preedit source isolates editor sync for arbitrary malformed
+    // glyph streams. Real Rime is exercised separately with valid syllables.
+    static final class RawEngine implements ZhuyinInputController.Engine {
+        final StringBuilder text=new StringBuilder();
+        public boolean preservesUnparsedInput(){return true;}
+        public void key(String key){text.append(key);}public void space(){text.append("ˉ");}
+        public void backspace(){if(text.length()>0)text.setLength(text.length()-1);}
+        public void enter(){}public void choose(int i){}public void moveCursor(String d){}
+        public int cursorPosition(){return text.length();}public String composingText(){return text.toString();}
+        public List<String> candidates(){return Collections.emptyList();}public String takeCommit(){return "";}
+        public void clear(){text.setLength(0);}
+    }
+    enum KeyboardMode {BOPOMOFO,ENGLISH}
+    final InputConnection editor;
+    InputConnection zhuyinComposingConnection;
+    final ZhuyinInputController zhuyinInput;
+    final Handler mainHandler=new Handler();
+    final View key=new View();
+    final Shadow touchShadow=null;
+    final View boCursorLeft=null,boCursorRight=null;
+    final ZhuyinWordIndex zhuyinWordIndex=null;
+    final History zhuyinAssociationHistory=null;
+    String lastCommittedZhuyinWord,preview="";
+    KeyboardMode currentKeyboardMode=KeyboardMode.BOPOMOFO;
+    boolean backspacePressed;int backspaceRepeatCount;Runnable backspaceRepeatRunnable;
+    final StringBuilder enWordBuffer=new StringBuilder();
+    DeleteResidueHost(ZhuyinInputController.Engine engine,String original){editor=new InputConnection(original);zhuyinInput=new ZhuyinInputController(engine);setupBackspaceTouch(key);}
+    InputConnection getCurrentInputConnection(){return editor;}
+    void renderZhuyinStreamPreview(String text){preview=text;}
+    void renderZhuyinCandidates(List<String> c,String kind){}
+    android.text.SpannableString highlightZhuyinTarget(String text,int a,int b){return new android.text.SpannableString(text);}
+    boolean commitTextProgrammatically(InputConnection ic,String text){return ic.commitText(text,1);}
+    void confirmStableZhuyinCommit(InputConnection ic,String text){}
+    void recordCommitEvent(String a,String b,String c,String d,boolean e){}
+    void showZhuyinReplaceBubble(){}void dismissZhuyinReplaceBubble(){}
+    void recordCorrectionEvent(String a,String b,String c,String d,String e){}
+    void recordBopomofoTouch(View v,String k,MotionEvent e){}
+    boolean deleteSelectionIfAny(InputConnection ic){return false;}
+    void deleteSurroundingTextProgrammatically(InputConnection ic,int before,int after){check(after==0,"unexpected forward delete");ic.delete(before);}
+    void refreshEnglishSuggestions(){}
+    SERVICE_METHODS
+
+    void type(String... symbols){for(String symbol:symbols)applyZhuyinState(zhuyinInput.press(symbol));}
+    void tapDelete(){key.touch(MotionEvent.ACTION_DOWN);key.touch(MotionEvent.ACTION_UP);}
+    void assertEmpty(String original,String label) {
+        check(preview.isEmpty(),label+" preview="+preview);
+        check(editor.text.equals(original),label+" expected field=["+original+"] actual=["+editor.text+"]");
+        check(editor.cursor==original.length(),label+" cursor moved into original");
+        check(editor.start==-1 && editor.end==-1,label+" composition span remains");
+        check(editor.surroundingDeletes==0,label+" deleted surrounding original text");
+    }
+    static void exact(CompositionKeysHostTest.Engine engine,boolean repeat) {
+        engine.clear();DeleteResidueHost h=new DeleteResidueHost(engine,"S");h.type("ㄨ","ㄛ","ㄒ");
+        check(h.preview.equals("ㄨㄛ ㄒ") && h.editor.text.equals("Sㄨㄛ ㄒ"),"exact setup: "+h.editor.text+" / "+h.preview);
+        if(repeat)h.key.touch(MotionEvent.ACTION_DOWN);else h.tapDelete();
+        check(h.preview.equals("ㄨㄛ") && h.editor.text.equals("Sㄨㄛ"),"delete1");
+        if(repeat)h.mainHandler.tick();else h.tapDelete();
+        check(h.preview.equals("ㄨ") && h.editor.text.equals("Sㄨ"),"delete2");
+        if(repeat){h.mainHandler.tick();h.key.touch(MotionEvent.ACTION_UP);}else h.tapDelete();
+        h.assertEmpty("S",repeat?"repeat delete3":"tap delete3");
+        // A fourth explicit delete is an ordinary field edit; exactly S is removed.
+        h.tapDelete();check(h.editor.text.isEmpty() && h.editor.surroundingDeletes==1,"delete4 normal field deletion");
+        System.out.println("PASS exact "+(repeat?"repeat":"tap")+": Sㄨㄛ ㄒ -> Sㄨㄛ -> Sㄨ -> S; fourth explicit delete -> empty");
+    }
+    static void commitAndClear(CompositionKeysHostTest.Engine engine) {
+        engine.clear();DeleteResidueHost h=new DeleteResidueHost(engine,"S");h.type("ㄨ","ㄛ");
+        ZhuyinInputController.State s=h.zhuyinInput.press("enter");check(!s.commitText.isEmpty(),"commit setup");
+        String committed="S"+s.commitText;h.applyZhuyinState(s);
+        check(h.editor.text.equals(committed),"empty composition erased commit");
+        h.applyZhuyinState(h.zhuyinInput.state());check(h.editor.text.equals(committed),"empty sync erased stable text");
+        h.type("ㄒ");h.applyZhuyinState(h.zhuyinInput.clear());h.assertEmpty(committed,"clear after committed text");
+        h.type("ㄨ");h.tapDelete();h.assertEmpty(committed,"new composition after clear");
+        System.out.println("PASS commit preservation, repeated empty sync, clear, next composition");
+    }
+    static void idleSelection(CompositionKeysHostTest.Engine engine) {
+        engine.clear();DeleteResidueHost h=new DeleteResidueHost(engine,"S");h.editor.anchor=0;
+        h.applyZhuyinState(h.zhuyinInput.state());
+        h.applyZhuyinState(h.zhuyinInput.clear());
+        check(h.editor.text.equals("S") && h.editor.anchor==0 && h.editor.cursor==1,"empty idle sync erased selected original text");
+        // An active composition owned by another editor must never clear this one.
+        h.zhuyinComposingConnection=new InputConnection("other");
+        h.applyZhuyinState(h.zhuyinInput.clear());
+        check(h.editor.text.equals("S"),"old editor composition erased new editor selection");
+        System.out.println("PASS idle selected original and different editor are preserved");
+    }
+    static void generated(ZhuyinInputController.Engine engine,int cases,boolean nativeRime) {
+        Random random=new Random(648);
+        String alphabet="ㄅㄆㄇㄈㄉㄊㄋㄌㄍㄎㄏㄐㄑㄒㄓㄔㄕㄖㄗㄘㄙㄧㄨㄩㄚㄛㄜㄝㄞㄟㄠㄡㄢㄣㄤㄥㄦˊˇˋ˙";
+        int tones=0,firstTones=0,deletes=0;
+        for(int i=0;i<cases;i++) {
+            engine.clear();String original=i%2==0?"S":"原文🙂S";
+            DeleteResidueHost h=new DeleteResidueHost(engine,original);StringBuilder keys=new StringBuilder();
+            if(nativeRime) {
+                // Standard literal syllables, including neutral tone and tone 1.
+                String[] syllables={"ㄅㄚ","ㄇㄠˊ","ㄋㄧˇ","ㄨㄛˇ","ㄒㄧㄤˇ","ㄏㄠˇ","ㄉㄜ˙","ㄅㄚˋ"};
+                int length=1+random.nextInt(5);
+                for(int k=0;k<length;k++) {
+                    String syllable=syllables[random.nextInt(syllables.length)];
+                    for(int j=0;j<syllable.length();j++) {
+                        String symbol=syllable.substring(j,j+1);keys.append(symbol);
+                        if("ˊˇˋ˙".contains(symbol))tones++;
+                        ZhuyinInputController.State s=h.zhuyinInput.press(symbol);
+                        check(s.commitText.isEmpty(),"native valid typing auto-commit i="+i+" keys="+keys);
+                        h.applyZhuyinState(s);
+                    }
+                    if(syllable.equals("ㄅㄚ")){keys.append("ˉ");firstTones++;ZhuyinInputController.State s=h.zhuyinInput.press("space");check(s.commitText.isEmpty(),"native first tone auto-commit "+keys);h.applyZhuyinState(s);}
+                }
+            } else {
+            int length=1+random.nextInt(24);
+            for(int k=0;k<length;k++) {
+                String symbol=String.valueOf(alphabet.charAt(random.nextInt(alphabet.length())));
+                keys.append(symbol);if("ˊˇˋ˙".contains(symbol))tones++;
+                ZhuyinInputController.State s=h.zhuyinInput.press(symbol);
+                check(s.commitText.isEmpty(),"generated typing auto-commit i="+i+" keys="+keys);
+                h.applyZhuyinState(s);
+                if(k==length-1 && i%5==0){keys.append("ˉ");firstTones++;s=h.zhuyinInput.press("space");check(s.commitText.isEmpty(),"first tone auto-commit "+keys);h.applyZhuyinState(s);}
+            }
+            }
+            boolean repeat=i%2==1;int count=0;
+            while(!h.zhuyinInput.state().composingText.isEmpty()) {
+                check(count++<100,"nonterminating deletion: "+keys);
+                if(repeat){if(count==1)h.key.touch(MotionEvent.ACTION_DOWN);else h.mainHandler.tick();}else h.tapDelete();
+                deletes++;
+            }
+            if(repeat && count>0)h.key.touch(MotionEvent.ACTION_UP);
+            h.assertEmpty(original,"case="+i+" keys="+keys);
+            // Empty updates must be harmless even after the composition is gone.
+            h.applyZhuyinState(h.zhuyinInput.state());h.assertEmpty(original,"empty resync case="+i);
+        }
+        check(tones>0 && firstTones>0,"tone coverage absent");
+        System.out.println("PASS generated "+(nativeRime?"real-Rime valid syllables":"arbitrary glyphs / noncommitting engine")+" seed=648 cases="+cases+" deletes="+deletes+" toneKeys="+tones+" firstToneKeys="+firstTones+"; tap/repeat; original text preserved");
+    }
+    public static void main(String[] args) throws Exception {
+        try(CompositionKeysHostTest.Engine engine=new CompositionKeysHostTest.Engine(args[0],args[1])) {
+            exact(engine,false);exact(engine,true);commitAndClear(engine);idleSelection(engine);
+            generated(new RawEngine(),Integer.parseInt(args[2]),false);generated(engine,Integer.parseInt(args[2]),true);
+        }
+    }
+    static void check(boolean value,String why){if(!value)throw new AssertionError(why);}
+}
