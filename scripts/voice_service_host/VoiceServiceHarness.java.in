@@ -29,6 +29,8 @@ public class VoiceServiceHarness {
     final Set<Integer> completedGenerations=new HashSet<>();
     final AtomicInteger utteranceGeneration=new AtomicInteger(1);
     final List<String> streamedChunks=new ArrayList<>(),streamChunkTexts=new ArrayList<>();
+    final Set<Integer> guardStoppedGenerations=ConcurrentHashMap.newKeySet();
+    void queueRecordingInChunks(int gen,String id,String reason){voicePendingQueue.markPendingAsync(id,reason,null);}
     int activeUtteranceGeneration=1,nextGenToCommit=1,fieldGeneration=1,replaceShortChars=6,rescueExtraChars=10;
     long replaceLongAudioMs=5000;double rescueRatio=1.5;
     volatile boolean isRecording,protectedInputField,lastCommitInsertedOrCopied,lastCommitClipboardWritten;
@@ -544,7 +546,7 @@ public class VoiceServiceHarness {
         String id=voicePendingQueue.beginAsync();pendingSessionByGeneration.put(1,id);voicePendingQueue.appendAsync(id,new byte[]{1,2},2);isRecording=true;wsFinal(new JSONObject().put("text",""),1);barrier();assertTrue(httpClient.callbacks.isEmpty());voicePendingQueue.appendAsync(id,new byte[]{3,4},2);voicePendingQueue.finishRecording(id);barrier();assertArrayEquals(new byte[]{1,2,3,4},voicePendingQueue.pcmBytes(id));
     }
     @Test public void beginFileFailureSurfacesAndStillDeliversLiveText()throws Exception {
-        File dir=new File(temp.getRoot(),"voice_pending");assertTrue(dir.delete());java.nio.file.Files.write(dir.toPath(),new byte[]{1});
+        File dir=new File(temp.getRoot(),"voice_pending");assertTrue(new File(dir,".v656-migrated").delete());assertTrue(dir.delete());java.nio.file.Files.write(dir.toPath(),new byte[]{1});
         try {
             beginRecordingSession();String id=activePendingSessionId;pendingSessionByGeneration.put(1,id);
             voicePendingQueue.runIO(()->null);assertTrue(status.contains("備份失敗"));

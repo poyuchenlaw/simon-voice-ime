@@ -10,6 +10,11 @@ import java.util.concurrent.*;
 
 /** Durable PCM and delivery outbox. Every filesystem operation belongs to ioExecutor. */
 final class VoicePendingQueue {
+    static final long CHUNK_BYTES = 3_840_000L; // 120 s at 16 kHz, including WAV still < 4 MB.
+    static final class PayloadTooLargeException extends IOException {
+        PayloadTooLargeException() { super("HTTP 413"); }
+    }
+
     interface Uploader { String transcribe(File pcm, String sessionId, int sampleRate) throws Exception; }
     interface Delivery {
         void deliver(String text, String startedAt);
@@ -18,6 +23,16 @@ final class VoicePendingQueue {
     interface Observer { void event(String phase, String sessionId, long audioMs, long bytes, int attempts, String error); }
     private static final long MIN_BACKOFF_MS = 5_000L, MAX_BACKOFF_MS = 600_000L;
     private final File dir;
+    private final List<long[]> oversizeDiscardEvents = new ArrayList<>(); // IO thread only
+    private final Semaphore pendingWrites = new Semaphore(8); // At most eight owned recorder reads.
+    void reportOversizeDiscards(Observer observer) {
+        execute(() -> {
+            for (long[] event : oversizeDiscardEvents)
+                observer.event("pending_discarded_oversize", "", event[0], event[1], 0, "");
+            oversizeDiscardEvents.clear();
+        });
+    }
+
     private final int sampleRate;
     private volatile Thread ioThread;
     private final ScheduledExecutorService ioExecutor = Executors.newSingleThreadScheduledExecutor(r -> {
@@ -103,7 +118,12 @@ final class VoicePendingQueue {
         } catch(org.json.JSONException e) {throw new IOException(e);}
     }
     void appendAsync(String id,byte[] bytes,int length) {
-        byte[] owned=Arrays.copyOf(bytes,length); execute(() -> {try {append(id,owned,owned.length);}catch(IOException e){throw new IllegalStateException(e);}});
+        if (length <= 0) return;
+        // Backpressure is on the recorder, never on the UI. Stop timer owns a separate handler.
+        pendingWrites.acquireUninterruptibly();
+        byte[] owned=Arrays.copyOf(bytes,length);
+        try { execute(() -> {try {append(id,owned,owned.length);}catch(IOException e){throw new IllegalStateException(e);}finally {pendingWrites.release();}}); }
+        catch (RuntimeException e) { pendingWrites.release(); throw e; }
     }
     void append(String id,byte[] bytes,int length)throws IOException {
         try {runIO(() -> {
@@ -317,13 +337,24 @@ final class VoicePendingQueue {
                 return new JSONObject(m.toString());
             });
             if(claim==null)return;
-            boolean archived=claim.has("audio_receipt")&&acceptReceipt(id,claim.getJSONObject("audio_receipt"));
+            boolean archived=claim.optBoolean("audio_archived") && claim.has("chunk_receipts")
+                    || claim.has("audio_receipt")&&acceptReceipt(id,claim.getJSONObject("audio_receipt"));
             String text=claim.has("result_text")?claim.getString("result_text"):null;
             boolean missingText=!claim.optBoolean("delivered")&&!claim.optBoolean("clipboard_written")
-                    &&(text==null||VoiceResultText.clean(text).isEmpty());
+                    &&(text==null||VoiceResultText.clean(text).isEmpty()) && !claim.has("chunk_transcript");
             if(!archived||claim.optBoolean("server_transcript_pending")||missingText) {
                 if(archived&&missingText)runIO(() -> {JSONObject m=metadata.get(id);m.put("server_transcript_pending",true);writeMeta(id,m);return null;});
-                String raw=uploader.transcribe(pcm(id),id,sampleRate);
+                boolean chunked = !archived && (pcm(id).length() > CHUNK_BYTES || claim.has("chunk_limit") || claim.has("chunk_receipts"));
+                String raw;
+                if (chunked) raw = uploadChunks(id, uploader, observer, CHUNK_BYTES);
+                else {
+                    try { raw = uploader.transcribe(pcm(id),id,sampleRate); }
+                    catch (PayloadTooLargeException tooLarge) {
+                        chunked = true;
+                        long smaller = Math.max(2, Math.min(CHUNK_BYTES, pcm(id).length() / 2) & ~1L);
+                        raw = uploadChunks(id, uploader, observer, smaller);
+                    }
+                }
                 // Archive responses carry two independent facts: text and durable custody.
                 JSONObject response=new JSONObject(raw);
                 String archiveText=parseSuccessfulResponse(raw);
@@ -334,8 +365,8 @@ final class VoicePendingQueue {
                     runIO(() -> {JSONObject m=metadata.get(id);m.put("archive_history_text",VoiceResultText.clean(archiveText)).put("archive_history_written",false);writeMeta(id,m);return null;});
                     claim.put("archive_history_text",VoiceResultText.clean(archiveText)).put("archive_history_written",false);
                 }
-                if(text==null||VoiceResultText.isSilence(text)||VoiceResultText.isNonSpeech(text,claim.optBoolean("append_result",true),-1)) {text=archiveText;persistResult(id,text);}
-                if(!acceptReceipt(id,response.optJSONObject("receipt")))throw new IOException("audio receipt missing or mismatched");
+                if(chunked && !claim.optBoolean("delivered") && !claim.optBoolean("clipboard_written") || text==null||VoiceResultText.isSilence(text)||VoiceResultText.isNonSpeech(text,claim.optBoolean("append_result",true),-1)) {text=archiveText;persistResult(id,text);}
+                if(!chunked && !acceptReceipt(id,response.optJSONObject("receipt")))throw new IOException("audio receipt missing or mismatched");
                 runIO(() -> {JSONObject m=metadata.get(id);if(m!=null){m.put("server_transcript_pending",false);writeMeta(id,m);}return null;});
             }
             if(discarded.contains(id))return;
@@ -357,8 +388,122 @@ final class VoicePendingQueue {
             if(observer!=null)observer.event("pending_failed",id,audioMs(id),audioMs(id)*sampleRate*2/1000,attempts(id),e.getClass().getSimpleName());
         }
     }
+    /** Parent PCM is retained until every ordered range has a durable, matching receipt. */
+    private String uploadChunks(String id, Uploader uploader, Observer observer, long initialLimit) throws Exception {
+        long length = pcm(id).length();
+        JSONObject state = runIO(() -> new JSONObject(metadata.get(id).toString()));
+        org.json.JSONArray chunks = state.optJSONArray("chunk_receipts");
+        if (chunks == null) chunks = new org.json.JSONArray();
+        long offset = 0;
+        StringBuilder transcript = new StringBuilder();
+        for (int i = 0; i < chunks.length(); i++) {
+            JSONObject c = chunks.getJSONObject(i);
+            if (c.getLong("offset") != offset) throw new IOException("unordered chunk custody");
+            offset += c.getLong("bytes"); transcript.append(c.getString("text"));
+        }
+        long limit = Math.min(initialLimit, state.optLong("chunk_limit", initialLimit));
+        final long durableLimit = limit;
+        runIO(() -> {JSONObject m=metadata.get(id);m.put("chunk_limit",durableLimit);writeMeta(id,m);return null;});
+        if (offset > length || (length & 1) != 0) throw new IOException("invalid PCM length");
+        while (offset < length) {
+            long size = Math.min(limit, length - offset);
+            String childId = id + "-part-" + offset + "-" + size;
+            File scratch = new File(dir, childId + ".upload");
+            final long start = offset, count = size;
+            runIO(() -> {
+                try (RandomAccessFile in = new RandomAccessFile(pcm(id), "r");
+                     FileOutputStream out = new FileOutputStream(scratch)) {
+                    in.seek(start); byte[] block = new byte[16384]; long left = count;
+                    while (left > 0) {
+                        int n = in.read(block, 0, (int)Math.min(left, block.length));
+                        if (n < 0) throw new EOFException("PCM range incomplete");
+                        out.write(block, 0, n); left -= n;
+                    }
+                    out.getFD().sync();
+                }
+                return null;
+            });
+            String raw;
+            try { raw = uploader.transcribe(scratch, childId, sampleRate); }
+            catch (PayloadTooLargeException tooLarge) {
+                if (size <= 2) throw tooLarge; // Still keep source if server rejects a single sample.
+                limit = Math.max(2, (size / 2) & ~1L);
+                final long reduced = limit;
+                runIO(() -> {JSONObject m=metadata.get(id);m.put("chunk_limit",reduced);writeMeta(id,m);return null;});
+                if (observer != null) observer.event("pending_split_413", id, audioMs(id), size, attempts(id), "");
+                if (!scratch.delete()) throw new IOException("redundant upload copy deletion failed");
+                continue;
+            }
+            JSONObject response = new JSONObject(raw), receipt = response.optJSONObject("receipt");
+            String text = parseSuccessfulResponse(raw);
+            String sha = runIO(() -> hash(scratch));
+            if (receipt == null || !childId.equals(receipt.optString("client_session_id"))
+                    || receipt.optLong("byte_count", -1) != size || !sha.equals(receipt.optString("sha256")))
+                throw new IOException("chunk receipt missing or mismatched");
+            if (discarded.contains(id)) throw new IOException("recording discarded");
+            chunks.put(new JSONObject().put("offset", offset).put("bytes", size).put("text", text).put("receipt", receipt));
+            final org.json.JSONArray durableChunks = chunks;
+            runIO(() -> {JSONObject m = metadata.get(id); m.put("chunk_receipts", durableChunks); writeMeta(id,m); return null;});
+            if (observer != null) observer.event("pending_chunk_receipt", childId, size * 1000 / (sampleRate * 2L), size, attempts(id), "");
+            // Redundant upload copy; parent PCM remains until ALL receipts are stored.
+            if (!scratch.delete()) throw new IOException("upload copy deletion failed");
+            offset += size; transcript.append(text);
+        }
+        final String fullText = transcript.toString();
+        runIO(() -> {
+            JSONObject m = metadata.get(id);
+            m.put("chunk_transcript", fullText).put("audio_archived",true).put("archived_at",System.currentTimeMillis());
+            // Save reassembled text before deleting source: restart must recover the delivery outbox.
+            if (!m.optBoolean("delivered") && !m.optBoolean("clipboard_written")) m.put("result_text", fullText);
+            writeMeta(id,m);
+            if (pcm(id).exists() && !pcm(id).delete()) throw new IOException("receipted parent deletion failed");
+            cachedTotalBytes = Math.max(0, cachedTotalBytes - sizes.getOrDefault(id,0L)); sizes.remove(id); publish(id);
+            return null;
+        });
+        return new JSONObject().put("text",fullText).toString();
+    }
+    private void migratePreCapOversize() {
+        File marker = new File(dir, ".v656-migrated");
+        try {
+            if (!marker.exists()) {
+                File[] files = dir.listFiles((d,n) -> n.endsWith(".pcm"));
+                if (files == null) throw new IOException("pending directory unavailable");
+                for (File file : files) {
+                    String id=file.getName().substring(0,file.getName().length()-4);
+                    JSONObject m=readMeta(id);
+                    long rate=m==null?sampleRate:m.optLong("sample_rate",sampleRate);
+                    if (rate<=0) rate=sampleRate;
+                    long ms=file.length()*1000/(rate*2);
+                    if (m!=null) ms=Math.max(ms,m.optLong("audio_ms"));
+                    if (ms<=3_600_000L) continue;
+                    // Tombstone is fsynced before removal and retried after a crash. No remote call.
+                    try(FileOutputStream out=new FileOutputStream(new File(dir,id+".oversize"))) {
+                        out.write(new JSONObject().put("audio_ms",ms).put("bytes",file.length()).toString().getBytes(java.nio.charset.StandardCharsets.UTF_8));
+                        out.getFD().sync();
+                    }
+                }
+            }
+            File[] tombstones=dir.listFiles((d,n) -> n.endsWith(".oversize"));
+            if (tombstones==null) throw new IOException("pending directory unavailable");
+            for (File tombstone:tombstones) {
+                String id=tombstone.getName().substring(0,tombstone.getName().length()-9);
+                JSONObject event=new JSONObject(new String(Files.readAllBytes(tombstone.toPath()),java.nio.charset.StandardCharsets.UTF_8));
+                for (File file:new File[]{pcm(id),resultFile(id),meta(id)})
+                    if (file.exists()&&!file.delete()) throw new IOException("approved oversize deletion failed");
+                // Append metadata-only audit, then notify service telemetry after recovery.
+                try(FileOutputStream out=new FileOutputStream(new File(dir,"oversize-discard-events.jsonl"),true)) {
+                    out.write((new JSONObject().put("phase","pending_discarded_oversize").put("audio_ms",event.getLong("audio_ms")).put("bytes",event.getLong("bytes")).toString()+"\n").getBytes(java.nio.charset.StandardCharsets.UTF_8));
+                    out.getFD().sync();
+                }
+                oversizeDiscardEvents.add(new long[]{event.getLong("audio_ms"),event.getLong("bytes")});
+                if(!tombstone.delete())throw new IOException("oversize tombstone removal failed");
+            }
+            if(!marker.exists())try(FileOutputStream out=new FileOutputStream(marker)){out.write(1);out.getFD().sync();}
+        } catch(Exception e) {throw new IllegalStateException("oversize migration incomplete; uploads blocked",e);}
+    }
     private void recover() {
         if(!dir.exists()&&!dir.mkdirs())throw new IllegalStateException("queue directory creation failed");
+        migratePreCapOversize();
         File[] discards=dir.listFiles((d,n)->n.endsWith(".discard"));
         if(discards!=null)for(File marker:discards) {
             String id=marker.getName().substring(0,marker.getName().length()-8);discarded.add(id);
@@ -371,7 +516,7 @@ final class VoicePendingQueue {
         if(metas!=null)for(File f:metas) {
             String id=f.getName().substring(0,f.getName().length()-5);JSONObject m=readMeta(id);
             // Old done/text flags are not proof of custody; never delete legacy PCM.
-            if(!pcm(id).exists()&&(m==null||!m.has("audio_receipt"))) {System.err.println("VoicePendingQueue: dropping metadata without audio (including legacy delivered-without-text)");f.delete();continue;}
+            if(!pcm(id).exists()&&(m==null||!m.has("audio_receipt")&&!m.has("chunk_receipts"))) {System.err.println("VoicePendingQueue: dropping metadata without audio (including legacy delivered-without-text)");f.delete();continue;}
             if(m!=null) {
                 try {
                     if(m.optInt("schema_version",0)<6) {
@@ -406,7 +551,7 @@ final class VoicePendingQueue {
         }
         for(Map.Entry<String,JSONObject> entry:metadata.entrySet()) {
             JSONObject m=entry.getValue();
-            if(!pcm(entry.getKey()).exists()&&m.has("audio_receipt")&&((!m.optBoolean("delivered")&&!m.optBoolean("clipboard_written"))||m.optBoolean("server_transcript_pending"))) {
+            if(!pcm(entry.getKey()).exists()&&(m.has("audio_receipt")||m.has("chunk_receipts"))&&((!m.optBoolean("delivered")&&!m.optBoolean("clipboard_written"))||m.optBoolean("server_transcript_pending"))) {
                 try {update(entry.getKey(),"pending","recovered_text_outbox",m.optLong("next_attempt_at"));}catch(IOException e){throw new IllegalStateException(e);}
             }
         }

@@ -84,6 +84,9 @@ public class SettingsActivity extends Activity {
         editServerUrl.setText(prefs.getString("server_url", "http://100.84.86.128:8001"));
         editAuthPassword.setText(AuthConfig.password(prefs));
 
+        EditText voiceCap = findViewById(R.id.voiceSessionCapMinutes);
+        voiceCap.setText(String.valueOf(prefs.getInt("voice_session_cap_minutes",VoiceSessionGuard.DEFAULT_CAP_MINUTES)));
+
         // v6.20: 複製自動記詞開關（預設開；即時持久化）
         CheckBox checkAutoVocab = findViewById(R.id.checkAutoVocab);
         if (checkAutoVocab != null) {
@@ -137,6 +140,11 @@ public class SettingsActivity extends Activity {
         uploadStatus.setText((uploaded==0?"最後上傳：尚未成功":("最後上傳："+new java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss",java.util.Locale.getDefault()).format(new java.util.Date(uploaded))))+"｜"+prefs.getString("ime_last_upload_result","尚未上傳"));
         // Save
         btnSave.setOnClickListener(v -> {
+            int cap;
+            try { cap=Integer.parseInt(voiceCap.getText().toString().trim()); }
+            catch (NumberFormatException e) { voiceCap.setError("請輸入 1 到 30 分鐘"); return; }
+            if(cap<1||cap>30){ voiceCap.setError("請輸入 1 到 30 分鐘"); return; }
+            prefs.edit().putInt("voice_session_cap_minutes",cap).apply();
             String url = editServerUrl.getText().toString().trim();
             if (url.endsWith("/")) url = url.substring(0, url.length() - 1);
             String password = editAuthPassword.getText().toString().trim();
@@ -292,7 +300,7 @@ public class SettingsActivity extends Activity {
     }
 
     private void uploadCorrections(String input) {
-        String url = editServerUrl.getText().toString().trim();
+                    String url = editServerUrl.getText().toString().trim();
         if (url.endsWith("/")) url = url.substring(0, url.length() - 1);
 
         // Send raw text — server handles newline/comma/space formats
@@ -354,7 +362,7 @@ public class SettingsActivity extends Activity {
     }
 
     private void testConnection() {
-        String url = editServerUrl.getText().toString().trim();
+                    String url = editServerUrl.getText().toString().trim();
         if (url.endsWith("/")) url = url.substring(0, url.length() - 1);
 
         OkHttpClient client = new OkHttpClient.Builder()

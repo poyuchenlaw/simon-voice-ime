@@ -47,6 +47,13 @@
             android:visibility="gone"
             android:layout_marginBottom="8dp" />
 
+        <TextView android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:text="單次錄音上限（1–30 分鐘，預設 10）；伺服器無進度 20 秒自動停止，關螢幕且無語音 60 秒自動停止。"
+            android:textColor="#cccccc" android:textSize="14sp" />
+        <EditText android:id="@+id/voiceSessionCapMinutes" android:layout_width="match_parent"
+            android:layout_height="wrap_content" android:inputType="number" android:maxLength="2"
+            android:textColor="#e0e0e0" android:contentDescription="單次錄音上限分鐘" />
+
         <!-- 伺服器 -->
         <TextView
             android:layout_width="wrap_content"

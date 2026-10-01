@@ -2,8 +2,8 @@ plugins {
     id 'com.android.application'
 }
 
-def phoneVersionCodeValue = rootProject.findProperty("phoneVersionCode")?.toString() ?: "90"
-def phoneVersionNameValue = rootProject.findProperty("phoneVersionName")?.toString() ?: "6.55"
+def phoneVersionCodeValue = rootProject.findProperty("phoneVersionCode")?.toString() ?: "92"
+def phoneVersionNameValue = rootProject.findProperty("phoneVersionName")?.toString() ?: "6.57"
 
 android {
     namespace 'com.simon.voiceime'
@@ -11,6 +11,7 @@ android {
 
     defaultConfig {
         applicationId "com.simon.voiceime"
+        testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         minSdk 26
         targetSdk 34
         versionCode 74
@@ -105,6 +106,7 @@ tasks.matching { it.name in ["prePhoneDebugBuild", "prePhoneReleaseBuild"] }.con
 
 dependencies {
     testImplementation 'junit:junit:4.13.2'
+    androidTestImplementation 'androidx.test:runner:1.6.2'
     phoneImplementation files('libs/sherpa-onnx-1.12.28.aar')
     implementation 'org.jetbrains.kotlin:kotlin-stdlib:1.9.22'
     implementation 'com.squareup.okhttp3:okhttp:4.12.0'

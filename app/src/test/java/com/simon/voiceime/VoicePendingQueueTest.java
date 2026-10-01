@@ -218,9 +218,12 @@ public class VoicePendingQueueTest {
         VoicePendingQueue q=queue();assertEquals(4,q.pendingOldestFirst().size());
         for(String id:q.pendingOldestFirst()) {assertTrue(q.pcmFile(id).exists());q.uploadOne(id,(pcm,sid,rate)->response(pcm,sid,"instruction"),(t,start)->fail("legacy delivery acknowledged"),null);assertFalse(q.pcmFile(id).exists());}
     }
-    @Test public void wholeFileBeyondTenMinutesIsArchived()throws Exception {
+    @Test public void legacyTenMinuteFileIsArchivedInBoundedChunks()throws Exception {
         VoicePendingQueue q=queue();String id=session(q,19_200_002);
-        q.uploadOne(id,(pcm,sid,rate)->{assertEquals(19_200_002,pcm.length());return response(pcm,sid,"whole file");},(t,start)->{},null);assertFalse(q.pcmFile(id).exists());
+        java.util.List<Long> chunks=new java.util.ArrayList<>();
+        q.uploadOne(id,(pcm,sid,rate)->{chunks.add(pcm.length());return response(pcm,sid,"whole file");},(t,start)->{},null);
+        assertEquals(java.util.Arrays.asList(3_840_000L,3_840_000L,3_840_000L,3_840_000L,3_840_000L,2L),chunks);
+        assertTrue(q.receiptConfirmed(id));assertFalse(q.pcmFile(id).exists());
     }
     @Test public void concurrentDrainClaimsOneArchive()throws Exception {
         VoicePendingQueue q=queue();String id=session(q,32000);AtomicInteger calls=new AtomicInteger();java.util.concurrent.CountDownLatch entered=new java.util.concurrent.CountDownLatch(1),release=new java.util.concurrent.CountDownLatch(1);
