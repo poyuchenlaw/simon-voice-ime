@@ -10,6 +10,7 @@
 #include <cmath>
 #include <rime/dict/prism.h>
 #include <cstring>
+#include <tuple>
 
 
 // Resolve the engine's RTTI rather than the JNI DSO's duplicate weak RTTI.
@@ -54,6 +55,8 @@ struct RegroupOption {
     double touch_score=0;
     bool neighbour=false;
     bool literal=false;
+    int grouping_start=-1,grouping_end=-1;
+    rime::an<rime::Candidate> repaired_grouping;
 
 };
 struct RepairTouch {char literal;std::map<char,double> probability;std::set<char> neighbours;};
@@ -133,10 +136,26 @@ static std::vector<rime::DictEntry> words(const rime::an<rime::Candidate>& cand)
 static double sentence_score(RegroupState& r,const RegroupOption& option) {
     std::vector<rime::DictEntry> sentence;
     auto append=[&](const std::string& text){if(!text.empty()){rime::DictEntry word;word.text=text;word.weight=0;sentence.push_back(word);}};
-    append(cp_slice(r.original,0,option.start));
+    // Preserve the engine's word boundaries and weights outside the window.
+    // Concatenating them into an unknown zero-weight pseudo-word makes scores
+    // for different window sizes incomparable.
+    auto outside=[&](int from,int to) {
+        if(r.literal_pieces.empty()){append(cp_slice(r.original,from,to));return;}
+        int position=0;
+        for(const auto& piece:r.literal_pieces)for(const auto& word:words(piece)) {
+            int end=position+cp_count(word.text);
+            int a=std::max(from,position),b=std::min(to,end);
+            if(a<b) {
+                if(a==position&&b==end)sentence.push_back(word);
+                else append(cp_slice(word.text,a-position,b-position));
+            }
+            position=end;
+        }
+    };
+    outside(0,option.start);
     if(option.pieces.empty()){auto entries=words(option.candidate);sentence.insert(sentence.end(),entries.begin(),entries.end());}
     else for(const auto& piece:option.pieces){auto entries=words(piece);sentence.insert(sentence.end(),entries.begin(),entries.end());}
-    append(cp_slice(r.original,option.end,cp_count(r.original)));
+    outside(option.end,cp_count(r.original));
     double score=0;
     for(size_t i=0;i<sentence.size();++i){
         std::string preceding;if(i>1)preceding+=sentence[i-2].text;if(i>0)preceding+=sentence[i-1].text;
@@ -203,6 +222,51 @@ static void append_repairs(RegroupState& r,rime::Context* probe,int boundary,int
                     RegroupOption option{a,b,candidate->text(),candidate,phrase->weight()};
                     option.repaired_input=input;option.repaired_code=corrected;option.changed_key=from+p;option.touch_score=touch;option.neighbour=nearby;
                     r.options.push_back(std::move(option));
+                }
+            }
+        }
+    }
+}
+
+// Re-decode the same bounded neighbourhood with the corrected reading. Keep
+// the single-key repair span separate from the grouping carried by selection.
+using RepairMenus=std::map<std::tuple<std::string,int,int>,std::vector<rime::an<rime::Candidate>>>;
+static void regroup_repair(RegroupState& r,rime::Context* probe,RegroupOption& option,int boundary,int count,RepairMenus& menus) {
+    double best=sentence_score(r,option);
+    const size_t from=r.stops[option.start],to=r.stops[option.end];
+    for(int a=std::max(0,boundary-2);a<=option.start;++a) {
+        for(int b=option.end;b<=std::min(count,boundary+2);++b) {
+            // A repaired syllable may replace several broken native spans.
+            if(b-a-(option.end-option.start)+1>3)continue;
+            auto key=std::make_tuple(option.repaired_input,a,b);
+            auto found=menus.find(key);
+            if(found==menus.end()) {
+                std::vector<rime::an<rime::Candidate>> candidates;
+                probe->Clear();probe->set_input(option.repaired_input.substr(0,r.stops[b]));
+                rime::Composition prefix;prefix.Reset(probe->input());
+                pin_text(prefix,0,r.stops[a],cp_slice(r.original,0,a));
+                prefix.Forward();probe->set_composition(std::move(prefix));probe->set_caret_pos(r.stops[b]);
+                if(!probe->composition().empty())for(int i=0;i<12;++i) {
+                    auto candidate=probe->composition().back().GetCandidateAt(i);if(!candidate)break;
+                    candidates.push_back(candidate);
+                }
+                found=menus.emplace(std::move(key),std::move(candidates)).first;
+            }
+            for(const auto& candidate:found->second) {
+                auto phrase=native_phrase(candidate);
+                if(!phrase||candidate->start()!=r.stops[a]||candidate->end()!=r.stops[b])continue;
+                auto spans=phrase->spans();size_t at=spans.start();int character=0;bool contains=false;
+                while(at<spans.end()) {
+                    size_t next=spans.NextStop(at);if(next<=at)break;
+                    if(at==from&&next==to&&cp_slice(candidate->text(),character,character+1)==option.label)contains=true;
+                    at=next;++character;
+                }
+                if(!contains||character!=cp_count(candidate->text()))continue;
+                RegroupOption grouped{a,b,grouping(candidate),candidate,0};
+                double score=sentence_score(r,grouped);
+                if(score>best) {
+                    best=score;option.grouping_start=a;option.grouping_end=b;
+                    option.repaired_grouping=candidate;
                 }
             }
         }
@@ -278,10 +342,16 @@ static bool regroup(RegroupState& r,const RimeApi* api,RimeSessionId id,int boun
         }
     }
     append_repairs(r,probe,boundary,count);
+    RepairMenus repair_menus;
+    for(auto& option:r.options)if(!option.repaired_input.empty())regroup_repair(r,probe,option,boundary,count,repair_menus);
     RegroupOption literal{0,count,r.original,rime::New<rime::SimpleCandidate>("literal",0,r.input.size(),r.original),0,r.literal_pieces};literal.literal=true;r.options.push_back(std::move(literal));
-    for(auto& option:r.options)option.weight=sentence_score(r,option);
-    // Nearest window first. Within each window Rime's Octagram sentence weight
-    // (including preceding text) is the score, not a hand-authored word frequency.
+    for(auto& option:r.options) {
+        if(option.repaired_grouping) {
+            RegroupOption grouped{option.grouping_start,option.grouping_end,"",option.repaired_grouping,0};
+            option.weight=sentence_score(r,grouped);
+        } else option.weight=sentence_score(r,option);
+    }
+    // Compare engine sentence scores with touch likelihood across windows.
     std::stable_sort(r.options.begin(),r.options.end(),[boundary](const auto& x,const auto& y){
         bool xf=!x.repaired_input.empty()&&!x.neighbour,yf=!y.repaired_input.empty()&&!y.neighbour;
         if(xf!=yf)return !xf;
@@ -301,7 +371,11 @@ static bool select_regroup(RegroupState& r,RimeSessionId id,int index) {
     auto* ctx=context(id);
     if(!ctx||index<0||index>=static_cast<int>(r.options.size())||(ctx->input()!=r.input&&!r.unparsed_mode))return false;
     if(r.unparsed_mode)ctx->set_input(r.input);
-    const auto option=r.options[index];
+    auto option=r.options[index];
+    if(option.repaired_grouping) {
+        option.start=option.grouping_start;option.end=option.grouping_end;
+        option.candidate=option.repaired_grouping;option.pieces.clear();
+    }
     if(!option.repaired_input.empty())ctx->set_input(option.repaired_input);
     rime::Composition fixed;fixed.Reset(ctx->input());
     pin_text(fixed,0,r.stops[option.start],cp_slice(r.original,0,option.start));
