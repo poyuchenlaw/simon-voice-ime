@@ -792,7 +792,7 @@ public class SimonIMEService extends InputMethodService {
         btnCommands.setOnClickListener(v -> togglePanel(Panel.COMMANDS));
 
         // --- 切換注音鍵盤（短按）/ 跳轉輸入法（長按） ---
-        btnSwitchIME.setOnClickListener(v -> switchKeyboard(KeyboardMode.ENGLISH));
+        btnSwitchIME.setOnClickListener(v -> switchKeyboard(KeyboardMode.BOPOMOFO));
         btnSwitchIME.setOnLongClickListener(v -> {
             InputMethodManager imm = (InputMethodManager) getSystemService(INPUT_METHOD_SERVICE);
             if (imm != null) {

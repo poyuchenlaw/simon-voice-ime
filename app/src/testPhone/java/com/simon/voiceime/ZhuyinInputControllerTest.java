@@ -251,11 +251,14 @@ public class ZhuyinInputControllerTest {
         assertEquals(engine.candidates, right.candidates);
     }
 
-    @Test public void horizontal_swipe_starting_in_candidate_row_does_not_change_page() {
-        assertEquals(SwipeGestureJudge.Result.NONE,
-                SwipeGestureJudge.judge(-180, 2, 56, 8, true));
-        assertEquals(SwipeGestureJudge.Result.LEFT,
-                SwipeGestureJudge.judge(-180, 2, 56, 8, false));
+    @Test public void horizontal_swipe_page_switch_handler_is_absent() throws Exception {
+        java.nio.file.Path root = java.nio.file.Path.of("").toAbsolutePath();
+        while (!java.nio.file.Files.exists(root.resolve("app/src/main"))) root = root.getParent();
+        String service = new String(java.nio.file.Files.readAllBytes(root.resolve(
+                "app/src/main/java/com/simon/voiceime/SimonIMEService.java")), java.nio.charset.StandardCharsets.UTF_8);
+        assertFalse(service.contains("setupKeyboardSwipe"));
+        assertFalse(java.nio.file.Files.exists(root.resolve(
+                "app/src/main/java/com/simon/voiceime/SwipeGestureJudge.java")));
     }
 
     @Test public void zhuyin_keys_map_to_libchewing_standard_physical_layout() {

@@ -12,8 +12,8 @@ import static com.simon.voiceime.KeyboardPager.KeyboardMode.*;
 public class KeyboardPagerTest {
     @Test public void homeControlsRetainContractWithBottomLeftSwitch() throws Exception {
         String xml = readProjectFile("app/src/main/res/layout/keyboard_view.xml");
-        String[] ids = {"btnSpace", "btnComma", "btnPeriod", "btnFullWidth", "btnHalfWidth", "btnBackspace", "btnEnter"};
-        String[] labels = {"␣", "，", "。", "全", "半", "⌫", "↵"};
+        String[] ids = {"btnFullWidth", "btnHalfWidth", "btnSpace", "btnComma", "btnPeriod", "btnBackspace", "btnEnter"};
+        String[] labels = {"全", "半", "␣", "，", "。", "⌫", "↵"};
         int previous = -1;
         for (String id : ids) {
             int index = xml.indexOf("android:id=\"@+id/" + id + "\"");
@@ -21,7 +21,8 @@ public class KeyboardPagerTest {
             int viewStart = xml.lastIndexOf("<TextView", index);
             int viewEnd = xml.indexOf("/>", index);
             String view = xml.substring(viewStart, viewEnd);
-            assertTrue(id + " must be 38dp high", view.contains("android:layout_height=\"38dp\""));
+            String height = id.equals("btnFullWidth") || id.equals("btnHalfWidth") ? "34dp" : "38dp";
+            assertTrue(id + " height mismatch", view.contains("android:layout_height=\"" + height + "\""));
             assertTrue(id + " must be a weighted row key", view.contains("android:layout_width=\"0dp\"")
                     && view.contains("android:layout_weight=\"1\"") && view.contains("android:clickable=\"true\""));
             String expectedLabel = labels[previous < 0 ? 0 : java.util.Arrays.asList(ids).indexOf(id)];
@@ -29,7 +30,7 @@ public class KeyboardPagerTest {
             previous = index;
         }
         assertTrue(xml.contains("android:id=\"@+id/btnSwitchIME\""));
-        assertTrue(xml.contains("android:text=\"EN\""));
+        assertTrue(xml.contains("android:text=\"注\""));
         assertTrue("voice keyboard must retain horizontal mic layout",
                 xml.contains("android:orientation=\"horizontal\""));
         assertTrue("voice key area must retain weight 3", xml.contains("android:layout_weight=\"3\""));

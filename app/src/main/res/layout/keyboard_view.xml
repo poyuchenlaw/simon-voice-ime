@@ -54,7 +54,7 @@
             android:layout_weight="3"
             android:orientation="vertical">
 
-            <!-- Row 1：功能列 — 🔄 ⚙ 📋 ⚡ 追 -->
+            <!-- Row 1：功能列 — ⚙ 全 半 📋 ⚡ 追 -->
             <LinearLayout
                 android:layout_width="match_parent"
                 android:layout_height="38dp"
@@ -73,6 +73,34 @@
                     android:text="⚙"
                     android:textSize="14sp"
                     android:textColor="#666666"
+                    android:background="@color/key_bg"
+                    android:layout_marginEnd="2dp"
+                    android:clickable="true"
+                    android:focusable="true" />
+
+                <TextView
+                    android:id="@+id/btnFullWidth"
+                    android:layout_width="0dp"
+                    android:layout_height="34dp"
+                    android:layout_weight="1"
+                    android:gravity="center"
+                    android:text="全"
+                    android:textColor="#666666"
+                    android:textSize="14sp"
+                    android:background="@color/key_bg"
+                    android:layout_marginEnd="2dp"
+                    android:clickable="true"
+                    android:focusable="true" />
+
+                <TextView
+                    android:id="@+id/btnHalfWidth"
+                    android:layout_width="0dp"
+                    android:layout_height="34dp"
+                    android:layout_weight="1"
+                    android:gravity="center"
+                    android:text="半"
+                    android:textColor="#666666"
+                    android:textSize="14sp"
                     android:background="@color/key_bg"
                     android:layout_marginEnd="2dp"
                     android:clickable="true"
@@ -121,7 +149,7 @@
 
             </LinearLayout>
 
-            <!-- Row 2：編輯列 — ␣ ， 。 ⌫ ↵ -->
+            <!-- Row 2：編輯列 — 注 ␣ ， 。 ⌫ ↵ -->
             <LinearLayout
                 android:layout_width="match_parent"
                 android:layout_height="42dp"
@@ -133,7 +161,7 @@
                     android:layout_width="44dp"
                     android:layout_height="38dp"
                     android:gravity="center"
-                    android:text="EN"
+                    android:text="注"
                     android:textSize="12sp"
                     android:textColor="#6bc5f0"
                     android:background="@color/key_bg"
@@ -176,34 +204,6 @@
                     android:layout_weight="1"
                     android:gravity="center"
                     android:text="。"
-                    android:textColor="@color/key_text"
-                    android:textSize="16sp"
-                    android:background="@color/key_bg"
-                    android:layout_marginEnd="2dp"
-                    android:clickable="true"
-                    android:focusable="true" />
-
-                <TextView
-                    android:id="@+id/btnFullWidth"
-                    android:layout_width="0dp"
-                    android:layout_height="38dp"
-                    android:layout_weight="1"
-                    android:gravity="center"
-                    android:text="全"
-                    android:textColor="@color/key_text"
-                    android:textSize="16sp"
-                    android:background="@color/key_bg"
-                    android:layout_marginEnd="2dp"
-                    android:clickable="true"
-                    android:focusable="true" />
-
-                <TextView
-                    android:id="@+id/btnHalfWidth"
-                    android:layout_width="0dp"
-                    android:layout_height="38dp"
-                    android:layout_weight="1"
-                    android:gravity="center"
-                    android:text="半"
                     android:textColor="@color/key_text"
                     android:textSize="16sp"
                     android:background="@color/key_bg"
