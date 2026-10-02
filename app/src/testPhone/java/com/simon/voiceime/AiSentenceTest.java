@@ -69,7 +69,7 @@ public class AiSentenceTest {
  @Test public void shadowReceivesAndSuggestionsRequireBothPolicies() throws Exception {
   JSONObject schema=contract(),req=schema.getJSONArray("examples").getJSONObject(0),res=schema.getJSONArray("examples").getJSONObject(1);
   AiSentence c=session(schema);assertNotNull(c.begin(550,()->req));assertTrue(c.receive(req,res.toString(),600,(k,t)->true));assertTrue(c.visible(req,600,false).isEmpty());
-  c.mode("suggestions");assertEquals(1,c.visible(req,600,false).size());assertTrue(c.visible(req,600,true).isEmpty());assertTrue(c.visible(req,1601,false).isEmpty());
+  c.mode("suggestions");assertEquals(1,c.visible(req,600,false).size());assertTrue(c.visible(req,600,true).isEmpty());assertTrue(c.visible(req,4101,false).isEmpty());
   c.result.put("mode","shadow");assertTrue(c.visible(req,600,false).isEmpty());
  }
  @Test public void failuresLeaveTypingUntouchedNoRetry() throws Exception {
@@ -120,5 +120,18 @@ public class AiSentenceTest {
   JSONObject schema=contract(),req=schema.getJSONArray("examples").getJSONObject(0),res=new JSONObject(schema.getJSONArray("examples").getJSONObject(1).toString());
   res.put("decision",new JSONObject().put("display","none").put("selected_id","none").put("jev_status","rejected").put("choice_confidence",.8).put("meaning_probability",.2).put("reason","jev_rejected"));
   AiSentence c=session(schema);c.mode("suggestions");c.begin(550,()->req);c.receive(req,res.toString(),600,(k,t)->true);assertTrue(c.visible(req,600,false).isEmpty());
+ }
+
+ @Test public void clientDigestAcceptsLegacyRejectsEchoMismatchAndMutation() throws Exception {
+  JSONObject schema=contract(),req=schema.getJSONArray("examples").getJSONObject(0),res=schema.getJSONArray("examples").getJSONObject(1);
+  java.lang.reflect.Method digest;
+  try{digest=AiSentence.class.getDeclaredMethod("digest",JSONObject.class);}catch(NoSuchMethodException e){throw new AssertionError("phone digest missing",e);}
+  String expected=(String)digest.invoke(null,req);
+  AiSentence c=session(schema);c.begin(550,()->req);
+  assertTrue(c.receive(req,res.toString(),600,(k,t)->true));
+  c=session(schema);c.begin(550,()->req);JSONObject bad=new JSONObject(res.toString()).put("digest","0".repeat(64));
+  AiSentence mismatch=c;assertThrows(RuntimeException.class,()->mismatch.receive(req,bad.toString(),600,(k,t)->true));
+  c=session(schema);c.begin(550,()->req);req.put("literal","變更");assertFalse(c.fresh(req,600));
+  assertEquals(64,expected.length());
  }
 }

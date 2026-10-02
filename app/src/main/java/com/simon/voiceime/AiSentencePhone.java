@@ -18,17 +18,21 @@ final class AiSentencePhone {
         boolean allowed();
         void replace(ZhuyinInputController controller);
         void render();
+        void commitSuggestion();
     }
     private final Context context;
     private final Handler handler;
     private final Host host;
     private final AiSentence sentence;
     private final OkHttpClient http=new OkHttpClient.Builder().retryOnConnectionFailure(false)
-        .followRedirects(false).followSslRedirects(false).connectTimeout(1050,TimeUnit.MILLISECONDS)
-        .readTimeout(1050,TimeUnit.MILLISECONDS).callTimeout(1050,TimeUnit.MILLISECONDS).build();
+        .followRedirects(false).followSslRedirects(false).connectTimeout(2800,TimeUnit.MILLISECONDS)
+        .readTimeout(2800,TimeUnit.MILLISECONDS).callTimeout(2800,TimeUnit.MILLISECONDS).build();
     private Call call;
     private Runnable pause;
-    private JSONObject request;
+    private JSONObject request,localOption;
+    private String clausePrefix="",clauseKeyPrefix="",autoSource="ai";
+    private int underlineStart=-1,underlineEnd=-1,revertKeyStart,revertKeyEnd;
+    private AiComposition.RevertedSpan revertedSpan;
     private String ownedText="",leftWitness="",keyWitness="";
     private int compositionStart=-1,compositionEnd=-1;
     private boolean applying,expectedApplySelection;
@@ -55,15 +59,25 @@ final class AiSentencePhone {
     private SharedPreferences prefs(){return context.getSharedPreferences("simon_ime_prefs",Context.MODE_PRIVATE);}
     void changed(boolean editorChange){
         if(applying)return;
+        if(editorChange)revertedSpan=null;else if(revertedSpan!=null&&host.controller()!=null)revertedSpan.edited(host.controller().sentenceKeys());
+        if(transaction!=null&&!editorChange&&host.controller()!=null&&host.controller().sentenceKeys().equals(keyWitness)&&host.controller().state().composingText.equals(ownedText))return;
         if(call!=null){call.cancel();call=null;event("cancelled");}
         if(pause!=null)handler.removeCallbacks(pause);
-        if(transaction!=null){transaction.discard();transaction=null;}
-        sentence.mode(prefs().getString("ai_sentence_mode","shadow"));
+        if(transaction!=null){transaction.discard();transaction=null;underlineStart=underlineEnd=-1;}
+        sentence.mode(prefs().getString("ai_sentence_mode","suggestions"));
         sentence.edit(now(),editorChange,host.allowed());request=null;
         debounceEnd=receive=validation=wouldRender=phoneRender=-1;
         expectedApplySelection=false;
         if(editorChange){compositionStart=compositionEnd=-1;installed.clear();touches.clear();touchKeys="";}
-        pause=()->send();handler.postDelayed(pause,450);
+        localOption=null;
+        if(host.allowed()&&host.controller()!=null&&!host.controller().wordFocused()){
+            String[] repair=host.controller().localRepair();
+            if(repair.length==2&&!repair[1].equals(host.controller().previewText()))try{
+                localOption=new JSONObject().put("id","local").put("text",repair[1]).put("keys",repair[0]);
+                suggestionEvent("shown","local",1);
+            }catch(JSONException invalid){event("local_invalid");}
+        }
+        pause=()->{if(localOption!=null&&autoEnabled())applyLocal(true);send();};handler.postDelayed(pause,450);
     }
     void selection(int oldStart,int oldEnd,int start,int end,int candidatesStart,int candidatesEnd){
         if(applying)return;
@@ -140,15 +154,24 @@ final class AiSentencePhone {
             spans.put(new JSONObject().put("start",left.codePointCount(0,a)).put("end",left.codePointCount(0,b)).put("kind","installed_word"));
         }
         JSONArray alternatives=new JSONArray();if(keyWitness.equals(touchKeys))for(JSONObject t:touches.values())if(alternatives.length()<8)alternatives.put(t);
-        JSONObject req=AiSentence.request(sentence.schema,UUID.randomUUID().toString(),sentence.editorGeneration,sentence.compositionGeneration,keyWitness,c.previewText(),left,spans,alternatives);
-        leftWitness=req.getJSONObject("left_context").getString("text");return req;
+        String literal=c.previewText();int split=0;
+        for(int i=0;i<literal.length();i++)if("，。！？；：、,!?;:\n".indexOf(literal.charAt(i))>=0)split=i+1;
+        clausePrefix=literal.substring(0,split);clauseKeyPrefix="";
+        if(split>0){int cp=literal.codePointCount(0,split),used=0;List<String> syllables=c.phoneticSyllables();
+            if(syllables.size()<cp)return null;for(int i=0;i<cp;i++)used+=syllables.get(i).length();
+            if(used>keyWitness.length())return null;clauseKeyPrefix=keyWitness.substring(0,used);}
+        String clauseKeys=keyWitness.substring(clauseKeyPrefix.length());
+        if(clauseKeys.isEmpty()||literal.substring(split).isEmpty())return null;
+        if(!clausePrefix.isEmpty()){spans=new JSONArray();alternatives=new JSONArray();}
+        JSONObject req=AiSentence.request(sentence.schema,UUID.randomUUID().toString(),sentence.editorGeneration,sentence.compositionGeneration,clauseKeys,literal.substring(split),left+clausePrefix,spans,alternatives);
+        leftWitness=left;req.put("client_auto",autoEnabled());return req;
 
         } catch(Exception invalid){throw new IllegalArgumentException("sentence snapshot",invalid);}
     }
     private void send(){
-        if(!host.allowed())return;
+        if(!host.allowed()||transaction!=null&&transaction.automatic())return;
         try {
-            sentence.mode(prefs().getString("ai_sentence_mode","shadow"));
+            sentence.mode(prefs().getString("ai_sentence_mode","suggestions"));
             JSONObject req=sentence.begin(now(),this::snapshot);if(req==null){event("ineligible");return;}
             request=req;debounceEnd=now();
             String base=prefs().getString("server_url","http://100.84.86.128:8001");
@@ -173,14 +196,17 @@ final class AiSentencePhone {
                         call=null;receive=now();
                         try{
                             if(!sentence.receive(req,payload,now(),(keys,text)->{
-                                ZhuyinInputController mapped=host.controller().preparedSentence(keys,text);if(mapped==null)return false;mapped.close();return true;
+                                ZhuyinInputController mapped=host.controller().preparedSentence(clauseKeyPrefix+keys,clausePrefix+text);if(mapped==null)return false;mapped.close();return true;
                             })){event("stale");return;}
                             validation=now();if(!sentence.fresh(req,now())||!witness()){sentence.result=null;event("stale");return;}
                             JSONObject decision=sentence.result.getJSONObject("decision");
                             if(!"none".equals(decision.getString("display"))&&sentence.result.getJSONArray("candidates").length()>0)wouldRender=now();
                             event("validated");
-                            if(!options(false).isEmpty())host.render();
-                            long delay=Math.max(0,1501-(now()-sentence.lastEdit));
+                            if(autoEnabled()&&"auto".equals(decision.optString("display"))){
+                                for(JSONObject option:options(false))if(option.optString("id").equals(decision.optString("selected_id"))){applyCandidate(option,true);break;}
+                            }
+                            if(!options(false).isEmpty()){suggestionEvent("shown","ai",1);host.render();}
+                            long delay=Math.max(0,4001-(now()-sentence.lastEdit));
                             handler.postDelayed(()->{if(request==req){sentence.result=null;host.render();event("expired");}},delay);
                         }catch(Exception invalid){failureCount++;sentence.failed(req);sentence.result=null;event("invalid");}
                     });
@@ -195,7 +221,7 @@ final class AiSentencePhone {
         if(phoneRender<0&&!options(false).isEmpty()){phoneRender=now();event("rendered");}
     }
     List<JSONObject> options(boolean chip){
-        List<JSONObject> visible=sentence.visible(request,now(),chip);
+        List<JSONObject> visible=sentence.visible(request,now(),false);
         ZhuyinInputController controller=host.controller();
         if(controller==null||!controller.wordFocused())return visible;
         ZhuyinInputController.State focus=controller.state();String literal=controller.previewText();
@@ -207,9 +233,9 @@ final class AiSentencePhone {
         for(int i=0;i<reading.size();i++){if(i<focus.targetStart)keyStart+=reading.get(i).length();if(i<focus.targetEnd)keyEnd+=reading.get(i).length();}
         List<JSONObject> scoped=new java.util.ArrayList<>();
         for(JSONObject option:visible){
-            String text=option.optString("text");boolean safe=text.startsWith(prefix)&&text.endsWith(suffix)&&text.length()>=prefix.length()+suffix.length();
+            String text=clausePrefix+option.optString("text");boolean safe=text.startsWith(prefix)&&text.endsWith(suffix)&&text.length()>=prefix.length()+suffix.length();
             JSONArray repairs=option.optJSONArray("repairs");
-            if(repairs!=null)for(int i=0;i<repairs.length();i++){JSONObject repair=repairs.optJSONObject(i);int slot=repair==null?-1:repair.optInt("key_slot",-1);if(slot<keyStart||slot>=keyEnd)safe=false;}
+            if(repairs!=null)for(int i=0;i<repairs.length();i++){JSONObject repair=repairs.optJSONObject(i);int slot=repair==null?-1:clauseKeyPrefix.length()+repair.optInt("key_slot",-1);if(slot<keyStart||slot>=keyEnd)safe=false;}
             if(safe)scoped.add(option);
         }
         return scoped;
@@ -218,26 +244,95 @@ final class AiSentencePhone {
         try {return sentence.result!=null&&!"ok".equals(sentence.result.getJSONObject("decision").getString("jev_status"));
         } catch(Exception invalid){return false;}
     }
-    void apply(JSONObject candidate){
+    boolean autoEnabled(){return prefs().getBoolean("auto_correction",false);}
+    JSONObject localOption(){return host.controller()!=null&&!host.controller().wordFocused()?localOption:null;}
+    String optionText(JSONObject candidate){return clausePrefix+candidate.optString("text");}
+    private boolean protectedChange(String text){
+        return AiComposition.protectedChange(host.controller().previewText(),text,
+            RimeVocabularyInstaller.words(new File(context.getFilesDir(),"rime/user")));
+    }
+    void applyLocal(boolean automatic){
+        JSONObject option=localOption;if(option==null||!host.allowed()||host.controller().wordFocused())return;
+        try{
+            String text=option.getString("text");if(automatic&&(!autoEnabled()||protectedChange(text)||revertedSpan!=null&&revertedSpan.blocks(host.controller().sentenceKeys())))return;
+            AiComposition tx=new AiComposition(host.controller());ZhuyinInputController after=automatic?
+                tx.applyAuto(option.getString("keys"),text,now(),true,false):tx.apply(option.getString("keys"),text);
+            if(after==null)return;autoSource="local";
+            install(tx,after,automatic);
+            if(!automatic){suggestionEvent("accepted","local",1);commitSuggestion();}
+        }catch(Exception invalid){event("local_invalid");}
+    }
+    void apply(JSONObject candidate){applyCandidate(candidate,false);}
+    private void applyCandidate(JSONObject candidate,boolean automatic){
         try {
         if(!sentence.fresh(request,now())||!witness()||!options(false).contains(candidate)){event("tap_stale");return;}
-        String keys=AiSentence.repairedKeys(request.getJSONArray("key_slots"),candidate.getJSONArray("repairs"));
-        AiComposition tx=new AiComposition(host.controller());ZhuyinInputController after=tx.apply(keys,candidate.getString("text"));
+        String keys=clauseKeyPrefix+AiSentence.repairedKeys(request.getJSONArray("key_slots"),candidate.getJSONArray("repairs"));
+        boolean focused=host.controller().wordFocused();int rank=options(false).indexOf(candidate)+1;String text=optionText(candidate);
+        if(automatic&&(!autoEnabled()||candidate.optBoolean("protected",true)||protectedChange(text)||revertedSpan!=null&&revertedSpan.blocks(host.controller().sentenceKeys())))return;
+        AiComposition tx=new AiComposition(host.controller());ZhuyinInputController after=automatic?tx.applyAuto(keys,text,now(),true,false):tx.apply(keys,text);
         // Native validation can consume the remaining visible budget; recheck after it.
         if(after==null){event("tap_unmapped");return;}
         if(!sentence.fresh(request,now())||!witness()){after.close();event("tap_stale");return;}
-        transaction=tx;undoEditor=sentence.editorGeneration;undoComposition=sentence.compositionGeneration;
-        applying=true;try{host.replace(after);ownedText=after.state().composingText;keyWitness=after.sentenceKeys();compositionEnd=compositionStart+ownedText.length();expectedApplySelection=true;sentence.result=null;host.render();}finally{applying=false;}
-        event("applied");
+        autoSource="ai";install(tx,after,automatic);
+        if(!automatic){suggestionEvent("accepted","ai",rank);if(!focused)commitSuggestion();}
 
         } catch(Exception invalid){event("tap_invalid");}
     }
+    private void install(AiComposition tx,ZhuyinInputController after,boolean automatic){
+        String old=host.controller().previewText(),text=after.previewText();
+        int prefix=0,suffix=0;while(prefix<old.length()&&prefix<text.length()&&old.charAt(prefix)==text.charAt(prefix))prefix++;
+        while(suffix<old.length()-prefix&&suffix<text.length()-prefix&&old.charAt(old.length()-1-suffix)==text.charAt(text.length()-1-suffix))suffix++;
+        List<String> reading=host.controller().phoneticSyllables();
+        revertKeyStart=0;revertKeyEnd=host.controller().sentenceKeys().length();
+        if(reading.size()==old.codePointCount(0,old.length())){
+            int from=old.codePointCount(0,prefix),to=old.codePointCount(0,old.length()-suffix),used=0;
+            for(int i=0;i<reading.size();i++){if(i==from)revertKeyStart=used;used+=reading.get(i).length();if(i+1==to)revertKeyEnd=used;}
+        }
+        transaction=tx;undoEditor=sentence.editorGeneration;undoComposition=sentence.compositionGeneration;
+        underlineStart=automatic?prefix:-1;underlineEnd=automatic?text.length()-suffix:-1;
+        if(automatic&&underlineStart==underlineEnd&&!text.isEmpty()){
+            underlineStart=Math.min(underlineStart,text.offsetByCodePoints(text.length(),-1));
+            underlineEnd=text.offsetByCodePoints(underlineStart,1);
+        }
+        applying=true;try{ownedText=after.state().composingText;keyWitness=after.sentenceKeys();compositionEnd=compositionStart+ownedText.length();expectedApplySelection=true;sentence.result=null;localOption=null;host.replace(after);host.render();}finally{applying=false;}
+        if(automatic)correctionEvent("auto_applied",autoSource,"");
+    }
+    private void commitSuggestion(){
+        invalidatePending();applying=true;try{host.commitSuggestion();}finally{applying=false;}
+        if(transaction!=null){transaction.discard();transaction=null;}underlineStart=underlineEnd=-1;
+    }
+    android.text.SpannableString mark(String value){
+        android.text.SpannableString marked=new android.text.SpannableString(value);
+        if(canUndo()&&underlineStart>=0&&underlineEnd>underlineStart&&underlineEnd<=value.length())marked.setSpan(new android.text.style.UnderlineSpan(),underlineStart,underlineEnd,android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+        return marked;
+    }
+    boolean tapRevert(int utf){if(canUndo()&&transaction.automatic()&&utf>=underlineStart&&utf<underlineEnd){undo("tap");return true;}return false;}
+    boolean beforeKey(String key){
+        if("backspace".equals(key)&&canUndo()&&transaction.automatic()){undo("backspace");return true;}
+        if("enter".equals(key)){
+            if(canUndo()&&transaction.automatic()&&transaction.tooRecent(now()))undo("enter_dwell");
+            invalidatePending();
+        }
+        return false;
+    }
+    private void invalidatePending(){if(call!=null){call.cancel();call=null;}if(pause!=null)handler.removeCallbacks(pause);sentence.edit(now(),false,false);request=null;localOption=null;}
     boolean canUndo(){return transaction!=null&&undoEditor==sentence.editorGeneration&&undoComposition==sentence.compositionGeneration;}
-    void undo(){
-        if(!canUndo()||!witness()){event("undo_stale");return;}
-        ZhuyinInputController before=transaction.undo(host.controller());if(before==null)return;transaction=null;
+    void undo(){undo("tap");}
+    private void undo(String how){
+        if(!canUndo()){event("undo_stale");return;}
+        ZhuyinInputController before=transaction.undo(host.controller());if(before==null)return;transaction=null;revertedSpan=new AiComposition.RevertedSpan(before.sentenceKeys(),revertKeyStart,revertKeyEnd);underlineStart=underlineEnd=-1;
         applying=true;try{host.replace(before);ownedText=before.state().composingText;keyWitness=before.sentenceKeys();compositionEnd=compositionStart+ownedText.length();expectedApplySelection=true;host.render();}finally{applying=false;}
-        event("undone");
+        correctionEvent("auto_reverted",autoSource,how);event("undone");
+    }
+    void suggestionEvent(String outcome,String source,int rank){
+        ImeTelemetry telemetry=ImeTelemetry.get();if(telemetry==null||!host.allowed())return;
+        try{telemetry.record("suggestion","bopomofo",new JSONObject().put("action",outcome).put("source",source).put("rank",rank),false);}
+        catch(Exception invalid){android.util.Log.w("AiSentence","suggestion metadata unavailable");}
+    }
+    private void correctionEvent(String outcome,String source,String how){
+        ImeTelemetry telemetry=ImeTelemetry.get();if(telemetry==null||!host.allowed())return;
+        try{telemetry.record(outcome,"bopomofo",new JSONObject().put("source",source).put("how",how),false);}
+        catch(Exception invalid){android.util.Log.w("AiSentence","correction metadata unavailable");}
     }
     private void event(String outcome){
         ImeTelemetry t=ImeTelemetry.get();if(t==null)return;

@@ -11,6 +11,8 @@ final class AiSentence {
     private boolean eligible;
     private String mode="shadow";
     JSONObject pending,result;
+    private String recordedId,recordedDigest;
+    private long recordedGeneration;
     AiSentence(JSONObject schema){this.schema=schema;}
     void mode(String value){mode="off".equals(value)||"suggestions".equals(value)?value:"shadow";}
     String mode(){return mode;}
@@ -22,12 +24,13 @@ final class AiSentence {
         if(!eligible||"off".equals(mode)||now-lastEdit<450||now-lastEdit>1500||pending!=null||attempted==compositionGeneration)return null;
         attempted=compositionGeneration;JSONObject req=snapshot.get();if(req==null)return null;
         validateRequest(schema,req);SentenceContract.require(req.getLong("editor_generation")==editorGeneration&&req.getLong("composition_generation")==compositionGeneration);
+        recordedId=req.getString("request_id");recordedGeneration=compositionGeneration;recordedDigest=digest(req);
         pending=req;return req;
 
         } catch(Exception invalid){throw new IllegalArgumentException("sentence contract",invalid);}
     }
     boolean fresh(JSONObject req,long now){
-        try {return eligible&&!"off".equals(mode)&&req!=null&&req.getLong("editor_generation")==editorGeneration&&req.getLong("composition_generation")==compositionGeneration&&now>=lastEdit&&now-lastEdit<=1500;
+        try {return eligible&&!"off".equals(mode)&&req!=null&&req.getLong("editor_generation")==editorGeneration&&req.getLong("composition_generation")==compositionGeneration&&recordedGeneration==compositionGeneration&&req.getString("request_id").equals(recordedId)&&digest(req).equals(recordedDigest)&&now>=lastEdit&&now-lastEdit<=4000;
         } catch(Exception invalid){throw new IllegalArgumentException("sentence contract",invalid);}
     }
     boolean receive(JSONObject req,String body,long now,java.util.function.BiPredicate<String,String> reading){
@@ -40,6 +43,7 @@ final class AiSentence {
         if("none".equals(display)||(chip&&!"chip".equals(display)))return Collections.emptyList();
         JSONArray a=result.getJSONArray("candidates");List<JSONObject> out=new ArrayList<>();
         for(int i=0;i<a.length();i++){JSONObject c=a.getJSONObject(i);if(!"ok".equals(d.getString("jev_status"))||c.getString("id").equals(d.getString("selected_id")))out.add(c);}
+        out.sort((first,second)->Boolean.compare(!first.optString("id").equals(d.optString("selected_id")),!second.optString("id").equals(d.optString("selected_id"))));
         return Collections.unmodifiableList(out);
 
         } catch(Exception invalid){throw new IllegalArgumentException("sentence contract",invalid);}
@@ -98,9 +102,25 @@ final class AiSentence {
 
         } catch(Exception invalid){throw new IllegalArgumentException("sentence contract",invalid);}
     }
+    static String digest(JSONObject req) {
+        try {
+            JSONObject left=req.getJSONObject("left_context");JSONArray spans=left.getJSONArray("installed_word_spans");
+            StringBuilder canonical=new StringBuilder("{\"key_slots\":").append(req.getJSONArray("key_slots").toString())
+                .append(",\"literal\":").append(JSONObject.quote(req.getString("literal")))
+                .append(",\"left_context\":{\"text\":").append(JSONObject.quote(left.getString("text")))
+                .append(",\"installed_word_spans\":[");
+            for(int i=0;i<spans.length();i++){if(i>0)canonical.append(',');JSONObject span=spans.getJSONObject(i);
+                canonical.append("{\"start\":").append(span.getInt("start")).append(",\"end\":").append(span.getInt("end"))
+                    .append(",\"kind\":").append(JSONObject.quote(span.getString("kind"))).append('}');}
+            canonical.append("]}}");
+            byte[] bytes=java.security.MessageDigest.getInstance("SHA-256").digest(canonical.toString().getBytes(StandardCharsets.UTF_8));
+            StringBuilder hex=new StringBuilder();for(byte b:bytes)hex.append(String.format(java.util.Locale.ROOT,"%02x",b&255));return hex.toString();
+        }catch(Exception invalid){throw new IllegalArgumentException("sentence digest",invalid);}
+    }
     static JSONObject response(JSONObject schema,JSONObject request,String body,java.util.function.BiPredicate<String,String> reading) {
         try {
         JSONObject result=SentenceContract.parse(body,4096);SentenceContract.check(schema,"response",result);
+        if(result.has("digest"))SentenceContract.require(result.getString("digest").equals(digest(request)));
         for(String key:new String[]{"request_id","editor_generation","composition_generation"})SentenceContract.require(result.get(key).toString().equals(request.get(key).toString()));
         SentenceContract.require(result.getJSONObject("keep").getString("text").equals(request.getString("literal")));
         JSONObject times=result.getJSONObject("server_times");long previous=-1;

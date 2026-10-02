@@ -54,6 +54,7 @@ struct RegroupOption {
     int changed_key=-1;
     double touch_score=0;
     bool neighbour=false;
+    bool caret_neighbour=false;
     bool literal=false;
     bool homophone=false;
     bool character=false;
@@ -126,7 +127,7 @@ static bool capture(RegroupState& r,RimeSessionId id) {
                 // boundaries explicitly present in the typed reading; ambiguous
                 // multi-syllable inputs stay with Rime's ordinary menu.
                 ends.clear();
-                if(cand->type()=="user_table"){
+                if(rime::Candidate::GetGenuineCandidate(cand)->type()=="user_table"){
                     for(size_t at=cand->start();at<cand->end();++at)
                         if(std::string(" 6347").find(r.input[at])!=std::string::npos)ends.push_back(at+1);
                     if(ends.empty()||ends.back()!=cand->end())ends.push_back(cand->end());
@@ -233,7 +234,7 @@ static void append_repairs(RegroupState& r,rime::Context* probe,int boundary,int
                     auto candidate=probe->composition().back().GetCandidateAt(i);if(!candidate)break;
                     auto phrase=native_phrase(candidate);
                     if(!phrase||candidate->start()!=from||candidate->end()!=to||cp_count(candidate->text())!=1)continue;
-                    auto spans=phrase->spans();if(spans.start()!=from||spans.NextStop(from)!=to)continue;
+                    if(rime::Candidate::GetGenuineCandidate(candidate)->type()!="user_table"){auto spans=phrase->spans();if(spans.start()!=from||spans.NextStop(from)!=to)continue;}
                     bool duplicate=false;for(auto& old:r.options)if(old.start==a&&old.end==b&&old.label==candidate->text()&&old.repaired_code==corrected){duplicate=true;break;}
                     if(duplicate)continue;
                     RegroupOption option{a,b,candidate->text(),candidate,phrase->weight()};
@@ -394,11 +395,12 @@ static bool select_regroup(RegroupState& r,RimeSessionId id,int index) {
         option.candidate=option.repaired_grouping;option.pieces.clear();
     }
     if(!option.repaired_input.empty())ctx->set_input(option.repaired_input);
+    const int delta=option.repaired_input.empty()?0:static_cast<int>(option.repaired_input.size())-static_cast<int>(r.input.size());
     rime::Composition fixed;fixed.Reset(ctx->input());
     pin_text(fixed,0,r.stops[option.start],cp_slice(r.original,0,option.start));
-    if(option.pieces.empty())pin(fixed,r.stops[option.start],r.stops[option.end],option.candidate);
+    if(option.pieces.empty())pin(fixed,r.stops[option.start],r.stops[option.end]+delta,option.candidate);
     else for(const auto& piece:option.pieces)pin(fixed,piece->start(),piece->end(),piece);
-    pin_text(fixed,r.stops[option.end],r.input.size(),cp_slice(r.original,option.end,cp_count(r.original)));
+    pin_text(fixed,r.stops[option.end]+delta,r.input.size()+delta,cp_slice(r.original,option.end,cp_count(r.original)));
     ctx->set_composition(std::move(fixed));ctx->set_caret_pos(ctx->input().size());
     // Preserve known outside alignment even though those words are pinned as
     // SimpleCandidates. Re-syllabify only the accepted native candidate span.
@@ -409,7 +411,7 @@ static bool select_regroup(RegroupState& r,RimeSessionId id,int index) {
     };
     if(option.literal||option.homophone)next=r.stops;
     else if(option.pieces.empty())append_stops(option.candidate);else for(const auto& piece:option.pieces)append_stops(piece);
-    if(!option.literal&&!option.homophone)next.insert(next.end(),r.stops.begin()+option.end+1,r.stops.end());
+    if(!option.literal&&!option.homophone)for(size_t i=option.end+1;i<r.stops.size();++i)next.push_back(r.stops[i]+delta);
     r.stops=std::move(next);r.input=ctx->input();r.original=ctx->GetCommitText();r.cache.clear();r.touches.erase(option.changed_key);
     r.options.clear();r.boundary=-1;r.focus_start=r.focus_end=-1;return true;
 }
@@ -449,7 +451,7 @@ static bool focus_character(RegroupState& r,RimeSessionId id,int target) {
         auto candidate=probe->composition().back().GetCandidateAt(i);if(!candidate)break;
         auto phrase=native_phrase(candidate);
         if(!phrase||candidate->start()!=r.stops[a]||candidate->end()!=r.stops[b]||cp_count(candidate->text())!=b-a)continue;
-        if(candidate->type()!="user_table") {
+        if(rime::Candidate::GetGenuineCandidate(candidate)->type()!="user_table") {
             auto spans=phrase->spans();size_t at=spans.start();int slot=a;
             bool same=at==r.stops[a];
             while(same&&at<spans.end()){size_t end=spans.NextStop(at);if(end<=at||++slot>b||end!=r.stops[slot]){same=false;break;}at=end;}
@@ -459,8 +461,8 @@ static bool focus_character(RegroupState& r,RimeSessionId id,int target) {
         homophones.push_back(std::move(option));
     }
     r.options=std::move(homophones);
-    r.options.insert(r.options.end(),regrouped.begin(),regrouped.end());
-    r.options.insert(r.options.end(),repairs.begin(),repairs.end());
+
+
     // Append exact-reading single-character choices using the same isolated
     // translator, with candidate offsets anchored to the tapped syllable.
     if(b-a>1) {
@@ -476,8 +478,49 @@ static bool focus_character(RegroupState& r,RimeSessionId id,int target) {
             option.homophone=true;option.character=true;r.options.push_back(std::move(option));
         }
     }
+    // Character focus: whole words, exact-reading characters, bounded repairs.
+    std::stable_sort(repairs.begin(),repairs.end(),[](const auto& x,const auto& y){return x.weight>y.weight;});
+    int slips=0;
+    for(const auto& option:repairs)if(option.start<=target&&option.end>target&&slips++<20)r.options.push_back(option);
     std::set<std::string> seen;
     r.options.erase(std::remove_if(r.options.begin(),r.options.end(),[&](const RegroupOption& option){return !seen.insert(option.label).second;}),r.options.end());
     r.boundary=-1;
     r.focus_start=a;r.focus_end=b;return true;
+}
+
+static bool focus_key(RegroupState& r,RimeSessionId id,int at) {
+    if(!capture(r,id)||at<=0||static_cast<size_t>(at)>r.input.size())return false;
+    auto stops=r.stops;
+    auto it=std::lower_bound(stops.begin(),stops.end(),static_cast<size_t>(at));
+    int target=std::max(0,static_cast<int>(it-stops.begin())-1);
+    if(!focus_character(r,id,target))return false;
+    // Use the full scored repair pool, before the character-focus slip cap.
+    std::vector<RegroupOption> near,rest=r.options;
+    for(const auto& item:r.cache)for(auto option:item.second) {
+        if(option.changed_key==at-1&&!option.repaired_input.empty()&&
+           default_neighbour(r.input[at-1],option.repaired_input[at-1])) {
+            option.caret_neighbour=true;near.push_back(option);
+        }
+    }
+    // Missing-key choices are confined to the incomplete syllable at the caret.
+    size_t from=stops[target],to=stops[target+1];std::string code=r.input.substr(from,to-from);
+    if(code.size()<4&&!normal_toned(r,code))for(size_t p=0;p<=code.size();++p)for(char key:std::string("1qaz2wsxedcrfv5tgbyhnujm8ik,9ol.0p;/- 6347")){
+        auto corrected=code;corrected.insert(p,1,key);if(!normal_toned(r,corrected))continue;
+        std::string input=r.input;input.replace(from,to-from,corrected);auto* probe=context(r.probe);if(!probe)continue;
+        probe->Clear();probe->set_input(input.substr(0,to+1));rime::Composition prefix;prefix.Reset(probe->input());
+        pin_text(prefix,0,from,cp_slice(r.original,0,target));prefix.Forward();probe->set_composition(std::move(prefix));probe->set_caret_pos(to+1);
+        if(probe->composition().empty())continue;
+        for(int i=0;i<5;++i){auto c=probe->composition().back().GetCandidateAt(i);if(!c)break;auto phrase=native_phrase(c);
+            if(!phrase||c->start()!=from||c->end()!=to+1||cp_count(c->text())!=1)continue;
+            RegroupOption option{target,target+1,c->text(),c,phrase->weight()};option.repaired_input=input;option.repaired_code=corrected;
+            option.changed_key=from+p;option.caret_neighbour=true;option.neighbour=true;option.weight=sentence_score(r,option);near.push_back(std::move(option));
+        }
+    }
+    std::stable_sort(near.begin(),near.end(),[](const auto& a,const auto& b){return a.weight>b.weight;});
+    r.options.clear();std::set<std::string> seen;
+    for(const auto& option:near)if(r.options.size()<8&&seen.insert(option.label).second)r.options.push_back(option);
+    for(const auto& option:rest)if(option.homophone&&seen.insert(option.label).second)r.options.push_back(option);
+    for(const auto& item:r.cache)for(const auto& option:item.second)if(option.repaired_input.empty()&&!option.homophone&&seen.insert(option.label).second)r.options.push_back(option);
+    int slips=0;for(const auto& option:rest)if(!option.repaired_input.empty()&&slips<20&&seen.insert(option.label).second){r.options.push_back(option);++slips;}
+    return true;
 }

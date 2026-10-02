@@ -387,299 +387,361 @@
       "description": "Monotonic milliseconds within one declared voice-server clock domain. Null means stage did not complete before response; eventual gateway completion belongs in correlated telemetry."
     },
     "decision": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": [
-        "display",
-        "selected_id",
-        "jev_status",
-        "choice_confidence",
-        "meaning_probability",
-        "reason"
-      ],
-      "properties": {
-        "display": {
-          "type": "string",
-          "enum": [
-            "chip",
-            "bubble",
-            "none"
-          ]
-        },
-        "selected_id": {
-          "type": "string",
-          "enum": [
-            "keep",
-            "none",
-            "c1",
-            "c2",
-            "c3"
-          ]
-        },
-        "jev_status": {
-          "type": "string",
-          "enum": [
-            "ok",
-            "late",
-            "unavailable",
-            "not_called",
-            "rejected"
-          ]
-        },
-        "choice_confidence": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/probability"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "meaning_probability": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/probability"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "reason": {
-          "type": "string",
-          "enum": [
-            "ready",
-            "no_match",
-            "jev_late",
-            "jev_unavailable",
-            "jev_rejected",
-            "gemini_late",
-            "gemini_invalid",
-            "quota",
-            "frozen",
-            "egress"
-          ]
-        }
-      },
-      "allOf": [
+      "anyOf": [
         {
-          "if": {
-            "properties": {
-              "display": {
-                "const": "chip"
-              }
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "display",
+            "selected_id",
+            "jev_status",
+            "choice_confidence",
+            "meaning_probability",
+            "reason"
+          ],
+          "properties": {
+            "display": {
+              "type": "string",
+              "enum": [
+                "chip",
+                "bubble",
+                "none"
+              ]
+            },
+            "selected_id": {
+              "type": "string",
+              "enum": [
+                "keep",
+                "none",
+                "c1",
+                "c2",
+                "c3"
+              ]
+            },
+            "jev_status": {
+              "type": "string",
+              "enum": [
+                "ok",
+                "late",
+                "unavailable",
+                "not_called",
+                "rejected"
+              ]
+            },
+            "choice_confidence": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/probability"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "meaning_probability": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/probability"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "reason": {
+              "type": "string",
+              "enum": [
+                "ready",
+                "no_match",
+                "jev_late",
+                "jev_unavailable",
+                "jev_rejected",
+                "gemini_late",
+                "gemini_invalid",
+                "quota",
+                "frozen",
+                "egress"
+              ]
             }
           },
-          "then": {
-            "properties": {
-              "selected_id": {
-                "$ref": "#/$defs/candidate_id"
+          "allOf": [
+            {
+              "if": {
+                "properties": {
+                  "display": {
+                    "const": "chip"
+                  }
+                }
               },
-              "jev_status": {
-                "const": "ok"
-              },
-              "choice_confidence": {
-                "type": "number",
-                "minimum": 0.85,
-                "maximum": 1
-              },
-              "meaning_probability": {
-                "type": "number",
-                "minimum": 0.85,
-                "maximum": 1
-              },
-              "reason": {
-                "const": "ready"
+              "then": {
+                "properties": {
+                  "selected_id": {
+                    "$ref": "#/$defs/candidate_id"
+                  },
+                  "jev_status": {
+                    "const": "ok"
+                  },
+                  "choice_confidence": {
+                    "type": "number",
+                    "minimum": 0.85,
+                    "maximum": 1
+                  },
+                  "meaning_probability": {
+                    "type": "number",
+                    "minimum": 0.85,
+                    "maximum": 1
+                  },
+                  "reason": {
+                    "const": "ready"
+                  }
+                }
               }
-            }
-          }
-        },
-        {
-          "if": {
-            "properties": {
-              "display": {
-                "const": "bubble"
+            },
+            {
+              "if": {
+                "properties": {
+                  "display": {
+                    "const": "bubble"
+                  },
+                  "jev_status": {
+                    "const": "ok"
+                  }
+                }
               },
-              "jev_status": {
-                "const": "ok"
+              "then": {
+                "properties": {
+                  "selected_id": {
+                    "$ref": "#/$defs/candidate_id"
+                  },
+                  "choice_confidence": {
+                    "type": "number",
+                    "minimum": 0.6,
+                    "exclusiveMaximum": 0.85
+                  },
+                  "meaning_probability": {
+                    "type": "number",
+                    "minimum": 0.85,
+                    "maximum": 1
+                  },
+                  "reason": {
+                    "const": "ready"
+                  }
+                }
               }
-            }
-          },
-          "then": {
-            "properties": {
-              "selected_id": {
-                "$ref": "#/$defs/candidate_id"
+            },
+            {
+              "if": {
+                "properties": {
+                  "display": {
+                    "const": "bubble"
+                  },
+                  "jev_status": {
+                    "not": {
+                      "const": "ok"
+                    }
+                  }
+                }
               },
-              "choice_confidence": {
-                "type": "number",
-                "minimum": 0.6,
-                "exclusiveMaximum": 0.85
-              },
-              "meaning_probability": {
-                "type": "number",
-                "minimum": 0.85,
-                "maximum": 1
-              },
-              "reason": {
-                "const": "ready"
+              "then": {
+                "properties": {
+                  "selected_id": {
+                    "const": "none"
+                  },
+                  "jev_status": {
+                    "enum": [
+                      "late",
+                      "unavailable"
+                    ]
+                  },
+                  "choice_confidence": {
+                    "type": "null"
+                  },
+                  "meaning_probability": {
+                    "type": "null"
+                  },
+                  "reason": {
+                    "enum": [
+                      "jev_late",
+                      "jev_unavailable"
+                    ]
+                  }
+                }
               }
-            }
-          }
-        },
-        {
-          "if": {
-            "properties": {
-              "display": {
-                "const": "bubble"
+            },
+            {
+              "if": {
+                "properties": {
+                  "display": {
+                    "const": "none"
+                  }
+                }
               },
-              "jev_status": {
-                "not": {
-                  "const": "ok"
+              "then": {
+                "properties": {
+                  "selected_id": {
+                    "enum": [
+                      "keep",
+                      "none"
+                    ]
+                  }
+                }
+              }
+            },
+            {
+              "if": {
+                "properties": {
+                  "jev_status": {
+                    "const": "late"
+                  }
+                }
+              },
+              "then": {
+                "properties": {
+                  "choice_confidence": {
+                    "type": "null"
+                  },
+                  "meaning_probability": {
+                    "type": "null"
+                  },
+                  "reason": {
+                    "const": "jev_late"
+                  }
+                }
+              }
+            },
+            {
+              "if": {
+                "properties": {
+                  "jev_status": {
+                    "const": "unavailable"
+                  }
+                }
+              },
+              "then": {
+                "properties": {
+                  "choice_confidence": {
+                    "type": "null"
+                  },
+                  "meaning_probability": {
+                    "type": "null"
+                  },
+                  "reason": {
+                    "const": "jev_unavailable"
+                  }
+                }
+              }
+            },
+            {
+              "if": {
+                "properties": {
+                  "jev_status": {
+                    "enum": [
+                      "not_called",
+                      "rejected"
+                    ]
+                  }
+                }
+              },
+              "then": {
+                "properties": {
+                  "display": {
+                    "const": "none"
+                  }
+                }
+              }
+            },
+            {
+              "if": {
+                "properties": {
+                  "jev_status": {
+                    "const": "not_called"
+                  }
+                }
+              },
+              "then": {
+                "properties": {
+                  "choice_confidence": {
+                    "type": "null"
+                  },
+                  "meaning_probability": {
+                    "type": "null"
+                  }
+                }
+              }
+            },
+            {
+              "if": {
+                "properties": {
+                  "jev_status": {
+                    "const": "rejected"
+                  }
+                }
+              },
+              "then": {
+                "properties": {
+                  "reason": {
+                    "const": "jev_rejected"
+                  }
                 }
               }
             }
-          },
-          "then": {
-            "properties": {
-              "selected_id": {
-                "const": "none"
-              },
-              "jev_status": {
-                "enum": [
-                  "late",
-                  "unavailable"
-                ]
-              },
-              "choice_confidence": {
-                "type": "null"
-              },
-              "meaning_probability": {
-                "type": "null"
-              },
-              "reason": {
-                "enum": [
-                  "jev_late",
-                  "jev_unavailable"
-                ]
-              }
-            }
-          }
+          ]
         },
         {
-          "if": {
-            "properties": {
-              "display": {
-                "const": "none"
-              }
-            }
-          },
-          "then": {
-            "properties": {
-              "selected_id": {
-                "enum": [
-                  "keep",
-                  "none"
-                ]
-              }
-            }
-          }
-        },
-        {
-          "if": {
-            "properties": {
-              "jev_status": {
-                "const": "late"
-              }
-            }
-          },
-          "then": {
-            "properties": {
-              "choice_confidence": {
-                "type": "null"
-              },
-              "meaning_probability": {
-                "type": "null"
-              },
-              "reason": {
-                "const": "jev_late"
-              }
-            }
-          }
-        },
-        {
-          "if": {
-            "properties": {
-              "jev_status": {
-                "const": "unavailable"
-              }
-            }
-          },
-          "then": {
-            "properties": {
-              "choice_confidence": {
-                "type": "null"
-              },
-              "meaning_probability": {
-                "type": "null"
-              },
-              "reason": {
-                "const": "jev_unavailable"
-              }
-            }
-          }
-        },
-        {
-          "if": {
-            "properties": {
-              "jev_status": {
-                "enum": [
-                  "not_called",
-                  "rejected"
-                ]
-              }
-            }
-          },
-          "then": {
-            "properties": {
-              "display": {
-                "const": "none"
-              }
-            }
-          }
-        },
-        {
-          "if": {
-            "properties": {
-              "jev_status": {
-                "const": "not_called"
-              }
-            }
-          },
-          "then": {
-            "properties": {
-              "choice_confidence": {
-                "type": "null"
-              },
-              "meaning_probability": {
-                "type": "null"
-              }
-            }
-          }
-        },
-        {
-          "if": {
-            "properties": {
-              "jev_status": {
-                "const": "rejected"
-              }
-            }
-          },
-          "then": {
-            "properties": {
-              "reason": {
-                "const": "jev_rejected"
-              }
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "display",
+            "selected_id",
+            "jev_status",
+            "choice_confidence",
+            "meaning_probability",
+            "reason"
+          ],
+          "properties": {
+            "display": {
+              "enum": [
+                "auto",
+                "bubble",
+                "none"
+              ]
+            },
+            "selected_id": {
+              "type": "string",
+              "enum": [
+                "keep",
+                "none",
+                "c1",
+                "c2",
+                "c3"
+              ]
+            },
+            "jev_status": {
+              "const": "not_called"
+            },
+            "choice_confidence": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/probability"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "meaning_probability": {
+              "type": "null"
+            },
+            "reason": {
+              "enum": [
+                "ready",
+                "no_match",
+                "gemini_invalid",
+                "gemini_late",
+                "quota",
+                "frozen",
+                "egress"
+              ]
             }
           }
         }
@@ -742,6 +804,9 @@
         },
         "left_context": {
           "$ref": "#/$defs/left_context"
+        },
+        "client_auto": {
+          "type": "boolean"
         }
       }
     },
@@ -759,6 +824,9 @@
           },
           "minItems": 0,
           "maxItems": 3
+        },
+        "judgement": {
+          "$ref": "#/$defs/judgement"
         }
       },
       "description": "Only envelope generated by Gemini; excludes trusted identity, billing, keep, Jev scores, versions and timestamps."
@@ -810,7 +878,7 @@
         "candidates": {
           "type": "array",
           "items": {
-            "$ref": "#/$defs/candidate"
+            "$ref": "#/$defs/wire_candidate"
           },
           "minItems": 0,
           "maxItems": 3
@@ -843,10 +911,17 @@
           ]
         },
         "policy_version": {
-          "const": "sentence-r2-v1"
+          "enum": [
+            "sentence-r2-v1",
+            "sentence-auto-v2"
+          ]
         },
         "server_times": {
           "$ref": "#/$defs/server_times"
+        },
+        "digest": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
         }
       },
       "allOf": [
@@ -880,6 +955,71 @@
         }
       ],
       "description": "Gateway validates candidates; voice server composes trusted Jev decision/timestamps using the same gateway-owned contract validator in-process, without a new RPC or provider call. Phone suppresses all UI in shadow, regardless of display hint."
+    },
+    "judgement": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "selected_id",
+        "confidence"
+      ],
+      "properties": {
+        "selected_id": {
+          "enum": [
+            "keep",
+            "c1",
+            "c2",
+            "c3"
+          ]
+        },
+        "confidence": {
+          "$ref": "#/$defs/probability"
+        }
+      }
+    },
+    "wire_candidate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "text",
+        "repairs"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/candidate_id"
+        },
+        "text": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "repairs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/repair"
+          },
+          "minItems": 0,
+          "maxItems": 2
+        },
+        "protected": {
+          "type": "boolean"
+        },
+        "protected_categories": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "enum": [
+              "name",
+              "installed_word",
+              "number_amount",
+              "date_time",
+              "citation",
+              "polarity_modal"
+            ]
+          }
+        }
+      }
     }
   },
   "x-gateway-invariants": [

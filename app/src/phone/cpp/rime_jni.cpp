@@ -149,6 +149,8 @@ extern "C" JNIEXPORT jboolean JNICALL Java_com_simon_voiceime_RimeZhuyinNative_n
     std::lock_guard<std::mutex> lock(g_mutex);
     const char* input=s->api->get_input(s->id);
     if(g_users!=1 || (input && *input) || !s->unparsed.empty() || !s->pending.empty())return false;
+    s->regroup.options.clear();s->regroup.cache.clear();
+    if(s->regroup.probe){s->api->destroy_session(s->regroup.probe);s->regroup.probe=0;}
     s->api->destroy_session(s->id);
     s->id=s->api->create_session();
     return s->id && s->api->select_schema(s->id,"bopomofo_express");
@@ -428,7 +430,7 @@ extern "C" JNIEXPORT jobjectArray JNICALL Java_com_simon_voiceime_RimeZhuyinNati
 extern "C" JNIEXPORT jobjectArray JNICALL Java_com_simon_voiceime_RimeZhuyinNative_nativeOptionKinds(JNIEnv* env,jclass,jlong h) {
     auto* s=state(h);jclass cls=env->FindClass("java/lang/String");int n=s?s->regroup.options.size():0;
     auto out=env->NewObjectArray(n,cls,nullptr);
-    for(int i=0;i<n;i++){const auto& option=s->regroup.options[i];auto value=env->NewStringUTF(option.homophone?"homophone":option.repaired_input.empty()?"regroup":"slip");env->SetObjectArrayElement(out,i,value);env->DeleteLocalRef(value);}
+    for(int i=0;i<n;i++){const auto& option=s->regroup.options[i];auto value=env->NewStringUTF(option.caret_neighbour?"neighbour":option.homophone?"homophone":option.repaired_input.empty()?"regroup":"slip");env->SetObjectArrayElement(out,i,value);env->DeleteLocalRef(value);}
     return out;
 }
 extern "C" JNIEXPORT jbyteArray JNICALL Java_com_simon_voiceime_RimeZhuyinNative_nativePreview(JNIEnv* env,jclass,jlong h) {
@@ -526,7 +528,7 @@ static bool sentence_map(Session* s,const std::string& raw,const std::string& te
             // Installed user_table phrases have no dictionary syllable spans.
             // Their native translator already matches the complete local table code;
             // preserve exact source start/end and text matching for this path.
-            if(candidate->type()!="user_table") {
+            if(rime::Candidate::GetGenuineCandidate(candidate)->type()!="user_table") {
                 auto spans=phrase->spans();size_t pos=spans.start();int syllables=0;
                 while(pos<spans.end()){size_t next=spans.NextStop(pos);if(next<=pos)break;pos=next;++syllables;}
                 if(spans.start()!=start||pos!=end||syllables!=cp_count(value))continue;
@@ -575,11 +577,55 @@ extern "C" JNIEXPORT jboolean JNICALL Java_com_simon_voiceime_RimeZhuyinNative_n
     auto stops=s->regroup.stops;if(static_cast<size_t>(at)>=stops.back())return false;
     auto it=std::upper_bound(stops.begin(),stops.end(),static_cast<size_t>(at));
     int target=std::max(0,static_cast<int>(it-stops.begin())-1);
-    bool ok=focus_character(s->regroup,s->id,target);s->key_caret=at;return ok;
+    bool ok=focus_key(s->regroup,s->id,at);s->key_caret=at;return ok;
 }
 
 extern "C" JNIEXPORT jbyteArray JNICALL Java_com_simon_voiceime_RimeZhuyinNative_nativeCommitReading(JNIEnv* env,jclass,jlong h){auto* s=state(h);return bytes(env,s?s->commit_reading:"");}
 extern "C" JNIEXPORT void JNICALL Java_com_simon_voiceime_RimeZhuyinNative_nativeCopyTouches(JNIEnv*,jclass,jlong from,jlong to,jint start,jint end){
     auto* source=state(from);auto* target=state(to);if(!source||!target||start<0||end<start)return;
     for(const auto& touch:source->regroup.touches)if(touch.first>=static_cast<size_t>(start)&&touch.first<static_cast<size_t>(end))target->regroup.touches[touch.first-start]=touch.second;
+}
+
+extern "C" JNIEXPORT jobjectArray JNICALL Java_com_simon_voiceime_RimeZhuyinNative_nativeLocalRepair(JNIEnv* env,jclass,jlong h) {
+    auto* s=state(h);jclass cls=env->FindClass("java/lang/String");
+    auto empty=[&](){return env->NewObjectArray(0,cls,nullptr);};
+    if(!s||!s->regroup.prism)return empty();
+    auto& r=s->regroup;const char* raw=s->api->get_input(s->id);
+    std::string input=std::string(raw?raw:"")+s->unparsed;
+    size_t from=0,to=0;bool invalid=false;
+    while(from<input.size()) {
+        to=from;while(to<input.size()&&std::string(" 6347").find(input[to])==std::string::npos)++to;
+        if(to<input.size())++to;
+        std::string code=input.substr(from,to-from);
+        std::vector<rime::Prism::Match> prefixes;r.prism->ExpandSearch(code,&prefixes,512);
+        bool valid=false;for(const auto& match:prefixes){auto a=r.prism->QuerySpelling(match.value);for(;!a.exhausted();a.Next())if(a.properties().type==rime::kNormalSpelling)valid=true;}
+        if(!valid){invalid=true;break;}from=to;
+    }
+    if(!invalid||to-from>4)return empty();
+    if(!r.probe){r.probe=s->api->create_session();s->api->select_schema(r.probe,"bopomofo_express");}
+    if(!r.grammar){auto* f=engine_cast<rime::Grammar::Component>(rime::Registry::instance().Find("grammar"));if(f)r.grammar.reset(f->Create(rime::Service::instance().GetSession(s->id)->schema()->config()));}
+    if(!r.grammar)return empty();
+    auto* probe=context(r.probe);double best=-1e100;std::string bestKeys,bestText;
+    auto evaluate=[&](std::string code){
+        if(!normal_toned(r,code))return;
+        std::string repaired=input;repaired.replace(from,to-from,code);
+        probe->Clear();probe->set_input(repaired);auto& comp=probe->composition();if(comp.empty())return;
+        for(int i=0;i<5;++i){auto tail=comp.back().GetCandidateAt(i);if(!tail)break;
+            std::vector<rime::an<rime::Candidate>> pieces;std::string text;bool good=true;
+            for(size_t j=0;j<comp.size();++j){auto c=j+1==comp.size()?tail:comp[j].GetSelectedCandidate();if(!c){good=false;break;}pieces.push_back(c);text+=c->text();}
+            if(!good||has_unparsed_preedit_keys(text)||text.empty())continue;
+            RegroupState score;score.original="";
+            std::vector<rime::DictEntry> all;for(const auto& p:pieces){auto w=words(p);all.insert(all.end(),w.begin(),w.end());}
+            double value=0;for(size_t j=0;j<all.size();++j){std::string left;if(j>1)left+=all[j-2].text;if(j)left+=all[j-1].text;value+=rime::Grammar::Evaluate(left,all[j].text,all[j].weight,j+1==all.size(),r.grammar.get());}
+            if(value>best){best=value;bestKeys=repaired;bestText=text;}
+        }
+    };
+    std::string code=input.substr(from,to-from);
+    for(size_t p=0;p<code.size();++p)for(char key:kPhysical)if(default_neighbour(code[p],key)){auto c=code;c[p]=key;evaluate(c);}
+    // An insertion changes one original slot boundary, never reorders typed keys.
+    if(code.size()<4)for(size_t p=0;p<=code.size();++p)for(char key:kPhysical){auto c=code;c.insert(p,1,key);evaluate(c);}
+    if(bestKeys.empty())return empty();
+    jobjectArray out=env->NewObjectArray(2,cls,nullptr);
+    auto keys=env->NewStringUTF(glyph_text(bestKeys).c_str()),text=env->NewStringUTF(bestText.c_str());
+    env->SetObjectArrayElement(out,0,keys);env->SetObjectArrayElement(out,1,text);env->DeleteLocalRef(keys);env->DeleteLocalRef(text);return out;
 }

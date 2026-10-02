@@ -23,10 +23,15 @@ final class VoicePendingQueue {
     interface Observer { void event(String phase, String sessionId, long audioMs, long bytes, int attempts, String error); }
     private static final long MIN_BACKOFF_MS = 5_000L, MAX_BACKOFF_MS = 600_000L;
     private final File dir;
+    private Observer discardObserver;
+    private int emptyDiscards;
     private final List<long[]> oversizeDiscardEvents = new ArrayList<>(); // IO thread only
     private final Semaphore pendingWrites = new Semaphore(8); // At most eight owned recorder reads.
     void reportOversizeDiscards(Observer observer) {
         execute(() -> {
+            discardObserver=observer;
+            for(int i=0;i<emptyDiscards;i++)observer.event("pending_discarded_empty","",0,0,0,"");
+            emptyDiscards=0;
             for (long[] event : oversizeDiscardEvents)
                 observer.event("pending_discarded_oversize", "", event[0], event[1], 0, "");
             oversizeDiscardEvents.clear();
@@ -332,6 +337,7 @@ final class VoicePendingQueue {
                 JSONObject m=metadata.get(id);
                 if(m==null||!"pending".equals(m.optString("state"))||capturing.contains(id)||discarded.contains(id))return null;
                 if(pcm(id).exists())flushFile(id);
+                if(discardEmpty(id))return null;
                 if(!m.has("result_text")&&!m.optBoolean("ignore_legacy_result")) {String legacy=readResult(id);if(legacy!=null)m.put("result_text",legacy);}
                 m.put("state","uploading").put("attempts",m.optInt("attempts")+1);writeMeta(id,m);publish(id);
                 return new JSONObject(m.toString());
@@ -539,6 +545,7 @@ final class VoicePendingQueue {
             String id=f.getName().substring(0,f.getName().length()-4);sizes.put(id,f.length());cachedTotalBytes+=f.length();
             JSONObject m=metadata.get(id);
             try {
+                if(discardEmpty(id))continue;
                 if(m==null) {m=new JSONObject().put("schema_version",6).put("started_at",f.lastModified()).put("sample_rate",sampleRate).put("state","pending").put("attempts",0).put("last_error","recovered_missing_metadata");metadata.put(id,m);writeMeta(id,m);}
                 else {
                     m.remove("retry_mode");m.remove("requires_full_verification");
@@ -559,8 +566,20 @@ final class VoicePendingQueue {
         pruneArchivedMetadata();
     }
     void afterRecovery(Runnable callback){execute(callback);}
+    private boolean discardEmpty(String id)throws IOException {
+        JSONObject m=metadata.get(id);
+        if(!pcm(id).isFile()||pcm(id).length()!=0||capturing.contains(id))return false;
+        flushFile(id);
+        try(FileOutputStream out=new FileOutputStream(new File(dir,"empty-discard-events.jsonl"),true)) {
+            out.write("{\"phase\":\"pending_discarded_empty\",\"bytes\":0}\n".getBytes(java.nio.charset.StandardCharsets.UTF_8));out.getFD().sync();
+        }
+        deleteFiles(id);
+        if(discardObserver==null)emptyDiscards++;else discardObserver.event("pending_discarded_empty","",0,0,0,"");
+        return true;
+    }
     private void update(String id,String state,String error,long next)throws IOException {
         JSONObject m=metadata.get(id);if(m==null||discarded.contains(id))return;
+        if("pending".equals(state)&&!capturing.contains(id)&&discardEmpty(id))return;
         try {m.put("state",state).put("last_error",error==null?"":error).put("next_attempt_at",next);writeMeta(id,m);publish(id);}
         catch(org.json.JSONException e) {throw new IOException(e);}
     }

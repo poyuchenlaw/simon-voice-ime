@@ -7,6 +7,7 @@ import java.util.List;
 /** Thin UI-facing adapter. The conversion, candidate ranking and learning remain in libchewing. */
 final class ZhuyinInputController {
     interface Engine {
+        default String[] localRepair(){return new String[0];}
         default boolean previewLiteral(int index){return false;}
         default boolean punctuation(String text){return false;}
         default List<String> optionGroups(){return Collections.emptyList();}
@@ -106,6 +107,8 @@ final class ZhuyinInputController {
     private List<MixedChoice> mixedChoices = Collections.emptyList();
     private List<String> associationCandidates = Collections.emptyList();
     private boolean learningEnabled = true;
+    private String pickRunText="",pickRunReading="",pickRunRemaining="";
+    private void breakPickRun(){pickRunText=pickRunReading=pickRunRemaining="";}
     private java.util.function.Supplier<Engine> retypeEngineFactory;
     private ZhuyinInputController retype;
     private String retypeOriginal = "", retypeCommitted = "", fixedComposition = "";
@@ -115,6 +118,7 @@ final class ZhuyinInputController {
     private boolean previewFocused;
     private int keyCaret=-1;
     private List<String> focusedOptionKinds=Collections.emptyList();
+    String[] localRepair(){return retype==null&&fixedComposition.isEmpty()?engine.localRepair():new String[0];}
     int keyCaret(){return keyCaret;}
     String candidateGroup(int i){List<String> groups=engine.optionGroups();return i>=0&&i<groups.size()?groups.get(i):"word";}
     private int tappedCharacter=-1;
@@ -122,6 +126,7 @@ final class ZhuyinInputController {
     int keyPreviewCaret(){return keyCaret<0?-1:engine.keyPreviewCaret();}
     boolean wordFocused(){return previewFocused;}
     State moveCursorToKey(int at){
+        breakPickRun();
         if(retype!=null)cancelSecondPass();
         if(!fixedComposition.isEmpty())return snapshot(false,false);
         if(!engine.keyCaret(at))return snapshot(false,false);
@@ -218,6 +223,7 @@ final class ZhuyinInputController {
     }
 
     State press(String key) {
+        breakPickRun();
         if(keyCaret>=0 && (isZhuyin(key)||"backspace".equals(key))){
             if("backspace".equals(key))engine.backspace();else engine.key(key);
             keyCaret=engine.cursorPosition();
@@ -304,6 +310,21 @@ final class ZhuyinInputController {
     }
 
     State chooseCandidate(int index) {
+        boolean defaultFocus=!previewFocused&&previewBoundary<0&&keyCaret<0&&retype==null;
+        String before=sentenceKeys();
+        if(!defaultFocus||!before.equals(pickRunRemaining))breakPickRun();
+        State picked=chooseCandidateInternal(index);String remaining=sentenceKeys();
+        if(defaultFocus&&picked.accepted&&!picked.commitText.isEmpty()&&before.endsWith(remaining)){
+            String consumed=before.substring(0,before.length()-remaining.length());
+            if(!consumed.isEmpty()&&RimeVocabularyInstaller.isPhoneticReading(consumed)){
+                pickRunText+=picked.commitText;pickRunReading+=consumed.replace(" ","ˉ");pickRunRemaining=remaining;
+                if(learningEnabled)engine.learnPhrase(pickRunText,pickRunReading);
+                if(remaining.isEmpty())breakPickRun();
+            }else breakPickRun();
+        }else breakPickRun();
+        return picked;
+    }
+    private State chooseCandidateInternal(int index) {
         keyCaret=-1;
         if((previewBoundary>=0||previewFocused)&&retype==null&&!engine.regroupLabels().isEmpty()) {
             if(!engine.chooseRegroup(index))return snapshot(false,false);
@@ -361,7 +382,7 @@ final class ZhuyinInputController {
 
     State moveCursorLeft() { if(previewBoundary>=0)return moveCursorToPreviewBoundary(Math.max(0,previewBoundary-1));mixedChoices=Collections.emptyList(); engine.moveCursor("left"); return snapshot(true, true); }
     State moveCursorRight() { if(previewBoundary>=0)return moveCursorToPreviewBoundary(Math.min(previewText().codePointCount(0,previewText().length()),previewBoundary+1));mixedChoices=Collections.emptyList(); engine.moveCursor("right"); return snapshot(true, true); }
-    State moveCursorToPreviewCharacter(int codePointIndex) { tappedCharacter=codePointIndex;keyCaret=-1;engine.moveCursorToEnd();
+    State moveCursorToPreviewCharacter(int codePointIndex) { breakPickRun(); tappedCharacter=codePointIndex;keyCaret=-1;engine.moveCursorToEnd();
         previewBoundary=-1;
         if(retype!=null)cancelSecondPass();
         if(previewFocused&&codePointIndex>=previewTargetStart&&codePointIndex<previewTargetEnd)return cancelSecondPass();
@@ -403,8 +424,9 @@ final class ZhuyinInputController {
         return snapshot(targetable, false);
     }
 
-    State clear() { keyCaret=-1; previewBoundary=-1;fixedReading=Collections.emptyList();retypeSourceReading=Collections.emptyList();closeRetype();fixedComposition="";fixedWordRanges.clear();previewFocused=false; abbreviationKeys.setLength(0); rawZhuyinKeys.setLength(0); abbreviationEntries = Collections.emptyList(); mixedChoices=Collections.emptyList(); associationCandidates = Collections.emptyList(); engine.clear(); return snapshot(true, true); }
+    State clear() { breakPickRun();keyCaret=-1; previewBoundary=-1;fixedReading=Collections.emptyList();retypeSourceReading=Collections.emptyList();closeRetype();fixedComposition="";fixedWordRanges.clear();previewFocused=false; abbreviationKeys.setLength(0); rawZhuyinKeys.setLength(0); abbreviationEntries = Collections.emptyList(); mixedChoices=Collections.emptyList(); associationCandidates = Collections.emptyList(); engine.clear(); return snapshot(true, true); }
     State punctuation(String text) {
+        breakPickRun();
         if(previewText().isEmpty())return new State("",Collections.emptyList(),text,true,0,"engine",Collections.emptyList(),0,0,true);
         if(retype!=null)return retypeState(retype.punctuation(text));
         if(!engine.punctuation(text)){System.err.println("Zhuyin punctuation retained: boundary unavailable");return snapshot(false,false);}
@@ -426,6 +448,7 @@ final class ZhuyinInputController {
         return associationSnapshot();
     }
     State chooseAssociation(int index) {
+        breakPickRun();
         if (index < 0 || index >= associationCandidates.size()) return associationSnapshot();
         String value = associationCandidates.get(index);
         associationCandidates = Collections.emptyList();

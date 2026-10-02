@@ -615,6 +615,7 @@ public class SimonIMEService extends InputMethodService {
             public boolean allowed(){EditorInfo info=getCurrentInputEditorInfo();return !protectedInputField&&info!=null&&info.inputType!=0&&info.packageName!=null&&currentKeyboardMode==KeyboardMode.BOPOMOFO;}
             public void replace(ZhuyinInputController controller){zhuyinInput=controller;applyZhuyinState(controller.state());}
             public void render(){renderSentenceOptions();}
+            public void commitSuggestion(){applyZhuyinState(zhuyinInput.press("enter"));}
         }); } catch(Exception unavailable){Log.w(TAG,"Sentence layer unavailable; local keyboard retained",unavailable);}
 
 
@@ -3856,6 +3857,7 @@ public class SimonIMEService extends InputMethodService {
         if(!"space".equals(key)&&!"enter".equals(key))sentenceInstalledCommit=null;
         boolean editing=zhuyinInput.keyCaret()>=0;
         int keyCountBefore=zhuyinInput.sentenceKeys().length();
+        if(sentencePhone!=null&&sentencePhone.beforeKey(key))return zhuyinInput.state();
         ZhuyinInputController.State state=zhuyinInput.press(key);
         if(editing){int after=zhuyinInput.sentenceKeys().length();recordCursorEvent("key_caret","edit","",-1,Math.max(0,keyCountBefore-after),isBopomofoSymbol(key)?1:0);}
         if(!protectedInputField&&touchShadow!=null&&pendingBopomofoKeyTouch!=null&&key.equals(pendingBopomofoKeyTouch.key)&&pendingBopomofoKeyTouch.shadow!=null)touchShadow.recordRepairTouch(zhuyinInput);
@@ -4223,24 +4225,12 @@ public class SimonIMEService extends InputMethodService {
         if (state == null) return;
         if(sentencePhone!=null)sentencePhone.changed(false);
         renderZhuyinStreamPreview(zhuyinInput.previewText());
-        if(boStreamPreview!=null&&zhuyinInput.wordFocused()){
-            android.text.SpannableString marked=highlightZhuyinTarget(zhuyinInput.previewText(),state.targetStart,state.targetEnd);
-            int cp=zhuyinInput.tappedCharacter();String value=marked.toString();
-            if(cp>=0&&cp<value.codePointCount(0,value.length()))marked.setSpan(new android.text.style.UnderlineSpan(),value.offsetByCodePoints(0,cp),value.offsetByCodePoints(0,cp+1),android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
-            boStreamPreview.setText(marked);
-        }
-        if(boStreamPreview instanceof PreviewCursorView)((PreviewCursorView)boStreamPreview).setBoundary(zhuyinInput.keyCaret()>=0?zhuyinInput.keyPreviewCaret():zhuyinInput.previewBoundary());
+        if(sentencePhone!=null&&boStreamPreview!=null)boStreamPreview.setText(sentencePhone.mark(zhuyinInput.previewText()));
+        if(boStreamPreview instanceof PreviewCursorView)((PreviewCursorView)boStreamPreview).setBoundary(zhuyinInput.keyCaret()>=0?zhuyinInput.keyPreviewCaret():zhuyinInput.wordFocused()?zhuyinInput.tappedCharacter():zhuyinInput.previewBoundary());
         TextView reading=bopomofoKeyboard==null?null:bopomofoKeyboard.findViewById(R.id.boPhoneticPreview);
         if(reading!=null){
             String phonetic=zhuyinInput.phoneticText();
-            if(zhuyinInput.wordFocused()){
-                List<String> syllables=zhuyinInput.phoneticSyllables();int begin=0,end=0;
-                for(int i=0;i<syllables.size();i++){if(i<state.targetStart)begin+=syllables.get(i).length();if(i<state.targetEnd)end+=syllables.get(i).length();}
-                android.text.SpannableString marked=highlightZhuyinTarget(phonetic,begin,end);
-                int tapped=zhuyinInput.tappedCharacter(),from=0;
-                for(int i=0;i<syllables.size();i++){if(i==tapped){int to=from+syllables.get(i).length();if(to<=marked.length())marked.setSpan(new android.text.style.UnderlineSpan(),from,to,android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);break;}from+=syllables.get(i).length();}
-                reading.setText(marked);
-            }else reading.setText(phonetic);
+            reading.setText(phonetic);
             if(reading instanceof PreviewCursorView)((PreviewCursorView)reading).setBoundary(zhuyinInput.keyCaret());
             installKeyCaretTouch(reading);
             reading.post(()->{
@@ -4337,6 +4327,10 @@ public class SimonIMEService extends InputMethodService {
                     float at=layout.getPrimaryHorizontal(shown.offsetByCodePoints(0,cp));
                     float d=Math.abs(x-at);if(d<distance){nearest=cp;distance=d;}
                 }
+                if(action==MotionEvent.ACTION_UP&&!dragging&&sentencePhone!=null){
+                    int touched=layout.getOffsetForHorizontal(0,x);if(touched>0&&layout.getPrimaryHorizontal(touched)>x)touched--;
+                    if(sentencePhone.tapRevert(touched)){v.getParent().requestDisallowInterceptTouchEvent(false);return true;}
+                }
                 boolean boundary=dragging||distance<=dp(4);
                 if(action==MotionEvent.ACTION_UP&&!boundary){
                     int utf=layout.getOffsetForHorizontal(0,x);int cp=shown.codePointCount(0,Math.min(utf,shown.length()));
@@ -4405,11 +4399,11 @@ public class SimonIMEService extends InputMethodService {
 
     private TextView sentenceUndo(){
         TextView item=new TextView(this);item.setText("復原");item.setTag("sentence-option");item.setContentDescription("復原 AI 選項");
-        item.setTextColor(Color.WHITE);item.setTextSize(16);item.setGravity(Gravity.CENTER);item.setPadding(dp(12),0,dp(12),0);
+        item.setTextColor(getColor(R.color.key_text));item.setTextSize(16);item.setGravity(Gravity.CENTER);item.setPadding(dp(12),0,dp(12),0);
         item.setOnClickListener(v->sentencePhone.undo());return item;
     }
     private TextView sentenceOption(JSONObject candidate){
-        String text=candidate.optString("text"),literal=zhuyinInput.previewText();String label="";
+        String text=sentencePhone.optionText(candidate),literal=zhuyinInput.previewText();String label="";
         android.text.SpannableString diff=new android.text.SpannableString(label+text);
         int[] a=literal.codePoints().toArray(),b=text.codePoints().toArray();int prefix=0,suffix=0;
         while(prefix<a.length&&prefix<b.length&&a[prefix]==b[prefix])prefix++;
@@ -4418,7 +4412,7 @@ public class SimonIMEService extends InputMethodService {
         if(end==start){start=label.length();end=diff.length();}
         if(end>start)diff.setSpan(new android.text.style.BackgroundColorSpan(0xff805900),start,end,android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
         TextView item=new TextView(this);item.setTag("sentence-option");item.setText(diff);item.setContentDescription("AI 選項 "+text);
-        item.setTextColor(Color.WHITE);item.setTextSize(16);item.setGravity(Gravity.CENTER);item.setPadding(dp(12),0,dp(12),0);
+        item.setTextColor(getColor(R.color.key_text));item.setTextSize(16);item.setGravity(Gravity.CENTER);item.setPadding(dp(12),0,dp(12),0);
         item.getViewTreeObserver().addOnDrawListener(new android.view.ViewTreeObserver.OnDrawListener(){
             boolean done;
             public void onDraw(){if(done||!item.isShown())return;done=true;sentencePhone.rendered();item.post(()->{if(item.getViewTreeObserver().isAlive())item.getViewTreeObserver().removeOnDrawListener(this);});}
@@ -4431,27 +4425,29 @@ public class SimonIMEService extends InputMethodService {
     private void renderSentenceOptions(){
         if(sentencePhone==null||boCandidateItems==null)return;
         for(int i=boCandidateItems.getChildCount()-1;i>=0;i--)if("sentence-option".equals(boCandidateItems.getChildAt(i).getTag()))boCandidateItems.removeViewAt(i);
+        for(int i=0;i<boCandidateItems.getChildCount();i++)boCandidateItems.getChildAt(i).setVisibility(View.VISIBLE);
+        java.util.Set<String> correctionLabels=new java.util.HashSet<>();
         int at=0;
         if(zhuyinInput.wordFocused()){
             at=renderedZhuyinCandidateCount;
             for(int i=0;i<renderedZhuyinCandidateCount;i++)if("char".equals(zhuyinInput.candidateGroup(i))){at=i;break;}
         }
-        for(JSONObject candidate:sentencePhone.options(!zhuyinInput.wordFocused()))boCandidateItems.addView(sentenceOption(candidate),at++,new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT,dp(48)));
+        if(!zhuyinInput.wordFocused()){
+            at=0;JSONObject local=sentencePhone.localOption();
+            if(local!=null){correctionLabels.add(local.optString("text"));TextView item=new TextView(this);item.setTag("sentence-option");item.setText(local.optString("text"));item.setContentDescription("本機校正 "+local.optString("text"));
+                item.setTextColor(getColor(R.color.key_text));item.setTextSize(16);item.setGravity(Gravity.CENTER);item.setPadding(dp(12),0,dp(12),0);
+                item.setOnClickListener(v->sentencePhone.applyLocal(false));boCandidateItems.addView(item,at++,new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT,dp(48)));}
+        }
+        for(JSONObject candidate:sentencePhone.options(false))if(correctionLabels.add(sentencePhone.optionText(candidate)))boCandidateItems.addView(sentenceOption(candidate),at++,new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT,dp(48)));
+        for(int i=0;i<boCandidateItems.getChildCount();i++){
+            View child=boCandidateItems.getChildAt(i);if(!"sentence-option".equals(child.getTag())&&child instanceof TextView&&correctionLabels.contains(((TextView)child).getText().toString()))child.setVisibility(View.GONE);
+        }
         if(sentencePhone.canUndo())boCandidateItems.addView(sentenceUndo(),at,new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT,dp(48)));
         updateCandidateRightHint();
     }
 
     private static android.text.SpannableString highlightZhuyinTarget(String value,int selectionStart,int selectionEnd){
-        android.text.SpannableString span=new android.text.SpannableString(value);
-        if(value==null||value.isEmpty())return span;
-        int count=value.codePointCount(0,value.length());
-        int startCp=Math.max(0,Math.min(count,selectionStart));
-        int endCp=Math.max(startCp,Math.min(count,selectionEnd));
-        if(endCp==startCp)return span;
-        int start=value.offsetByCodePoints(0,startCp),end=value.offsetByCodePoints(0,endCp);
-        span.setSpan(new android.text.style.BackgroundColorSpan(0xffffc857),start,end,android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
-        span.setSpan(new android.text.style.ForegroundColorSpan(0xff1a1a2e),start,end,android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
-        return span;
+        return new android.text.SpannableString(value);
     }
 
     private void moveEditorCursorWithinComposition(InputConnection ic, String composing, int cursor) {

@@ -38,6 +38,15 @@ final class RimeVocabularyInstaller {
         rebuild(user);
     }
 
+    static synchronized List<String> words(File user){
+        List<String> out=new ArrayList<>();
+        try{for(String file:new String[]{"installed_vocab.tsv","committed_vocab.tsv"})for(String line:load(new File(user,file)).values())out.add(line.split("\t",2)[0]);}
+        catch(IOException unavailable){throw new IllegalStateException("installed vocabulary unavailable",unavailable);}return out;
+    }
+    static synchronized void resetLearned(File user) throws IOException {
+        writeChanged(new File(user,"committed_vocab.tsv"),"");rebuild(user);
+    }
+
     static boolean isPhoneticReading(String value) {
         return value != null && !value.isEmpty() && value.codePoints().allMatch(cp -> SYMBOLS.indexOf(cp)>=0 || cp==' ');
     }

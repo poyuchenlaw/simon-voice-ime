@@ -30,6 +30,12 @@ final class RimeZhuyinEngine implements ZhuyinInputController.Engine, AutoClosea
     private int keyOffset(){int n=0;for(int i=0;i<active;i++)n+=count(parts.get(i).keys());return n;}
     private int textOffset(){int n=0;for(int i=0;i<active;i++)n+=count(parts.get(i).text());return n;}
     private String join(boolean keys){StringBuilder b=new StringBuilder();for(Part p:parts)b.append(keys?p.keys():p.text());return b.toString();}
+    @Override public String[] localRepair(){
+        String[] fix=current().nativeEngine.localRepair();if(fix.length!=2)return fix;
+        StringBuilder keys=new StringBuilder(),text=new StringBuilder();
+        for(int i=0;i<parts.size();i++){Part p=parts.get(i);keys.append(i==active?fix[0].replace("ˉ"," "):p.keys());text.append(i==active?fix[1]:p.text());}
+        return new String[]{keys.toString(),text.toString()};
+    }
     @Override public String sentenceKeys(){return join(true);}
     @Override public String previewText(){return join(false);}
     @Override public String composingText(){return parts.size()==1?current().composingText():previewText();}
@@ -118,7 +124,21 @@ final class RimeZhuyinEngine implements ZhuyinInputController.Engine, AutoClosea
     private int keyLengthBefore(int at){int n=0;for(int i=0;i<at;i++)n+=count(parts.get(i).keys());return n;}
     @Override public boolean regroup(int boundary){return current().regroup(boundary-textOffset());}
     @Override public boolean chooseRegroup(int index){boolean ok=current().chooseRegroup(index);if(ok)moveCursorToEnd();return ok;}
-    @Override public boolean prepareSentence(String keys,String text){return parts.size()==1&&current().prepareSentence(keys,text);}
+    @Override public boolean prepareSentence(String keys,String text){
+        List<Part> mapped=new ArrayList<>();int keyStart=0,textStart=0;
+        try{
+            for(int i=0;i<keys.length();i++)if(keys.charAt(i)!=' '&&ZhuyinKeyMap.physicalKey(keys.substring(i,i+1))<0){
+                String mark=keys.substring(i,i+1);int at=text.indexOf(mark,textStart);if(at<0)throw new IllegalArgumentException("literal boundary");
+                SingleRimeZhuyinEngine e=fresh();mapped.add(new Part(e));
+                String k=keys.substring(keyStart,i),t=text.substring(textStart,at);
+                if(!k.isEmpty()&&!e.prepareSentence(k,t)||k.isEmpty()&&!t.isEmpty())throw new IllegalArgumentException("prefix mapping");
+                mapped.add(new Part(mark));keyStart=i+1;textStart=at+1;
+            }
+            SingleRimeZhuyinEngine e=fresh();mapped.add(new Part(e));String k=keys.substring(keyStart),t=text.substring(textStart);
+            if(!k.isEmpty()&&!e.prepareSentence(k,t)||k.isEmpty()&&!t.isEmpty())throw new IllegalArgumentException("clause mapping");
+        }catch(Exception invalid){for(Part p:mapped)if(p.engine!=null)p.engine.close();return false;}
+        for(Part p:parts)if(p.engine!=null)p.engine.close();parts.clear();parts.addAll(mapped);active=parts.size()-1;caret=-1;return previewText().equals(text);
+    }
     @Override public void learnPhrase(String w,String p){current().learnPhrase(w,p);}
     @Override public List<String[]> personalPhrases(){return current().personalPhrases();}
     @Override public boolean punctuation(String text){
@@ -170,6 +190,10 @@ final class SingleRimeZhuyinEngine implements ZhuyinInputController.Engine, Auto
         nativeEngine = new RimeZhuyinNative(sharedPath,userPath);
     }
 
+    @Override public void learnPhrase(String word,String pronunciation){
+        try{RimeVocabularyInstaller.remember(new File(userPath),word,pronunciation);}
+        catch(java.io.IOException failure){throw new IllegalStateException("personal vocabulary persistence",failure);}
+    }
     @Override public String sentenceKeys(){return nativeEngine.sentenceKeys();}
     @Override public boolean prepareSentence(String keys,String text){
         StringBuilder raw=new StringBuilder();for(int i=0;i<keys.length();i++){

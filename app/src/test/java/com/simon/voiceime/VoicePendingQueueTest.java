@@ -20,6 +20,14 @@ public class VoicePendingQueueTest {
         return new JSONObject().put("client_session_id",id).put("byte_count",pcm.length()).put("sha256",hex.toString());
     }
     private String response(File pcm,String id,String text)throws Exception {return new JSONObject().put("receipt",receipt(pcm,id)).put("text",text).toString();}
+    @Test public void emptyPendingIsDeletedAndNeverUploaded()throws Exception {
+        VoicePendingQueue q=queue();String id=q.begin();q.markPending(id,"test");
+        assertFalse("empty PCM must leave pending queue",q.pendingOldestFirst().contains(id));
+        assertFalse("empty PCM deleted",q.pcmFile(id).exists());
+        q.uploadOne(id,(pcm,sid,rate)->{fail("zero-byte upload");return null;},(t,start)->fail("empty delivery"),null);
+        String events=new String(Files.readAllBytes(new File(temp.getRoot(),"voice_pending/empty-discard-events.jsonl").toPath()),java.nio.charset.StandardCharsets.UTF_8);
+        assertTrue(events.contains("pending_discarded_empty"));
+    }
     @Test public void discardRetryDiskFailureStillBacksOffInMemory()throws Exception {
         VoicePendingQueue q=queue();String id=session(q,4);q.discard(id);
         File marker=new File(temp.getRoot(),"voice_pending/"+id+".discard");assertTrue(marker.delete());assertTrue(marker.mkdir());

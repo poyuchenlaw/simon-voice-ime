@@ -70,6 +70,8 @@ final class RimeZhuyinNative implements AutoCloseable {
     private static native void nativeRestore(long h,String keys,String text,int[] stops);
     String[] optionKinds(){return nativeOptionKinds(handle);}
     private static native String[] nativeOptionKinds(long h);
+    String[] localRepair(){return nativeLocalRepair(handle);}
+    private static native String[] nativeLocalRepair(long h);
     String[] regroupLabels() { byte[][] values=nativeRegroupLabels(handle);String[] out=new String[values.length];for(int i=0;i<values.length;i++)out[i]=decode(values[i]);return out; }
     String preview() { return decode(nativePreview(handle)); }
     int[] editRange() { return nativeEditRange(handle); }

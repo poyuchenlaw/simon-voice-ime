@@ -95,11 +95,20 @@ public class SettingsActivity extends Activity {
                     prefs.edit().putBoolean("auto_vocab_enabled", isChecked).apply());
         }
 
+        CheckBox autoCorrection=findViewById(R.id.checkAutoCorrection);
+        if(autoCorrection!=null){autoCorrection.setChecked(prefs.getBoolean("auto_correction",false));autoCorrection.setOnCheckedChangeListener((button,checked)->prefs.edit().putBoolean("auto_correction",checked).apply());}
+        Button resetWords=findViewById(R.id.btnResetZhuyinLearning);
+        if(resetWords!=null)resetWords.setOnClickListener(v->new AlertDialog.Builder(this).setTitle("重置注音選字學習")
+            .setMessage("清除已學習的選字與連續選字詞；已安裝的個人詞彙保留。")
+            .setNegativeButton("取消",null).setPositiveButton("重置",(dialog,which)->{
+                try{RimeVocabularyInstaller.resetLearned(new java.io.File(getFilesDir(),"rime/user"));Toast.makeText(this,"已重置注音選字學習",Toast.LENGTH_SHORT).show();}
+                catch(Exception failure){android.util.Log.e("Settings","reset learning failed",failure);Toast.makeText(this,"重置未完成，請再試一次",Toast.LENGTH_SHORT).show();}
+            }).show());
         android.widget.Spinner sentenceMode=findViewById(R.id.aiSentenceMode);
         if(sentenceMode!=null){
-            String[] modes={"off","shadow","suggestions"};String[] labels={"關閉","背景比對（預設）","顯示選項"};
+            String[] modes={"off","shadow","suggestions"};String[] labels={"關閉","背景比對","顯示選項（預設）"};
             sentenceMode.setAdapter(new android.widget.ArrayAdapter<>(this,android.R.layout.simple_spinner_dropdown_item,labels));
-            String saved=prefs.getString("ai_sentence_mode","shadow");int selected=1;for(int i=0;i<modes.length;i++)if(modes[i].equals(saved))selected=i;
+            String saved=prefs.getString("ai_sentence_mode","suggestions");int selected=2;for(int i=0;i<modes.length;i++)if(modes[i].equals(saved))selected=i;
             sentenceMode.setSelection(selected);sentenceMode.setOnItemSelectedListener(new android.widget.AdapterView.OnItemSelectedListener(){
                 public void onNothingSelected(android.widget.AdapterView<?> parent){}
                 public void onItemSelected(android.widget.AdapterView<?> parent,android.view.View view,int position,long id){prefs.edit().putString("ai_sentence_mode",modes[position]).apply();}

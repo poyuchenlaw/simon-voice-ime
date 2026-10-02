@@ -38,6 +38,7 @@ final class SentenceContract {
             case "string": require(v instanceof String);break;
             case "integer": require(integer(v));break;
             case "number": require(v instanceof Number && Double.isFinite(((Number)v).doubleValue()));break;
+            case "boolean": require(v instanceof Boolean);break;
             case "null": require(v==JSONObject.NULL);break;
             default: throw new IllegalArgumentException("unsupported schema");
         }
