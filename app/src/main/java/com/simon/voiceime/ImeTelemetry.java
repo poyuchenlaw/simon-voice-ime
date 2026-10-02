@@ -58,6 +58,8 @@ final class ImeTelemetry {
         catch(Exception e) { return "unknown"; }
     }
     void noteInput(){lastInputElapsed=android.os.SystemClock.elapsedRealtime();}
+    private String punctuationDestination;
+    void punctuationDestination(String into){punctuationDestination=into;}
     void record(String type,String page,JSONObject fields,boolean protectedField) {
         if("key".equals(type)||"key_outcome".equals(type)||"candidate".equals(type)||"commit".equals(type)||"correction".equals(type)||"key_outcome".equals(type))noteInput();
         if(!context.getSharedPreferences("simon_ime_prefs",Context.MODE_PRIVATE).getBoolean("ime_auto_upload",true))return;
@@ -107,6 +109,7 @@ final class ImeTelemetry {
             JSONObject fields = new JSONObject().put("key", key).put("x", x).put("y", y)
                     .put("key_center_x", cx).put("key_center_y", cy)
                     .put("key_to_candidate_ms", Math.max(0L, keyToCandidateMs));
+            if(punctuationDestination!=null){fields.put("into",punctuationDestination);punctuationDestination=null;}
             if (shadow != null) for (Iterator<String> i=shadow.keys();i.hasNext();) { String k=i.next();fields.put(k,shadow.get(k)); }
             record("key", "bopomofo", fields, protectedField);
         } catch (Exception ignored) {}
@@ -118,8 +121,9 @@ final class ImeTelemetry {
      */
     void keyOutcome(String page, String key, long keyToCandidateMs, boolean protectedField) {
         try {
-            record("key_outcome", page, new JSONObject().put("key", key)
-                    .put("key_to_candidate_ms", Math.max(0L, keyToCandidateMs)), protectedField);
+            JSONObject fields=new JSONObject().put("key",key).put("key_to_candidate_ms",Math.max(0L,keyToCandidateMs));
+            if(punctuationDestination!=null){fields.put("into",punctuationDestination);punctuationDestination=null;}
+            record("key_outcome",page,fields,protectedField);
         } catch (Exception ignored) {}
     }
     void init(String step,long ms,boolean ok,String message) {

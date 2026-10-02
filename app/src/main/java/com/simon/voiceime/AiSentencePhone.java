@@ -194,7 +194,26 @@ final class AiSentencePhone {
     void rendered(){
         if(phoneRender<0&&!options(false).isEmpty()){phoneRender=now();event("rendered");}
     }
-    List<JSONObject> options(boolean chip){return sentence.visible(request,now(),chip);}
+    List<JSONObject> options(boolean chip){
+        List<JSONObject> visible=sentence.visible(request,now(),chip);
+        ZhuyinInputController controller=host.controller();
+        if(controller==null||!controller.wordFocused())return visible;
+        ZhuyinInputController.State focus=controller.state();String literal=controller.previewText();
+        int count=literal.codePointCount(0,literal.length());
+        if(focus.targetStart<0||focus.targetEnd>count||focus.targetEnd<=focus.targetStart)return java.util.Collections.emptyList();
+        String prefix=literal.substring(0,literal.offsetByCodePoints(0,focus.targetStart));
+        String suffix=literal.substring(literal.offsetByCodePoints(0,focus.targetEnd));
+        List<String> reading=controller.phoneticSyllables();int keyStart=0,keyEnd=0;
+        for(int i=0;i<reading.size();i++){if(i<focus.targetStart)keyStart+=reading.get(i).length();if(i<focus.targetEnd)keyEnd+=reading.get(i).length();}
+        List<JSONObject> scoped=new java.util.ArrayList<>();
+        for(JSONObject option:visible){
+            String text=option.optString("text");boolean safe=text.startsWith(prefix)&&text.endsWith(suffix)&&text.length()>=prefix.length()+suffix.length();
+            JSONArray repairs=option.optJSONArray("repairs");
+            if(repairs!=null)for(int i=0;i<repairs.length();i++){JSONObject repair=repairs.optJSONObject(i);int slot=repair==null?-1:repair.optInt("key_slot",-1);if(slot<keyStart||slot>=keyEnd)safe=false;}
+            if(safe)scoped.add(option);
+        }
+        return scoped;
+    }
     boolean unranked(){
         try {return sentence.result!=null&&!"ok".equals(sentence.result.getJSONObject("decision").getString("jev_status"));
         } catch(Exception invalid){return false;}

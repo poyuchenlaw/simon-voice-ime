@@ -176,7 +176,8 @@ public class SimonIMEService extends InputMethodService {
     private HorizontalScrollView boCandidateScroll;
     private LinearLayout boCandidateItems;
     private TextView boStreamPreview;
-    private TextView boCursorLeft, boCursorRight;
+    private TextView boCandidateRightHint;
+    private String zhuyinCommitVia="other";
     private List<String> renderedZhuyinCandidates = Collections.emptyList();
     private int renderedZhuyinCandidateCount = 0;
 
@@ -218,7 +219,7 @@ public class SimonIMEService extends InputMethodService {
     private String sentenceInstalledCommit;
     private String touchSessionId = java.util.UUID.randomUUID().toString();
     private BopomofoKeyTouch pendingBopomofoKeyTouch;
-    private PopupWindow zhuyinReplacePopup;
+
 
     private static final class BopomofoKeyTouch {
         final String key; final float x; final float y; final float centerX; final float centerY;
@@ -848,10 +849,11 @@ public class SimonIMEService extends InputMethodService {
         if (boStreamPreview != null) boStreamPreview.setMovementMethod(android.text.method.LinkMovementMethod.getInstance());
         renderedZhuyinCandidates = Collections.emptyList();
         renderedZhuyinCandidateCount = 0;
-        boCursorLeft = rootView.findViewById(R.id.boCursorLeft);
-        boCursorRight = rootView.findViewById(R.id.boCursorRight);
-        if (boCursorLeft != null) boCursorLeft.setOnClickListener(v -> { if(touchShadow!=null)touchShadow.invalidate();applyZhuyinState(zhuyinInput.moveCursorLeft()); });
-        if (boCursorRight != null) boCursorRight.setOnClickListener(v -> { if(touchShadow!=null)touchShadow.invalidate();applyZhuyinState(zhuyinInput.moveCursorRight()); });
+        boCandidateRightHint=rootView.findViewById(R.id.boCandidateRightHint);
+        if(boCandidateScroll!=null){
+            boCandidateScroll.getViewTreeObserver().addOnScrollChangedListener(this::updateCandidateRightHint);
+            boCandidateScroll.addOnLayoutChangeListener((v,l,t,r,b,ol,ot,or,ob)->updateCandidateRightHint());
+        }
         if (boCandidateScroll != null) boCandidateScroll.setOnScrollChangeListener((View v, int x, int y, int oldX, int oldY) -> {
             if (boCandidateItems != null && x + v.getWidth() >= boCandidateItems.getWidth() - dp(24))
                 appendZhuyinCandidateBatch();
@@ -912,7 +914,7 @@ public class SimonIMEService extends InputMethodService {
         key.setOnClickListener(v -> showSymbolPopupOrFallback(v, symbols, columns, fallbackText));
         key.setOnLongClickListener(v -> {
             dismissSymbolPopup();
-            commitTextSafely(fallbackText);
+            commitPunctuation(fallbackText);
             return true;
         });
     }
@@ -938,7 +940,7 @@ public class SimonIMEService extends InputMethodService {
         } catch (Exception e) {
             Log.w(TAG, "Symbol popup failed; committing fallback punctuation", e);
             dismissSymbolPopup();
-            commitTextSafely(fallbackText);
+            commitPunctuation(fallbackText);
         }
     }
 
@@ -989,10 +991,10 @@ public class SimonIMEService extends InputMethodService {
     private void commitSymbolFromPopup(String symbol, String fallbackText) {
         try {
             InputConnection ic = getCurrentInputConnection();
-            if (ic != null) commitTextProgrammatically(ic, symbol);
+            commitPunctuation(symbol);
         } catch (Exception e) {
             Log.w(TAG, "Symbol commit failed; committing fallback punctuation", e);
-            commitTextSafely(fallbackText);
+            commitPunctuation(fallbackText);
         }
     }
 
@@ -1005,8 +1007,14 @@ public class SimonIMEService extends InputMethodService {
 
     private void commitPunctuation(String text) {
         if (currentKeyboardMode == KeyboardMode.BOPOMOFO && zhuyinInput != null) {
-            ZhuyinInputController.State state = zhuyinInput.flushForPunctuation();
-            applyZhuyinState(state);
+            boolean preview=!zhuyinInput.previewText().isEmpty();
+            if(imeTelemetry!=null){
+                imeTelemetry.punctuationDestination(preview?"preview":"field");
+                if(pendingBopomofoKeyTouch==null){recordBopomofoKeyOutcome(text,0L);}
+            }
+            zhuyinCommitVia="other";
+            applyZhuyinState(zhuyinInput.punctuation(text));
+            return;
         }
         InputConnection ic = getCurrentInputConnection();
         if (ic != null) commitTextProgrammatically(ic, text);
@@ -3772,10 +3780,10 @@ public class SimonIMEService extends InputMethodService {
         }
         if(imeTelemetry==null)return;
         try{JSONArray shown=new JSONArray();if(candidates!=null)for(int i=0;i<Math.min(10,candidates.size());i++)shown.put(candidates.get(i));
-            imeTelemetry.record("candidate",page,new JSONObject().put("shown",shown).put("chosen_index",chosen),protectedInputField);
+            imeTelemetry.record("candidate",page,new JSONObject().put("shown",shown).put("chosen_index",chosen).put("candidate_kind","bopomofo".equals(page)?renderedZhuyinCandidateKind:"engine").put("chosen_kind",chosen>=0&&zhuyinInput!=null&&"bopomofo".equals(page)?("association".equals(renderedZhuyinCandidateKind)?"association":zhuyinInput.candidateOrigin(chosen)):""),protectedInputField);
         }catch(Exception error){Log.w(TAG,"candidate telemetry unavailable",error);}
     }
-    private void recordCommitEvent(String page,String text,String first,String ai,boolean corrected){if(imeTelemetry==null)return;try{imeTelemetry.record("commit",page,new JSONObject().put("text",text).put("engine_top1",first==null?"":first).put("ai_suggestion",ai==null?"":ai).put("corrected",corrected),protectedInputField);}catch(Exception ignored){}}
+    private void recordCommitEvent(String page,String text,String first,String ai,boolean corrected){if(imeTelemetry==null)return;try{imeTelemetry.record("commit",page,new JSONObject().put("text",text).put("engine_top1",first==null?"":first).put("ai_suggestion",ai==null?"":ai).put("corrected",corrected).put("via","bopomofo".equals(page)?zhuyinCommitVia:"other").put("committed_codepoints",text.codePointCount(0,text.length())),protectedInputField);}catch(Exception ignored){}}
     private void recordCorrectionEvent(String page,String segment,String from,String to,String via){if(imeTelemetry==null)return;try{imeTelemetry.record("correction",page,new JSONObject().put("segment",segment).put("from",from).put("to",to).put("via",via),protectedInputField);}catch(Exception ignored){}}
 
     private void switchKeyboard(KeyboardMode mode) {
@@ -3839,11 +3847,12 @@ public class SimonIMEService extends InputMethodService {
             for(int i=0;i<total;i++){String origin=zhuyinInput.candidateOrigin(i);if(sizes.has(origin))sizes.put(origin,sizes.getInt(origin)+1);}
             if(sentencePhone!=null)sizes.put("ai",sentencePhone.options(false).size());
             imeTelemetry.record("cursor","bopomofo",new JSONObject().put("kind",kind).put("action",action)
-                .put("option_sizes",sizes).put("chosen_kind",chosen).put("chosen_rank",rank)
+                .put("option_sizes",sizes).put("chosen_kind",chosen).put("chosen_rank",rank).put("group","ai".equals(chosen)||zhuyinInput==null?"word":zhuyinInput.candidateGroup(rank-1))
                 .put("key_delete_count",deleted).put("key_insert_count",inserted),protectedInputField);
         } catch(Exception error){Log.w(TAG,"Cursor metadata could not be recorded",error);}
     }
     private ZhuyinInputController.State pressZhuyinWithTouch(String key){
+        zhuyinCommitVia="other";
         if(!"space".equals(key)&&!"enter".equals(key))sentenceInstalledCommit=null;
         boolean editing=zhuyinInput.keyCaret()>=0;
         int keyCountBefore=zhuyinInput.sentenceKeys().length();
@@ -3882,6 +3891,7 @@ public class SimonIMEService extends InputMethodService {
                     learnEnglishWord();
                     clearEnWordBuffer();
                 } else if (currentKeyboardMode == KeyboardMode.BOPOMOFO) {
+                    zhuyinCommitVia="enter";
                     ZhuyinInputController.State state = zhuyinInput.press("enter");
                     applyZhuyinState(state);
                     if (state.commitText.isEmpty() && state.composingText.isEmpty()) handleEnterKey();
@@ -4213,10 +4223,24 @@ public class SimonIMEService extends InputMethodService {
         if (state == null) return;
         if(sentencePhone!=null)sentencePhone.changed(false);
         renderZhuyinStreamPreview(zhuyinInput.previewText());
+        if(boStreamPreview!=null&&zhuyinInput.wordFocused()){
+            android.text.SpannableString marked=highlightZhuyinTarget(zhuyinInput.previewText(),state.targetStart,state.targetEnd);
+            int cp=zhuyinInput.tappedCharacter();String value=marked.toString();
+            if(cp>=0&&cp<value.codePointCount(0,value.length()))marked.setSpan(new android.text.style.UnderlineSpan(),value.offsetByCodePoints(0,cp),value.offsetByCodePoints(0,cp+1),android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+            boStreamPreview.setText(marked);
+        }
         if(boStreamPreview instanceof PreviewCursorView)((PreviewCursorView)boStreamPreview).setBoundary(zhuyinInput.keyCaret()>=0?zhuyinInput.keyPreviewCaret():zhuyinInput.previewBoundary());
         TextView reading=bopomofoKeyboard==null?null:bopomofoKeyboard.findViewById(R.id.boPhoneticPreview);
         if(reading!=null){
-            reading.setText(zhuyinInput.phoneticText());
+            String phonetic=zhuyinInput.phoneticText();
+            if(zhuyinInput.wordFocused()){
+                List<String> syllables=zhuyinInput.phoneticSyllables();int begin=0,end=0;
+                for(int i=0;i<syllables.size();i++){if(i<state.targetStart)begin+=syllables.get(i).length();if(i<state.targetEnd)end+=syllables.get(i).length();}
+                android.text.SpannableString marked=highlightZhuyinTarget(phonetic,begin,end);
+                int tapped=zhuyinInput.tappedCharacter(),from=0;
+                for(int i=0;i<syllables.size();i++){if(i==tapped){int to=from+syllables.get(i).length();if(to<=marked.length())marked.setSpan(new android.text.style.UnderlineSpan(),from,to,android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);break;}from+=syllables.get(i).length();}
+                reading.setText(marked);
+            }else reading.setText(phonetic);
             if(reading instanceof PreviewCursorView)((PreviewCursorView)reading).setBoundary(zhuyinInput.keyCaret());
             installKeyCaretTouch(reading);
             reading.post(()->{
@@ -4243,7 +4267,7 @@ public class SimonIMEService extends InputMethodService {
                 if (lastCommittedZhuyinWord != null && zhuyinAssociationHistory != null)
                     zhuyinAssociationHistory.record(lastCommittedZhuyinWord, state.commitText);
                 lastCommittedZhuyinWord = state.commitText;
-                if (zhuyinWordIndex != null) {
+                if (zhuyinWordIndex != null && state.composingText.isEmpty()) {
                     java.util.LinkedHashSet<String> next = new java.util.LinkedHashSet<>(zhuyinWordIndex.continuations(state.commitText));
                     if (zhuyinAssociationHistory != null) next.addAll(zhuyinAssociationHistory.nextWords(state.commitText));
                     if (!next.isEmpty()) state = zhuyinInput.showAssociations(new ArrayList<>(next));
@@ -4262,11 +4286,7 @@ public class SimonIMEService extends InputMethodService {
                 if (ic.setComposingText(composing, 1)) zhuyinComposingConnection = ic; // cursor stays after the full composition
             }
         }
-        if (boCursorLeft != null) boCursorLeft.setVisibility(state.composingText.isEmpty() ? View.INVISIBLE : View.VISIBLE);
-        if (boCursorRight != null) boCursorRight.setVisibility(state.composingText.isEmpty() ? View.INVISIBLE : View.VISIBLE);
         renderZhuyinCandidates(state.candidates, state.candidateKind);
-        if (zhuyinInput.isSecondPassActive()||zhuyinInput.previewBoundary()>=0||zhuyinInput.wordFocused()) showZhuyinReplaceBubble();
-        else dismissZhuyinReplaceBubble();
         renderSentenceOptions();
     }
 
@@ -4324,7 +4344,7 @@ public class SimonIMEService extends InputMethodService {
                     if(touchShadow!=null)touchShadow.invalidate();
                     cursorInteractionKind="char_tap";
                     applyZhuyinState(zhuyinInput.moveCursorToPreviewCharacter(Math.min(count-1,cp)));
-                    recordCursorEvent("char_tap","open","",-1,0,0);
+                    recordCursorEvent("char_tap",zhuyinInput.wordFocused()?"open":"cancel","",-1,0,0);
                 }else if(boundary&&nearest!=lastBoundary){
                     lastBoundary=nearest;if(touchShadow!=null)touchShadow.invalidate();
                     cursorInteractionKind=dragging?"drag":"boundary";
@@ -4373,66 +4393,13 @@ public class SimonIMEService extends InputMethodService {
                 int utf=text.offsetByCodePoints(0,nearest);
                 int key=text.substring(0,utf).replace("│","").length();
                 if(key!=last){
-                    last=key;if(touchShadow!=null)touchShadow.invalidate();
+                    last=key;cursorInteractionKind=dragging?"drag":"key_caret";if(touchShadow!=null)touchShadow.invalidate();
                     applyZhuyinState(zhuyinInput.moveCursorToKey(key));
-                    recordCursorEvent(dragging?"drag":"key_caret","place","",-1,0,0);
+                    recordCursorEvent(dragging?"drag":"key_caret",zhuyinInput.wordFocused()?"open":"cancel","",-1,0,0);
                 }
                 if(action==MotionEvent.ACTION_UP)view.getParent().requestDisallowInterceptTouchEvent(false);
                 return true;
             }
-        });
-    }
-
-    private void dismissZhuyinReplaceBubble() {
-        if (zhuyinReplacePopup != null) {
-            zhuyinReplacePopup.setOnDismissListener(null);
-            zhuyinReplacePopup.dismiss();zhuyinReplacePopup=null;
-        }
-    }
-
-    private void showZhuyinReplaceBubble() {
-        if (boStreamPreview == null || zhuyinInput == null) return;
-        dismissZhuyinReplaceBubble();
-        ZhuyinInputController.State state=zhuyinInput.state();
-        LinearLayout box = new LinearLayout(this);box.setOrientation(LinearLayout.HORIZONTAL);
-        HorizontalScrollView scroll=new HorizontalScrollView(this);scroll.addView(box);
-        LinearLayout bubble=new LinearLayout(this);bubble.setOrientation(LinearLayout.HORIZONTAL);
-        bubble.addView(scroll,new LinearLayout.LayoutParams(0,dp(48),1));
-        for (int i=0;i<state.candidates.size();i++) {
-            final int index=i;
-            TextView item = new TextView(this);item.setText(state.candidates.get(i));String origin=zhuyinInput.candidateOrigin(i);item.setContentDescription(("homophone".equals(origin)?"同音詞 ":"slip".equals(origin)?"按鍵修正 ":"重新分詞 ")+state.candidates.get(i));
-            item.setTextColor(Color.WHITE);item.setTextSize(16);item.setGravity(Gravity.CENTER);item.setPadding(dp(12),0,dp(12),0);
-            box.addView(item,new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT,dp(48)));
-            item.setOnClickListener(view->{
-                recordCursorEvent(cursorInteractionKind,"choose",zhuyinInput.candidateOrigin(index),index+1,0,0);
-                dismissZhuyinReplaceBubble();
-                recordCandidateEvent("bopomofo",state.candidates,index);
-                sentenceInstalledCommit=zhuyinWordIndex!=null&&zhuyinWordIndex.isInstalledWord(state.candidates.get(index))?state.candidates.get(index):null;
-                applyZhuyinState(zhuyinInput.chooseCandidate(index));
-            });
-        }
-        if(sentencePhone!=null){
-            for(JSONObject candidate:sentencePhone.options(false)){
-                TextView ai=sentenceOption(candidate);box.addView(ai,new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT,dp(48)));
-            }
-            if(sentencePhone.canUndo()){TextView undo=sentenceUndo();box.addView(undo,new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT,dp(48)));}
-        }
-        TextView cancel=new TextView(this);cancel.setText("取消");cancel.setTextColor(Color.WHITE);cancel.setPadding(dp(12),0,dp(12),0);cancel.setGravity(Gravity.CENTER);
-        bubble.addView(cancel,new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT,dp(48)));
-        cancel.setOnClickListener(v->{recordCursorEvent(cursorInteractionKind,"cancel","cancel",-1,0,0);dismissZhuyinReplaceBubble();if(touchShadow!=null)touchShadow.invalidate();applyZhuyinState(zhuyinInput.cancelSecondPass());});
-        PopupWindow popup=new PopupWindow(bubble,Math.min(dp(300),getResources().getDisplayMetrics().widthPixels),dp(48),false);
-        zhuyinReplacePopup=popup;popup.setOutsideTouchable(false);popup.setBackgroundDrawable(new ColorDrawable(0xff303746));
-        popup.setOnDismissListener(()->{zhuyinReplacePopup=null;if(zhuyinInput.isSecondPassActive()){if(touchShadow!=null)touchShadow.invalidate();applyZhuyinState(zhuyinInput.cancelSecondPass());}});
-        boStreamPreview.post(()->{
-            if(zhuyinReplacePopup!=popup||!boStreamPreview.isAttachedToWindow())return;
-            String visible=boStreamPreview.getText().toString();
-            int cp=Math.min(zhuyinInput.previewBoundary()>=0?zhuyinInput.previewBoundary():state.targetStart,visible.codePointCount(0,visible.length()));
-            int offset=visible.offsetByCodePoints(0,cp);
-            android.text.Layout layout=boStreamPreview.getLayout();
-            int x=layout==null?0:(int)layout.getPrimaryHorizontal(offset)+boStreamPreview.getPaddingLeft();
-            int[] location=new int[2];boStreamPreview.getLocationOnScreen(location);
-            int left=Math.max(0,Math.min(getResources().getDisplayMetrics().widthPixels-popup.getWidth(),location[0]+x-boStreamPreview.getScrollX()));
-            popup.showAsDropDown(boStreamPreview,left-location[0],-boStreamPreview.getHeight()-dp(48));
         });
     }
 
@@ -4442,7 +4409,7 @@ public class SimonIMEService extends InputMethodService {
         item.setOnClickListener(v->sentencePhone.undo());return item;
     }
     private TextView sentenceOption(JSONObject candidate){
-        String text=candidate.optString("text"),literal=zhuyinInput.previewText();String label=sentencePhone.unranked()?"AI・未排序 ":"AI ";
+        String text=candidate.optString("text"),literal=zhuyinInput.previewText();String label="";
         android.text.SpannableString diff=new android.text.SpannableString(label+text);
         int[] a=literal.codePoints().toArray(),b=text.codePoints().toArray();int prefix=0,suffix=0;
         while(prefix<a.length&&prefix<b.length&&a[prefix]==b[prefix])prefix++;
@@ -4464,10 +4431,14 @@ public class SimonIMEService extends InputMethodService {
     private void renderSentenceOptions(){
         if(sentencePhone==null||boCandidateItems==null)return;
         for(int i=boCandidateItems.getChildCount()-1;i>=0;i--)if("sentence-option".equals(boCandidateItems.getChildAt(i).getTag()))boCandidateItems.removeViewAt(i);
-        int at=0;for(JSONObject candidate:sentencePhone.options(true))boCandidateItems.addView(sentenceOption(candidate),at++,new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT,dp(48)));
+        int at=0;
+        if(zhuyinInput.wordFocused()){
+            at=renderedZhuyinCandidateCount;
+            for(int i=0;i<renderedZhuyinCandidateCount;i++)if("char".equals(zhuyinInput.candidateGroup(i))){at=i;break;}
+        }
+        for(JSONObject candidate:sentencePhone.options(!zhuyinInput.wordFocused()))boCandidateItems.addView(sentenceOption(candidate),at++,new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT,dp(48)));
         if(sentencePhone.canUndo())boCandidateItems.addView(sentenceUndo(),at,new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT,dp(48)));
-        if(!sentencePhone.options(false).isEmpty()||sentencePhone.canUndo())showZhuyinReplaceBubble();
-        else if(zhuyinInput!=null&&!zhuyinInput.isSecondPassActive()&&!zhuyinInput.wordFocused()&&zhuyinInput.previewBoundary()<0)dismissZhuyinReplaceBubble();
+        updateCandidateRightHint();
     }
 
     private static android.text.SpannableString highlightZhuyinTarget(String value,int selectionStart,int selectionEnd){
@@ -4502,8 +4473,8 @@ public class SimonIMEService extends InputMethodService {
         boCandidateItems.removeAllViews();
         renderedZhuyinCandidateCount = 0;
         renderedZhuyinCandidates = new ArrayList<>(candidates);
-        recordCandidateEvent("bopomofo",renderedZhuyinCandidates,-1);
         renderedZhuyinCandidateKind = kind;
+        recordCandidateEvent("bopomofo",renderedZhuyinCandidates,-1);
         appendZhuyinCandidateBatch();
         if (boCandidateScroll != null) boCandidateScroll.scrollTo(0, 0);
     }
@@ -4523,9 +4494,12 @@ public class SimonIMEService extends InputMethodService {
             candidate.setPadding(dp(12), 0, dp(12), 0);
             String value = renderedZhuyinCandidates.get(i);
             String origin=zhuyinInput==null?"engine":zhuyinInput.candidateOrigin(i);
-            candidate.setText(("association".equals(renderedZhuyinCandidateKind) ? "…" : "abbreviation".equals(renderedZhuyinCandidateKind)||"abbreviation".equals(origin) ? "首·" : "mixed".equals(renderedZhuyinCandidateKind) ? "音·" : "") + value);
+            candidate.setText(value);
+            candidate.setContentDescription(renderedZhuyinCandidateKind+" "+origin+" "+value);
             String kind = renderedZhuyinCandidateKind;
             candidate.setOnClickListener(v -> {
+                if(zhuyinInput.wordFocused()||zhuyinInput.keyCaret()>=0)recordCursorEvent(cursorInteractionKind,"choose",zhuyinInput.candidateOrigin(candidateIndex),candidateIndex+1,0,0);
+                zhuyinCommitVia="candidate";
                 recordCandidateEvent("bopomofo",renderedZhuyinCandidates,candidateIndex);
                 if(!"association".equals(kind)&&candidateIndex>0&&candidateIndex<renderedZhuyinCandidates.size())
                     recordCorrectionEvent("bopomofo","all",renderedZhuyinCandidates.get(0),renderedZhuyinCandidates.get(candidateIndex),"candidate");
@@ -4533,10 +4507,17 @@ public class SimonIMEService extends InputMethodService {
                 applyZhuyinState("association".equals(kind)
                     ? zhuyinInput.chooseAssociation(candidateIndex) : zhuyinInput.chooseCandidate(candidateIndex));
             });
-            boCandidateItems.addView(candidate, new LinearLayout.LayoutParams(
+            int insertAt=boCandidateItems.getChildCount();
+            if(zhuyinInput.wordFocused()&&"word".equals(zhuyinInput.candidateGroup(candidateIndex)))for(int slot=0;slot<boCandidateItems.getChildCount();slot++)if("sentence-option".equals(boCandidateItems.getChildAt(slot).getTag())){insertAt=slot;break;}
+            boCandidateItems.addView(candidate,insertAt,new LinearLayout.LayoutParams(
                     ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.MATCH_PARENT));
         }
         renderedZhuyinCandidateCount = end;
+        boCandidateItems.post(this::updateCandidateRightHint);
+    }
+
+    private void updateCandidateRightHint(){
+        if(boCandidateRightHint!=null&&boCandidateScroll!=null)boCandidateRightHint.setVisibility(boCandidateScroll.canScrollHorizontally(1)?View.VISIBLE:View.GONE);
     }
 
     /** The native engine class lives only in the phone flavor; watch never resolves or packages it. */
@@ -4560,7 +4541,6 @@ public class SimonIMEService extends InputMethodService {
 
     /** Leaving the Zhuyin page discards unfinished composition and clears the editor underline. */
     private void clearBopomofoBuffer() {
-        dismissZhuyinReplaceBubble();
         if (touchShadow != null) touchShadow.invalidate();
         if (zhuyinInput != null) applyZhuyinState(zhuyinInput.clear());
         InputConnection ic = getCurrentInputConnection();

@@ -17,13 +17,12 @@
     <HorizontalScrollView android:layout_width="match_parent" android:layout_height="26dp" android:scrollbars="none">
         <com.simon.voiceime.PreviewCursorView android:id="@+id/boPhoneticPreview" android:layout_width="wrap_content" android:layout_height="match_parent" android:gravity="center_vertical" android:paddingStart="12dp" android:paddingEnd="12dp" android:textSize="15sp" android:textColor="@color/key_text" android:singleLine="true"/>
     </HorizontalScrollView>
-    <LinearLayout android:id="@+id/boCandidateBar" android:layout_width="match_parent" android:layout_height="38dp" android:orientation="horizontal" android:layout_marginBottom="2dp">
-        <TextView android:id="@+id/boCursorLeft" android:layout_width="38dp" android:layout_height="match_parent" android:gravity="center" android:text="◀" android:textSize="15sp" android:textColor="@color/key_text" android:background="@color/key_bg" android:layout_marginEnd="2dp"/>
-        <HorizontalScrollView android:id="@+id/boCandidateScroll" android:layout_width="0dp" android:layout_height="match_parent" android:layout_weight="1" android:fillViewport="false" android:scrollbars="none">
+    <FrameLayout android:id="@+id/boCandidateBar" android:layout_width="match_parent" android:layout_height="38dp" android:layout_marginBottom="2dp">
+        <HorizontalScrollView android:id="@+id/boCandidateScroll" android:layout_width="match_parent" android:layout_height="match_parent" android:fillViewport="false" android:scrollbars="none">
             <LinearLayout android:id="@+id/boCandidateItems" android:layout_width="wrap_content" android:layout_height="match_parent" android:orientation="horizontal"/>
         </HorizontalScrollView>
-        <TextView android:id="@+id/boCursorRight" android:layout_width="38dp" android:layout_height="match_parent" android:gravity="center" android:text="▶" android:textSize="15sp" android:textColor="@color/key_text" android:background="@color/key_bg" android:layout_marginStart="2dp"/>
-    </LinearLayout>
+        <TextView android:id="@+id/boCandidateRightHint" android:layout_width="12dp" android:layout_height="match_parent" android:layout_gravity="end" android:gravity="center" android:text="›" android:textSize="16sp" android:textColor="@color/key_text" android:clickable="false" android:focusable="false" android:importantForAccessibility="no" android:visibility="gone"/>
+    </FrameLayout>
 
     <LinearLayout android:layout_width="match_parent" android:layout_height="39dp" android:orientation="horizontal" android:layout_marginBottom="2dp">
         <TextView android:layout_width="0dp" android:layout_height="match_parent" android:layout_weight="1" android:gravity="center" android:text="ㄅ" android:textSize="18sp" android:textColor="@color/keyboard_key_text" android:background="@drawable/keyboard_key" android:tag="key:ㄅ"/>

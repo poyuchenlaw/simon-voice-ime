@@ -40,6 +40,8 @@ final class RimeZhuyinNative implements AutoCloseable {
     boolean prepareSentence(String physicalKeys,String text){return nativePrepareSentence(handle,physicalKeys,text);}
     private static native byte[] nativeSentenceKeys(long h);
     private static native boolean nativePrepareSentence(long h,String keys,String text);
+    boolean focusAtKey(int at){return nativeFocusAtKey(handle,at);}
+    private static native boolean nativeFocusAtKey(long h,int at);
     boolean keyCaret(int at){return nativeKeyCaret(handle,at);}
     int keyPreviewCaret(){return nativeKeyPreviewCaret(handle);}
     private static native boolean nativeKeyCaret(long h,int at);
@@ -47,12 +49,25 @@ final class RimeZhuyinNative implements AutoCloseable {
     void backspace() { key(KEYSYM_BACKSPACE); }
     void enter() { key(KEYSYM_RETURN); }
     void space() { key(KEYSYM_SPACE); }
+    void chooseAndCommit(int index) { nativeSelectCommit(handle, index); commitReading = decode(nativeCommitReading(handle)); }
+    private static native byte[] nativeCommitReading(long h);
+    void copyTouches(RimeZhuyinNative source,int start,int end){nativeCopyTouches(source.handle,handle,start,end);}
+    private static native void nativeCopyTouches(long source,long target,int start,int end);
+    private static native void nativeSelectCommit(long h, int index);
     void choose(int index) { commitReading = decode(nativeVocabularyReading(handle)); nativeSelect(handle, index); }
     boolean focusCharacter(int index) { return nativeFocusCharacter(handle,index); }
     void recordTouch(int[] keys,double[] probabilities,boolean[] adjacent){nativeRecordTouch(handle,keys,probabilities,adjacent);}
     String[] regroupReadings(){byte[][] values=nativeRegroupReadings(handle);String[] out=new String[values.length];for(int i=0;i<values.length;i++)out[i]=decode(values[i]);return out;}
     boolean regroup(int boundary) { return nativeRegroup(handle,boundary); }
     boolean chooseRegroup(int index) { return nativeChooseRegroup(handle,index); }
+    String[] optionGroups(){return nativeOptionGroups(handle);}
+    private static native String[] nativeOptionGroups(long h);
+    void restore(java.util.List<String> readings,String text){
+        StringBuilder raw=new StringBuilder();int[] stops=new int[readings.size()+1];
+        for(int i=0;i<readings.size();i++){String reading=readings.get(i);for(int j=0;j<reading.length();j++){String glyphs="ㄅㄆㄇㄈㄉㄊㄋㄌㄍㄎㄏㄐㄑㄒㄓㄔㄕㄖㄗㄘㄙㄧㄨㄩㄚㄛㄜㄝㄞㄟㄠㄡㄢㄣㄤㄥㄦˊˇˋ˙ˉ";String physical="1qaz2wsxedcrfv5tgbyhnujm8ik,9ol.0p;/-6347 ";int g=glyphs.indexOf(reading.charAt(j));int k=reading.charAt(j)==' '?32:g<0?-1:physical.charAt(g);if(k<0)throw new IllegalArgumentException("Invalid native reading");raw.append((char)k);}stops[i+1]=raw.length();}
+        nativeRestore(handle,raw.toString(),text,stops);
+    }
+    private static native void nativeRestore(long h,String keys,String text,int[] stops);
     String[] optionKinds(){return nativeOptionKinds(handle);}
     private static native String[] nativeOptionKinds(long h);
     String[] regroupLabels() { byte[][] values=nativeRegroupLabels(handle);String[] out=new String[values.length];for(int i=0;i<values.length;i++)out[i]=decode(values[i]);return out; }

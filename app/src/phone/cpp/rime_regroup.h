@@ -56,6 +56,7 @@ struct RegroupOption {
     bool neighbour=false;
     bool literal=false;
     bool homophone=false;
+    bool character=false;
     int grouping_start=-1,grouping_end=-1;
     rime::an<rime::Candidate> repaired_grouping;
 
@@ -460,6 +461,23 @@ static bool focus_character(RegroupState& r,RimeSessionId id,int target) {
     r.options=std::move(homophones);
     r.options.insert(r.options.end(),regrouped.begin(),regrouped.end());
     r.options.insert(r.options.end(),repairs.begin(),repairs.end());
+    // Append exact-reading single-character choices using the same isolated
+    // translator, with candidate offsets anchored to the tapped syllable.
+    if(b-a>1) {
+        probe->Clear();probe->set_input(r.input.substr(0,r.stops[target+1]));
+        rime::Composition single;single.Reset(probe->input());
+        pin_text(single,0,r.stops[target],cp_slice(r.original,0,target));
+        single.Forward();probe->set_composition(std::move(single));probe->set_caret_pos(r.stops[target+1]);
+        if(!probe->composition().empty())for(int i=0;i<200;++i) {
+            auto candidate=probe->composition().back().GetCandidateAt(i);if(!candidate)break;
+            auto phrase=native_phrase(candidate);
+            if(!phrase||candidate->start()!=r.stops[target]||candidate->end()!=r.stops[target+1]||cp_count(candidate->text())!=1)continue;
+            RegroupOption option{target,target+1,candidate->text(),candidate,phrase->weight()};
+            option.homophone=true;option.character=true;r.options.push_back(std::move(option));
+        }
+    }
+    std::set<std::string> seen;
+    r.options.erase(std::remove_if(r.options.begin(),r.options.end(),[&](const RegroupOption& option){return !seen.insert(option.label).second;}),r.options.end());
     r.boundary=-1;
     r.focus_start=a;r.focus_end=b;return true;
 }
