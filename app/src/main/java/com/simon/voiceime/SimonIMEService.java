@@ -849,6 +849,7 @@ public class SimonIMEService extends InputMethodService {
         boStreamPreview = rootView.findViewById(R.id.boStreamPreview);
         if (boStreamPreview != null) boStreamPreview.setMovementMethod(android.text.method.LinkMovementMethod.getInstance());
         renderedZhuyinCandidates = Collections.emptyList();
+        rowEngineViews.clear();
         renderedZhuyinCandidateCount = 0;
         boCandidateRightHint=rootView.findViewById(R.id.boCandidateRightHint);
         if(boCandidateScroll!=null){
@@ -856,8 +857,10 @@ public class SimonIMEService extends InputMethodService {
             boCandidateScroll.addOnLayoutChangeListener((v,l,t,r,b,ol,ot,or,ob)->updateCandidateRightHint());
         }
         if (boCandidateScroll != null) boCandidateScroll.setOnScrollChangeListener((View v, int x, int y, int oldX, int oldY) -> {
-            if (boCandidateItems != null && x + v.getWidth() >= boCandidateItems.getWidth() - dp(24))
-                appendZhuyinCandidateBatch();
+            if (boCandidateItems != null && x + v.getWidth() >= boCandidateItems.getWidth() - dp(24)) {
+                int before=renderedZhuyinCandidateCount;appendZhuyinCandidateBatch();
+                if(renderedZhuyinCandidateCount!=before)renderSentenceOptions();
+            }
         });
 
         applyZhuyinState(zhuyinInput.state());
@@ -3839,7 +3842,9 @@ public class SimonIMEService extends InputMethodService {
         if(firstKey&&hint.getVisibility()==View.VISIBLE)prefs.edit().putBoolean("v650_complete_seen",true).apply();
         hint.setVisibility(!firstKey&&currentKeyboardMode==KeyboardMode.BOPOMOFO&&!prefs.getBoolean("v650_complete_seen",false)?View.VISIBLE:View.GONE);
     }
-    private String cursorInteractionKind="char_tap";
+    private String cursorInteractionKind="char_tap",cursorInteractionVia="text_caret";
+    private int cursorEditSlot=-1,cursorEditSyllable=-1;
+    private String cursorFromKey="",cursorToKey="";
     private void recordCursorEvent(String kind,String action,String chosen,int rank,int deleted,int inserted) {
         if(imeTelemetry==null||protectedInputField)return;
         try {
@@ -3847,19 +3852,42 @@ public class SimonIMEService extends InputMethodService {
             int total=zhuyinInput==null?0:zhuyinInput.state().candidates.size();
             for(int i=0;i<total;i++){String origin=zhuyinInput.candidateOrigin(i);if(sizes.has(origin))sizes.put(origin,sizes.getInt(origin)+1);}
             if(sentencePhone!=null)sizes.put("ai",sentencePhone.options(false).size());
+            int slot=cursorEditSlot>=0?cursorEditSlot:zhuyinInput==null?-1:Math.max(-1,zhuyinInput.keyCaret()-1);
+            int syllableIndex=-1,offset=0;
+            if(zhuyinInput!=null&&slot>=0)for(String syllable:zhuyinInput.phoneticSyllables()){syllableIndex++;offset+=syllable.length();if(slot<offset)break;}
+            if(cursorEditSyllable>=0)syllableIndex=cursorEditSyllable;
             imeTelemetry.record("cursor","bopomofo",new JSONObject().put("kind",kind).put("action",action)
+                .put("slot_index",slot).put("syllable_index",syllableIndex).put("from_key",cursorFromKey).put("to_key",cursorToKey).put("via",cursorInteractionVia)
                 .put("option_sizes",sizes).put("chosen_kind",chosen).put("chosen_rank",rank).put("group","ai".equals(chosen)||zhuyinInput==null?"word":zhuyinInput.candidateGroup(rank-1))
                 .put("key_delete_count",deleted).put("key_insert_count",inserted),protectedInputField);
         } catch(Exception error){Log.w(TAG,"Cursor metadata could not be recorded",error);}
     }
+    private void recordCursorKeyDifferences(String before,String after,List<String> syllables,String origin){
+        if(before.length()!=after.length())return; // Partial commits consume keys; they are not symbol deletions.
+        int changed=0;for(int i=0;i<before.length();i++)if(before.charAt(i)!=after.charAt(i))changed++;
+        if(changed!=1)return; // Only a witnessed single-key replacement belongs to this cursor edit event.
+        int prefix=0;while(prefix<Math.min(before.length(),after.length())&&before.charAt(prefix)==after.charAt(prefix))prefix++;
+        int suffix=0;while(suffix<Math.min(before.length(),after.length())-prefix&&before.charAt(before.length()-1-suffix)==after.charAt(after.length()-1-suffix))suffix++;
+        int removed=before.length()-prefix-suffix,inserted=after.length()-prefix-suffix;
+        for(int i=0;i<Math.max(removed,inserted);i++){
+            cursorEditSlot=prefix+i;cursorFromKey=i<removed?before.substring(prefix+i,prefix+i+1).replace(" ","ˉ"):"";
+            cursorToKey=i<inserted?after.substring(prefix+i,prefix+i+1).replace(" ","ˉ"):"";
+            int offset=0;cursorEditSyllable=-1;for(String syllable:syllables){cursorEditSyllable++;offset+=syllable.length();if(cursorEditSlot<offset)break;}
+            recordCursorEvent(cursorInteractionKind,"edit",origin,-1,i<removed?1:0,i<inserted?1:0);
+        }
+        cursorEditSlot=cursorEditSyllable=-1;cursorFromKey=cursorToKey="";
+    }
     private ZhuyinInputController.State pressZhuyinWithTouch(String key){
         zhuyinCommitVia="other";
         if(!"space".equals(key)&&!"enter".equals(key))sentenceInstalledCommit=null;
-        boolean editing=zhuyinInput.keyCaret()>=0;
-        int keyCountBefore=zhuyinInput.sentenceKeys().length();
-        if(sentencePhone!=null&&sentencePhone.beforeKey(key))return zhuyinInput.state();
+        boolean editing=zhuyinInput.keyCaret()>=0&&(isBopomofoSymbol(key)||"space".equals(key)||"backspace".equals(key));
+        String keysBefore=zhuyinInput.sentenceKeys();
+        int keyCountBefore=keysBefore.length(),beforeCaret=zhuyinInput.keyCaret();
+        if(editing){cursorEditSlot="backspace".equals(key)?beforeCaret-1:beforeCaret;cursorFromKey="backspace".equals(key)&&beforeCaret>0?keysBefore.substring(beforeCaret-1,beforeCaret).replace(" ","ˉ"):"";cursorToKey="space".equals(key)?"ˉ":isBopomofoSymbol(key)?key:"";
+            int offset=0;cursorEditSyllable=-1;for(String syllable:zhuyinInput.phoneticSyllables()){cursorEditSyllable++;offset+=syllable.length();if(cursorEditSlot<offset)break;}}
+        if(sentencePhone!=null&&sentencePhone.beforeKey(key)){cursorEditSlot=cursorEditSyllable=-1;cursorFromKey=cursorToKey="";return zhuyinInput.state();}
         ZhuyinInputController.State state=zhuyinInput.press(key);
-        if(editing){int after=zhuyinInput.sentenceKeys().length();recordCursorEvent("key_caret","edit","",-1,Math.max(0,keyCountBefore-after),isBopomofoSymbol(key)?1:0);}
+        if(editing){int after=zhuyinInput.sentenceKeys().length();recordCursorEvent("key_caret","edit","",-1,Math.max(0,keyCountBefore-after),(isBopomofoSymbol(key)||"space".equals(key))?1:0);cursorEditSlot=-1;cursorEditSyllable=-1;cursorFromKey=cursorToKey="";}
         if(!protectedInputField&&touchShadow!=null&&pendingBopomofoKeyTouch!=null&&key.equals(pendingBopomofoKeyTouch.key)&&pendingBopomofoKeyTouch.shadow!=null)touchShadow.recordRepairTouch(zhuyinInput);
         if(sentencePhone!=null)sentencePhone.touch(key,pendingBopomofoKeyTouch!=null&&key.equals(pendingBopomofoKeyTouch.key)?pendingBopomofoKeyTouch.shadow:null);
         return state;
@@ -4230,7 +4258,16 @@ public class SimonIMEService extends InputMethodService {
         TextView reading=bopomofoKeyboard==null?null:bopomofoKeyboard.findViewById(R.id.boPhoneticPreview);
         if(reading!=null){
             String phonetic=zhuyinInput.phoneticText();
-            reading.setText(phonetic);
+            android.text.SpannableString spaced=new android.text.SpannableString(phonetic);
+            for(int i=0;i<phonetic.length();i++)spaced.setSpan(new android.text.style.ReplacementSpan(){
+                @Override public int getSize(android.graphics.Paint paint,CharSequence text,int start,int end,android.graphics.Paint.FontMetricsInt fm){if(fm!=null)paint.getFontMetricsInt(fm);return Math.max(dp(24),(int)Math.ceil(paint.measureText(text,start,end)));}
+                @Override public void draw(android.graphics.Canvas canvas,CharSequence text,int start,int end,float x,int top,int y,int bottom,android.graphics.Paint paint){float width=Math.max(dp(24),paint.measureText(text,start,end));canvas.drawText(text,start,end,x+(width-paint.measureText(text,start,end))/2,y,paint);}
+            },i,i+1,android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+            reading.setText(spaced);
+            int slot=zhuyinInput.keyCaret(),start=0,end=0;
+            for(String syllable:zhuyinInput.phoneticSyllables()){end=start+syllable.length();if((slot==0&&start==0)||(slot>start&&slot<=end))break;start=end;}
+            if(reading instanceof PreviewCursorView)((PreviewCursorView)reading).setActiveSpan(slot>=0?start:-1,slot>=0?end:-1);
+            reading.setContentDescription("注音游標 "+slot+"；作用音節 "+start+"–"+end);
             if(reading instanceof PreviewCursorView)((PreviewCursorView)reading).setBoundary(zhuyinInput.keyCaret());
             installKeyCaretTouch(reading);
             reading.post(()->{
@@ -4318,9 +4355,10 @@ public class SimonIMEService extends InputMethodService {
                     downX=event.getX();downY=event.getY();dragging=false;lastBoundary=-1;
                     v.getParent().requestDisallowInterceptTouchEvent(true);return true;
                 }
-                if(action==MotionEvent.ACTION_CANCEL){v.getParent().requestDisallowInterceptTouchEvent(false);return true;}
+                if(action==MotionEvent.ACTION_CANCEL){if(v instanceof PreviewCursorView)((PreviewCursorView)v).setDragging(false);v.getParent().requestDisallowInterceptTouchEvent(false);return true;}
                 if(action!=MotionEvent.ACTION_MOVE&&action!=MotionEvent.ACTION_UP)return true;
                 if(Math.abs(event.getX()-downX)>dp(4)||Math.abs(event.getY()-downY)>dp(4))dragging=true;
+                if(v instanceof PreviewCursorView)((PreviewCursorView)v).setDragging(dragging&&action!=MotionEvent.ACTION_UP);
                 String shown=boStreamPreview.getText().toString();int count=shown.codePointCount(0,shown.length());
                 int nearest=0;float distance=Float.MAX_VALUE;
                 for(int cp=0;cp<=count;cp++){
@@ -4336,13 +4374,13 @@ public class SimonIMEService extends InputMethodService {
                     int utf=layout.getOffsetForHorizontal(0,x);int cp=shown.codePointCount(0,Math.min(utf,shown.length()));
                     if(cp>0&&layout.getPrimaryHorizontal(utf)>x)cp--;
                     if(touchShadow!=null)touchShadow.invalidate();
-                    cursorInteractionKind="char_tap";
+                    cursorInteractionKind="char_tap";cursorInteractionVia="text_caret";
                     applyZhuyinState(zhuyinInput.moveCursorToPreviewCharacter(Math.min(count-1,cp)));
                     recordCursorEvent("char_tap",zhuyinInput.wordFocused()?"open":"cancel","",-1,0,0);
                 }else if(boundary&&nearest!=lastBoundary){
                     lastBoundary=nearest;if(touchShadow!=null)touchShadow.invalidate();
-                    cursorInteractionKind=dragging?"drag":"boundary";
-                    applyZhuyinState(zhuyinInput.moveCursorToPreviewBoundary(nearest));
+                    cursorInteractionKind=dragging?"drag":"boundary";cursorInteractionVia="text_caret";
+                    applyZhuyinState(nearest>0?zhuyinInput.moveCursorToPreviewCharacter(Math.min(count-1,nearest-1)):zhuyinInput.moveCursorToKey(0));
                     recordCursorEvent(cursorInteractionKind,"open","",-1,0,0);
                 }
                 if(action==MotionEvent.ACTION_UP)v.getParent().requestDisallowInterceptTouchEvent(false);
@@ -4374,9 +4412,10 @@ public class SimonIMEService extends InputMethodService {
                 if(zhuyinInput==null||row.getLayout()==null)return false;
                 int action=event.getActionMasked();
                 if(action==MotionEvent.ACTION_DOWN){downX=event.getX();dragging=false;last=-1;view.getParent().requestDisallowInterceptTouchEvent(true);return true;}
-                if(action==MotionEvent.ACTION_CANCEL){view.getParent().requestDisallowInterceptTouchEvent(false);return true;}
+                if(action==MotionEvent.ACTION_CANCEL){if(row instanceof PreviewCursorView)((PreviewCursorView)row).setDragging(false);view.getParent().requestDisallowInterceptTouchEvent(false);return true;}
                 if(action!=MotionEvent.ACTION_UP&&action!=MotionEvent.ACTION_MOVE)return true;
                 if(Math.abs(event.getX()-downX)>dp(4))dragging=true;
+                if(row instanceof PreviewCursorView)((PreviewCursorView)row).setDragging(dragging&&action!=MotionEvent.ACTION_UP);
                 if(action==MotionEvent.ACTION_MOVE&&!dragging)return true;
                 String text=row.getText().toString();float x=event.getX()-row.getTotalPaddingLeft()+row.getScrollX();
                 int nearest=0;float distance=Float.MAX_VALUE;
@@ -4387,7 +4426,7 @@ public class SimonIMEService extends InputMethodService {
                 int utf=text.offsetByCodePoints(0,nearest);
                 int key=text.substring(0,utf).replace("│","").length();
                 if(key!=last){
-                    last=key;cursorInteractionKind=dragging?"drag":"key_caret";if(touchShadow!=null)touchShadow.invalidate();
+                    last=key;cursorInteractionKind=dragging?"drag":"key_caret";cursorInteractionVia=dragging?"key_caret_drag":"key_caret_tap";if(touchShadow!=null)touchShadow.invalidate();
                     applyZhuyinState(zhuyinInput.moveCursorToKey(key));
                     recordCursorEvent(dragging?"drag":"key_caret",zhuyinInput.wordFocused()?"open":"cancel","",-1,0,0);
                 }
@@ -4402,47 +4441,51 @@ public class SimonIMEService extends InputMethodService {
         item.setTextColor(getColor(R.color.key_text));item.setTextSize(16);item.setGravity(Gravity.CENTER);item.setPadding(dp(12),0,dp(12),0);
         item.setOnClickListener(v->sentencePhone.undo());return item;
     }
+    private final java.util.Map<Integer,View> rowEngineViews=new java.util.LinkedHashMap<>();
     private TextView sentenceOption(JSONObject candidate){
-        String text=sentencePhone.optionText(candidate),literal=zhuyinInput.previewText();String label="";
-        android.text.SpannableString diff=new android.text.SpannableString(label+text);
-        int[] a=literal.codePoints().toArray(),b=text.codePoints().toArray();int prefix=0,suffix=0;
-        while(prefix<a.length&&prefix<b.length&&a[prefix]==b[prefix])prefix++;
-        while(suffix<a.length-prefix&&suffix<b.length-prefix&&a[a.length-1-suffix]==b[b.length-1-suffix])suffix++;
-        int start=label.length()+text.offsetByCodePoints(0,prefix),end=label.length()+text.offsetByCodePoints(0,b.length-suffix);
-        if(end==start){start=label.length();end=diff.length();}
-        if(end>start)diff.setSpan(new android.text.style.BackgroundColorSpan(0xff805900),start,end,android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
-        TextView item=new TextView(this);item.setTag("sentence-option");item.setText(diff);item.setContentDescription("AI 選項 "+text);
+        String text=sentencePhone.optionText(candidate);
+        android.text.SpannableString diff=new android.text.SpannableString(text);
+        if(!text.isEmpty())diff.setSpan(new android.text.style.BackgroundColorSpan(0xff805900),0,text.length(),android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+        TextView item=new TextView(this);item.setTag("sentence-option");item.setText(diff);item.setContentDescription(("local".equals(candidate.optString("source"))?"本機校正 ":"AI 選項 ")+text);
         item.setTextColor(getColor(R.color.key_text));item.setTextSize(16);item.setGravity(Gravity.CENTER);item.setPadding(dp(12),0,dp(12),0);
         item.getViewTreeObserver().addOnDrawListener(new android.view.ViewTreeObserver.OnDrawListener(){
             boolean done;
-            public void onDraw(){if(done||!item.isShown())return;done=true;sentencePhone.rendered();item.post(()->{if(item.getViewTreeObserver().isAlive())item.getViewTreeObserver().removeOnDrawListener(this);});}
+            public void onDraw(){if(done||!item.isShown())return;done=true;sentencePhone.rendered(candidate,boCandidateItems.indexOfChild(item)+1);item.post(()->{if(item.getViewTreeObserver().isAlive())item.getViewTreeObserver().removeOnDrawListener(this);});}
         });
         item.setOnClickListener(v->{
-            int rank=1;for(JSONObject option:sentencePhone.options(false)){if(option.optString("id").equals(candidate.optString("id")))break;rank++;}
+            int rank=boCandidateItems.indexOfChild(item)+1;
             recordCursorEvent(cursorInteractionKind,"choose","ai",rank,0,0);sentencePhone.apply(candidate);
         });return item;
     }
     private void renderSentenceOptions(){
-        if(sentencePhone==null||boCandidateItems==null)return;
-        for(int i=boCandidateItems.getChildCount()-1;i>=0;i--)if("sentence-option".equals(boCandidateItems.getChildAt(i).getTag()))boCandidateItems.removeViewAt(i);
-        for(int i=0;i<boCandidateItems.getChildCount();i++)boCandidateItems.getChildAt(i).setVisibility(View.VISIBLE);
-        java.util.Set<String> correctionLabels=new java.util.HashSet<>();
-        int at=0;
-        if(zhuyinInput.wordFocused()){
-            at=renderedZhuyinCandidateCount;
-            for(int i=0;i<renderedZhuyinCandidateCount;i++)if("char".equals(zhuyinInput.candidateGroup(i))){at=i;break;}
+        if(boCandidateItems==null||zhuyinInput==null)return;
+        // Assemble from the live focus on EVERY render, including delayed AI delivery.
+        boolean focused=zhuyinInput.wordFocused()||zhuyinInput.keyCaret()>=0||zhuyinInput.previewBoundary()>=0;
+        List<String> labels=new ArrayList<>(),groups=new ArrayList<>(),suggestions=new ArrayList<>();
+        for(int i=0;i<renderedZhuyinCandidateCount;i++){labels.add(renderedZhuyinCandidates.get(i));groups.add(zhuyinInput.candidateGroup(i));}
+        List<JSONObject> options=sentencePhone==null?Collections.emptyList():sentencePhone.rowOptions();
+        for(JSONObject option:options)suggestions.add(sentencePhone.optionText(option));
+        ZhuyinInputController.State current=zhuyinInput.state();
+        int limit=focused?Math.max(1,current.targetEnd-current.targetStart):zhuyinInput.rowWordLimit();
+        List<Integer> order=AiSentence.rowOrder(zhuyinInput.previewText(),focused,labels,groups,suggestions,limit);
+        int scrollX=boCandidateScroll==null?0:boCandidateScroll.getScrollX(),undoAt=focused?-1:0;
+        boCandidateItems.removeAllViews();
+        if(sentencePhone!=null)sentencePhone.beginDisplay();
+        java.util.Map<View,JSONObject> displayedOptions=new java.util.IdentityHashMap<>();
+        for(int index:order){
+            int rank=boCandidateItems.getChildCount()+1;
+            if(index>=0){View item=rowEngineViews.get(index);if(item!=null)boCandidateItems.addView(item);}
+            else {
+                JSONObject option=options.get(-1-index);TextView item=sentenceOption(option);displayedOptions.put(item,option);
+                boCandidateItems.addView(item,new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT,dp(48)));undoAt=boCandidateItems.getChildCount();
+            }
         }
-        if(!zhuyinInput.wordFocused()){
-            at=0;JSONObject local=sentencePhone.localOption();
-            if(local!=null){correctionLabels.add(local.optString("text"));TextView item=new TextView(this);item.setTag("sentence-option");item.setText(local.optString("text"));item.setContentDescription("本機校正 "+local.optString("text"));
-                item.setTextColor(getColor(R.color.key_text));item.setTextSize(16);item.setGravity(Gravity.CENTER);item.setPadding(dp(12),0,dp(12),0);
-                item.setOnClickListener(v->sentencePhone.applyLocal(false));boCandidateItems.addView(item,at++,new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT,dp(48)));}
+        if(sentencePhone!=null&&sentencePhone.canUndo()){
+            if(undoAt<0){undoAt=boCandidateItems.getChildCount();for(int slot=0;slot<order.size();slot++){int index=order.get(slot);if(index>=0&&"char".equals(groups.get(index))){undoAt=slot;break;}}}
+            boCandidateItems.addView(sentenceUndo(),undoAt,new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT,dp(48)));
         }
-        for(JSONObject candidate:sentencePhone.options(false))if(correctionLabels.add(sentencePhone.optionText(candidate)))boCandidateItems.addView(sentenceOption(candidate),at++,new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT,dp(48)));
-        for(int i=0;i<boCandidateItems.getChildCount();i++){
-            View child=boCandidateItems.getChildAt(i);if(!"sentence-option".equals(child.getTag())&&child instanceof TextView&&correctionLabels.contains(((TextView)child).getText().toString()))child.setVisibility(View.GONE);
-        }
-        if(sentencePhone.canUndo())boCandidateItems.addView(sentenceUndo(),at,new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT,dp(48)));
+        if(sentencePhone!=null)for(java.util.Map.Entry<View,JSONObject> entry:displayedOptions.entrySet())sentencePhone.displayed(entry.getValue(),boCandidateItems.indexOfChild(entry.getKey())+1);
+        if(boCandidateScroll!=null)boCandidateScroll.scrollTo(scrollX,0);
         updateCandidateRightHint();
     }
 
@@ -4467,6 +4510,7 @@ public class SimonIMEService extends InputMethodService {
     private void renderZhuyinCandidates(List<String> candidates, String kind) {
         if (boCandidateItems == null || candidates == null || (candidates.equals(renderedZhuyinCandidates) && kind.equals(renderedZhuyinCandidateKind))) return;
         boCandidateItems.removeAllViews();
+        rowEngineViews.clear();
         renderedZhuyinCandidateCount = 0;
         renderedZhuyinCandidates = new ArrayList<>(candidates);
         renderedZhuyinCandidateKind = kind;
@@ -4494,7 +4538,10 @@ public class SimonIMEService extends InputMethodService {
             candidate.setContentDescription(renderedZhuyinCandidateKind+" "+origin+" "+value);
             String kind = renderedZhuyinCandidateKind;
             candidate.setOnClickListener(v -> {
-                if(zhuyinInput.wordFocused()||zhuyinInput.keyCaret()>=0)recordCursorEvent(cursorInteractionKind,"choose",zhuyinInput.candidateOrigin(candidateIndex),candidateIndex+1,0,0);
+                boolean cursorChoice=zhuyinInput.wordFocused()||zhuyinInput.keyCaret()>=0;
+                String beforeKeys=cursorChoice?zhuyinInput.sentenceKeys():"",choiceOrigin=zhuyinInput.candidateOrigin(candidateIndex);
+                List<String> beforeSyllables=cursorChoice?new ArrayList<>(zhuyinInput.phoneticSyllables()):java.util.Collections.emptyList();
+                if(cursorChoice)recordCursorEvent(cursorInteractionKind,"choose",choiceOrigin,candidateIndex+1,0,0);
                 zhuyinCommitVia="candidate";
                 recordCandidateEvent("bopomofo",renderedZhuyinCandidates,candidateIndex);
                 if(!"association".equals(kind)&&candidateIndex>0&&candidateIndex<renderedZhuyinCandidates.size())
@@ -4502,11 +4549,11 @@ public class SimonIMEService extends InputMethodService {
                 sentenceInstalledCommit=zhuyinWordIndex!=null&&zhuyinWordIndex.isInstalledWord(value)?value:null;
                 applyZhuyinState("association".equals(kind)
                     ? zhuyinInput.chooseAssociation(candidateIndex) : zhuyinInput.chooseCandidate(candidateIndex));
+                if(cursorChoice)recordCursorKeyDifferences(beforeKeys,zhuyinInput.sentenceKeys(),beforeSyllables,choiceOrigin);
             });
-            int insertAt=boCandidateItems.getChildCount();
-            if(zhuyinInput.wordFocused()&&"word".equals(zhuyinInput.candidateGroup(candidateIndex)))for(int slot=0;slot<boCandidateItems.getChildCount();slot++)if("sentence-option".equals(boCandidateItems.getChildAt(slot).getTag())){insertAt=slot;break;}
-            boCandidateItems.addView(candidate,insertAt,new LinearLayout.LayoutParams(
-                    ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.MATCH_PARENT));
+            rowEngineViews.put(i,candidate);
+            boCandidateItems.addView(candidate,new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.WRAP_CONTENT,ViewGroup.LayoutParams.MATCH_PARENT));
         }
         renderedZhuyinCandidateCount = end;
         boCandidateItems.post(this::updateCandidateRightHint);

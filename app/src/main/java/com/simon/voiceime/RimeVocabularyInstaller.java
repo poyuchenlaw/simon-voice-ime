@@ -26,6 +26,12 @@ final class RimeVocabularyInstaller {
     }
 
     static synchronized void remember(File user, String word, String reading) throws IOException {
+        remember(user, word, reading, true);
+    }
+    static synchronized void rememberCommit(File user, String word, String reading) throws IOException {
+        remember(user, word, reading, false);
+    }
+    private static void remember(File user, String word, String reading, boolean taught) throws IOException {
         if (!learningEnabled) return;
         List<String> syllables = syllables(reading);
         // Only a one-character/one-syllable alignment can lift individual characters.
@@ -35,6 +41,12 @@ final class RimeVocabularyInstaller {
         // Bound the on-device explicit-commit history, retaining recent entries.
         while (learned.size() > 2000) learned.remove(learned.keySet().iterator().next());
         writeChanged(new File(user, "committed_vocab.tsv"), String.join("\n", learned.values()) + "\n");
+        {
+            LinkedHashMap<String,String> origins = load(new File(user, "taught_vocab.tsv"));
+            if (taught) origins.put(word + "\t" + reading, word + "\t" + reading);
+            origins.keySet().retainAll(learned.keySet());
+            writeChanged(new File(user, "taught_vocab.tsv"), String.join("\n", origins.values()) + "\n");
+        }
         rebuild(user);
     }
 
@@ -44,7 +56,8 @@ final class RimeVocabularyInstaller {
         catch(IOException unavailable){throw new IllegalStateException("installed vocabulary unavailable",unavailable);}return out;
     }
     static synchronized void resetLearned(File user) throws IOException {
-        writeChanged(new File(user,"committed_vocab.tsv"),"");rebuild(user);
+        writeChanged(new File(user,"committed_vocab.tsv"),"");
+        writeChanged(new File(user,"taught_vocab.tsv"),"");rebuild(user);
     }
 
     static boolean isPhoneticReading(String value) {

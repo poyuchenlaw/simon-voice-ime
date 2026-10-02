@@ -40,8 +40,9 @@ final class RimeZhuyinNative implements AutoCloseable {
     boolean prepareSentence(String physicalKeys,String text){return nativePrepareSentence(handle,physicalKeys,text);}
     private static native byte[] nativeSentenceKeys(long h);
     private static native boolean nativePrepareSentence(long h,String keys,String text);
-    boolean focusAtKey(int at){return nativeFocusAtKey(handle,at);}
-    private static native boolean nativeFocusAtKey(long h,int at);
+    boolean focusAtKey(int at){return nativeFocusAtKey(handle,at,false);}
+    boolean focusAfterKeyEdit(int at){return nativeFocusAtKey(handle,at,true);}
+    private static native boolean nativeFocusAtKey(long h,int at,boolean edited);
     boolean keyCaret(int at){return nativeKeyCaret(handle,at);}
     int keyPreviewCaret(){return nativeKeyPreviewCaret(handle);}
     private static native boolean nativeKeyCaret(long h,int at);
@@ -86,6 +87,8 @@ final class RimeZhuyinNative implements AutoCloseable {
     void moveCursorToEnd() { nativeMoveCursorToEnd(handle); }
     int[] previewSelectionRange() { return nativePreviewSelectionRange(handle); }
     String composing() { return decode(nativeComposing(handle)); }
+    int rowWordLimit(){return nativeRowWordLimit(handle);}
+    private static native int nativeRowWordLimit(long handle);
     String[] candidates() {
         byte[][] values = nativeCandidates(handle);
         if (values == null) return new String[0];
@@ -96,7 +99,7 @@ final class RimeZhuyinNative implements AutoCloseable {
     String takeCommit() {
         String text = decode(nativeTakeCommit(handle));
         if (!text.isEmpty() && !commitReading.isEmpty()) {
-            try { RimeVocabularyInstaller.remember(userDirectory, text, commitReading); }
+            try { RimeVocabularyInstaller.rememberCommit(userDirectory, text, commitReading); }
             catch (java.io.IOException error) { System.err.println("Rime committed vocabulary not persisted; retry on next commit"); }
             commitReading = "";
         }

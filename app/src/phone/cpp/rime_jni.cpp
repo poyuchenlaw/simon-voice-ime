@@ -139,6 +139,7 @@ extern "C" JNIEXPORT jlong JNICALL Java_com_simon_voiceime_RimeZhuyinNative_nati
     if(!id){if(--g_users==0)api->finalize();return 0;}
     if(!api->select_schema(id,"bopomofo_express")){api->destroy_session(id);if(--g_users==0)api->finalize();return 0;}
     auto* result=new Session{api,id,{}, {}};
+    result->regroup.user_path=us;
     result->regroup.prism=std::make_unique<rime::Prism>(rime::path(sh+"/build/bopomofo_express.prism.bin"));
     if(!result->regroup.prism->Load())result->regroup.prism.reset();
     return (jlong)(intptr_t)result;
@@ -172,7 +173,7 @@ extern "C" JNIEXPORT void JNICALL Java_com_simon_voiceime_RimeZhuyinNative_nativ
         const char* source=s->api->get_input(s->id);
         std::string raw=std::string(source?source:"")+s->unparsed;
         size_t at=std::min(static_cast<size_t>(s->key_caret),raw.size());
-        if(key==0xff08 || (key<128 && key!=32 && kPhysical.find(static_cast<char>(key))!=std::string::npos)) {
+        if(key==0xff08 || (key<128 && (key==32 || kPhysical.find(static_cast<char>(key))!=std::string::npos))) {
             if(key==0xff08&&at==0)return;
             // Keep confirmed/displayed words outside the focused edit word.
             // set_input alone invalidates every following Rime segment.
@@ -180,12 +181,51 @@ extern "C" JNIEXPORT void JNICALL Java_com_simon_voiceime_RimeZhuyinNative_nativ
             auto previous_stops=s->regroup.stops;
             std::string previous_text=s->regroup.original;
             int edit_start=prior_focus_start,edit_end=prior_focus_end;
-            size_t old_size=raw.size();
+            size_t original_at=at,old_size=raw.size();
+            std::vector<std::pair<size_t,size_t>> confirmed;
+            if(auto* live=context(s->id))for(const auto& segment:live->composition()){
+                auto candidate=segment.GetSelectedCandidate();
+                if(segment.status==rime::Segment::kConfirmed&&candidate&&candidate->type()!="regroup_context")confirmed.push_back({segment.start,segment.end});
+            }
             if(key==0xff08){if(at>0)raw.erase(--at,1);}
             else {
-                if(std::string("6347").find(static_cast<char>(key))!=std::string::npos && at>0
-                    && std::string(" 6347").find(raw[at-1])!=std::string::npos)raw.erase(--at,1);
                 raw.insert(at++,1,static_cast<char>(key));
+            }
+            // A typo may split one intended word into isolated wrong words.
+            // Locate the corrected dictionary word in the isolated translator
+            // before freezing the old word boundary. Explicit user selections
+            // outside the edited syllable remain protected.
+            if(aligned&&!previous_stops.empty())if(auto* probe=context(s->regroup.probe)){
+                probe->Clear();probe->set_input(raw);probe->set_caret_pos(raw.size());
+                if(cp_count(probe->GetCommitText())==cp_count(previous_text)){
+                    int target=std::max(0,static_cast<int>(std::upper_bound(previous_stops.begin(),previous_stops.end(),original_at?original_at-1:0)-previous_stops.begin())-1),position=0;
+                    for(const auto& segment:probe->composition()){
+                        for(const auto& word:words(segment.GetSelectedCandidate())){
+                            int end=position+cp_count(word.text);
+                            if(target>=position&&target<end&&end-position>1&&end<static_cast<int>(previous_stops.size())){
+                                bool protected_word=false;
+                                for(const auto& chosen:confirmed)if(chosen.first<previous_stops[end]&&chosen.second>previous_stops[position]
+                                    && !(chosen.first<=previous_stops[target]&&chosen.second>=previous_stops[target+1]))protected_word=true;
+                                if(!protected_word){edit_start=position;edit_end=end;}
+                            }
+                            position=end;
+                        }
+                    }
+                }
+            }
+            // A learned word can contain a character explicitly pinned later.
+            // Edit only the part containing this symbol; keep accepted outside
+            // candidates even when the lexical focus word spans across them.
+            if(aligned&&edit_start>=0&&edit_end>edit_start) {
+                int target=std::max(0,static_cast<int>(std::upper_bound(previous_stops.begin(),previous_stops.end(),original_at?original_at-1:0)-previous_stops.begin())-1);
+                if(static_cast<size_t>(target+1)<previous_stops.size())for(const auto& chosen:confirmed) {
+                    auto left=std::lower_bound(previous_stops.begin(),previous_stops.end(),chosen.first);
+                    auto right=std::lower_bound(previous_stops.begin(),previous_stops.end(),chosen.second);
+                    if(right!=previous_stops.end()&&*right==chosen.second&&chosen.second<=previous_stops[target])
+                        edit_start=std::max(edit_start,static_cast<int>(right-previous_stops.begin()));
+                    if(left!=previous_stops.end()&&*left==chosen.first&&chosen.first>=previous_stops[target+1])
+                        edit_end=std::min(edit_end,static_cast<int>(left-previous_stops.begin()));
+                }
             }
             s->unparsed.clear();s->unparsed_caret=0;
             s->api->set_input(s->id,raw.c_str());s->api->set_caret_pos(s->id,raw.size());
@@ -397,6 +437,30 @@ extern "C" JNIEXPORT jbyteArray JNICALL Java_com_simon_voiceime_RimeZhuyinNative
     Session* s=state(h); if(!s) return bytes(e, "");
     return bytes(e, display_text(s->regroup.focus_start>=0?s->regroup.original:s->regroup.boundary>=0?s->regroup.preedit:preedit(s)) + glyph_text(s->unparsed));
 }
+// Read-only lexical span for the next partial pick; never changes the live caret.
+extern "C" JNIEXPORT jint JNICALL Java_com_simon_voiceime_RimeZhuyinNative_nativeRowWordLimit(JNIEnv*,jclass,jlong h){
+    auto* s=state(h);if(!s)return 1;
+    if(s->regroup.focus_start>=0)return std::max(1,s->regroup.focus_end-s->regroup.focus_start);
+    auto* ctx=context(s->id);if(!ctx||ctx->composition().empty())return 1;
+    auto& seg=ctx->composition().back();auto selected=seg.GetSelectedCandidate();if(!selected)return 1;
+    auto entries=words(selected);if(entries.empty())return 1;
+    int limit=cp_count(entries.front().text);
+    auto type=rime::Candidate::GetGenuineCandidate(selected)->type();
+    if(type!="user_table"&&type!="user_phrase"&&limit<cp_count(selected->text()))return std::max(1,limit);
+    // Automatic full-clause learning is not a lexical row unit. Resolve its
+    // prefix against the same dictionary menu, preserving explicit teaching.
+    for(const auto& file:{"installed_vocab.tsv","taught_vocab.tsv"}){
+        std::ifstream source(s->regroup.user_path+"/"+file);std::string line;
+        while(std::getline(source,line)){auto tab=line.find('\t');if(tab==std::string::npos)continue;auto word=line.substr(0,tab);if(word==entries.front().text)return std::max(1,limit);}
+    }
+    for(int i=0;i<200;i++){
+        auto candidate=seg.GetCandidateAt(i);if(!candidate)break;
+        auto genuine=rime::Candidate::GetGenuineCandidate(candidate);auto sentence=native_sentence(candidate);
+        if(genuine->type()=="user_table"||genuine->type()=="user_phrase"||sentence&&sentence->components().size()>1)continue;
+        if(native_phrase(candidate)&&selected->text().find(candidate->text())==0)return std::max(1,cp_count(candidate->text()));
+    }
+    return std::max(1,std::min(limit,1));
+}
 extern "C" JNIEXPORT jobjectArray JNICALL Java_com_simon_voiceime_RimeZhuyinNative_nativeCandidates(JNIEnv*e,jclass,jlong h){Session*s=state(h);jclass b=e->FindClass("[B");if(!b)return nullptr;std::vector<std::string> values;if(s){RimeCandidateListIterator iterator{};if(s->api->candidate_list_begin(s->id,&iterator)){do{if(iterator.candidate.text)values.emplace_back(display_text(iterator.candidate.text));}while(values.size()<200&&s->api->candidate_list_next(&iterator));s->api->candidate_list_end(&iterator);}if(values.empty()){auto* ctx=context(s->id);if(ctx&&!ctx->input().empty()&&s->unparsed.empty())values.push_back(display_text(ctx->GetCommitText()));}}jobjectArray out=e->NewObjectArray((jsize)values.size(),b,nullptr);for(size_t i=0;i<values.size();i++){jbyteArray v=bytes(e,values[i]);e->SetObjectArrayElement(out,(jsize)i,v);e->DeleteLocalRef(v);}return out;}
 extern "C" JNIEXPORT jbyteArray JNICALL Java_com_simon_voiceime_RimeZhuyinNative_nativeTakeCommit(JNIEnv* e,jclass,jlong h) {
     Session* s=state(h); if(!s) return bytes(e, "");
@@ -572,12 +636,17 @@ extern "C" JNIEXPORT void JNICALL Java_com_simon_voiceime_RimeZhuyinNative_nativ
     s->regroup.input=raw;s->regroup.stops.assign(boundaries.begin(),boundaries.end());s->regroup.cache.clear();
 }
 
-extern "C" JNIEXPORT jboolean JNICALL Java_com_simon_voiceime_RimeZhuyinNative_nativeFocusAtKey(JNIEnv*,jclass,jlong h,jint at) {
+extern "C" JNIEXPORT jboolean JNICALL Java_com_simon_voiceime_RimeZhuyinNative_nativeFocusAtKey(JNIEnv*,jclass,jlong h,jint at,jboolean edited) {
     auto* s=state(h);if(!s||at<0||!capture(s->regroup,s->id))return false;
-    auto stops=s->regroup.stops;if(static_cast<size_t>(at)>=stops.back())return false;
+    auto stops=s->regroup.stops;if(static_cast<size_t>(at)>stops.back())return false;
     auto it=std::upper_bound(stops.begin(),stops.end(),static_cast<size_t>(at));
     int target=std::max(0,static_cast<int>(it-stops.begin())-1);
-    bool ok=focus_key(s->regroup,s->id,at);s->key_caret=at;return ok;
+    bool ok=focus_key(s->regroup,s->id,at);
+    if(ok&&edited)std::stable_sort(s->regroup.options.begin(),s->regroup.options.end(),[](const RegroupOption& a,const RegroupOption& b){
+        auto priority=[](const RegroupOption& x){return x.homophone&&!x.character?0:x.caret_neighbour?1:x.character?3:2;};
+        return priority(a)<priority(b);
+    });
+    s->key_caret=at;return ok;
 }
 
 extern "C" JNIEXPORT jbyteArray JNICALL Java_com_simon_voiceime_RimeZhuyinNative_nativeCommitReading(JNIEnv* env,jclass,jlong h){auto* s=state(h);return bytes(env,s?s->commit_reading:"");}

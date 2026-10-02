@@ -30,6 +30,7 @@ final class RimeZhuyinEngine implements ZhuyinInputController.Engine, AutoClosea
     private int keyOffset(){int n=0;for(int i=0;i<active;i++)n+=count(parts.get(i).keys());return n;}
     private int textOffset(){int n=0;for(int i=0;i<active;i++)n+=count(parts.get(i).text());return n;}
     private String join(boolean keys){StringBuilder b=new StringBuilder();for(Part p:parts)b.append(keys?p.keys():p.text());return b.toString();}
+    @Override public int rowWordLimit(){return current().rowWordLimit();}
     @Override public String[] localRepair(){
         String[] fix=current().nativeEngine.localRepair();if(fix.length!=2)return fix;
         StringBuilder keys=new StringBuilder(),text=new StringBuilder();
@@ -56,10 +57,11 @@ final class RimeZhuyinEngine implements ZhuyinInputController.Engine, AutoClosea
         return false;
     }
     @Override public boolean focusAtKey(int at){
-        if(at==count(sentenceKeys()))return false;
-        String keys=sentenceKeys();if(at>0&&ZhuyinKeyMap.physicalKey(keys.substring(at-1,at))<0)return false;
+        if(at==0)return false;
+        String keys=sentenceKeys();if(at>0&&!" ".equals(keys.substring(at-1,at))&&ZhuyinKeyMap.physicalKey(keys.substring(at-1,at))<0)return false;
         return current().focusAtKey(at-keyOffset());
     }
+    @Override public boolean focusAfterKeyEdit(int at){return current().focusAfterKeyEdit(at-keyOffset());}
     @Override public void moveCursorToEnd(){for(Part p:parts)if(p.engine!=null)p.engine.moveCursorToEnd();active=parts.size()-1;caret=-1;}
     @Override public void moveCursor(String direction){int at=caret<0?cursorPosition():caret;keyCaret(Math.max(0,Math.min(count(sentenceKeys()),at+("left".equals(direction)?-1:1))));}
     @Override public void key(String symbol){current().key(symbol);if(caret>=0)caret=cursorPosition();}
@@ -220,6 +222,7 @@ final class SingleRimeZhuyinEngine implements ZhuyinInputController.Engine, Auto
         if (key >= 0) nativeEngine.key(key);
     }
     @Override public boolean focusAtKey(int at){return nativeEngine.focusAtKey(at);}
+    @Override public boolean focusAfterKeyEdit(int at){return nativeEngine.focusAfterKeyEdit(at);}
     @Override public boolean keyCaret(int at){return nativeEngine.keyCaret(at);}
     @Override public int keyPreviewCaret(){return nativeEngine.keyPreviewCaret();}
     @Override public void backspace() { nativeEngine.backspace(); }
@@ -238,6 +241,7 @@ final class SingleRimeZhuyinEngine implements ZhuyinInputController.Engine, Auto
     @Override public int[] previewSelectionRange() { return nativeEngine.previewSelectionRange(); }
     @Override public int cursorPosition() { return nativeEngine.cursor(); }
     @Override public String composingText() { return nativeEngine.composing(); }
+    @Override public int rowWordLimit(){return nativeEngine.rowWordLimit();}
     @Override public List<String> candidates() {
         String[] values = nativeEngine.candidates();
         List<String> out = new ArrayList<>();

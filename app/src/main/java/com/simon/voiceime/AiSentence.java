@@ -48,6 +48,51 @@ final class AiSentence {
 
         } catch(Exception invalid){throw new IllegalArgumentException("sentence contract",invalid);}
     }
+    /** Row-3 source indices: engine >=0, changed-span suggestion = -1-index. */
+    static List<Integer> rowOrder(String preview,boolean focused,List<String> engine,List<String> groups,List<String> suggestions){
+        int limit=Integer.MAX_VALUE;
+        for(int i=0;i<engine.size();i++)if((i>=groups.size()||!"char".equals(groups.get(i)))&&rowWord(engine.get(i),preview,Integer.MAX_VALUE))limit=Math.min(limit,engine.get(i).codePointCount(0,engine.get(i).length()));
+        if(limit==Integer.MAX_VALUE)limit=1;
+        return rowOrder(preview,focused,engine,groups,suggestions,limit);
+    }
+    static boolean rowWord(String text,String preview,int limit){
+        if(text==null||text.isEmpty()||text.codePointCount(0,text.length())>limit)return false;
+        return text.codePoints().noneMatch(cp->Character.isWhitespace(cp)||"｜，。！？；：、,.!?;:\n".indexOf(cp)>=0);
+    }
+    static List<Integer> rowOrder(String preview,boolean focused,List<String> engine,List<String> groups,List<String> suggestions,int limit){
+        List<Integer> indices=new ArrayList<>(),order=new ArrayList<>();boolean hasWord=false;
+        if(focused)for(int i=0;i<engine.size();i++)if((i>=groups.size()||!"char".equals(groups.get(i)))&&rowWord(engine.get(i),preview,limit)){hasWord=true;break;}
+        if(focused)for(int i=0;i<engine.size();i++)if(!hasWord||i>=groups.size()||!"char".equals(groups.get(i)))indices.add(i);
+        for(int i=0;i<suggestions.size();i++)indices.add(-1-i);
+        for(int i=0;i<engine.size();i++)if(!focused||hasWord&&i<groups.size()&&"char".equals(groups.get(i)))indices.add(i);
+        Set<String> seen=new HashSet<>();
+        for(int index:indices){String text=index>=0?engine.get(index):suggestions.get(-1-index);if((index>=0||!text.equals(preview))&&rowWord(text,preview,index>=0?limit:Integer.MAX_VALUE)&&seen.add(text))order.add(index);}
+        return order;
+    }
+    /** Scalar-safe minimal edit blocks; equal anchors separate independent corrections. */
+    static List<JSONObject> changedSpans(String before,String after){
+        int[] a=before.codePoints().toArray(),b=after.codePoints().toArray();
+        int[][] lcs=new int[a.length+1][b.length+1];
+        for(int i=a.length-1;i>=0;i--)for(int j=b.length-1;j>=0;j--)lcs[i][j]=a[i]==b[j]?1+lcs[i+1][j+1]:Math.max(lcs[i+1][j],lcs[i][j+1]);
+        List<JSONObject> out=new ArrayList<>();int i=0,j=0;
+        while(i<a.length||j<b.length){
+            if(i<a.length&&j<b.length&&a[i]==b[j]){i++;j++;continue;}
+            int start=i,newStart=j;
+            while(i<a.length||j<b.length){
+                if(i<a.length&&j<b.length&&a[i]==b[j])break;
+                if(j<b.length&&(i==a.length||lcs[i][j+1]>=lcs[i+1][j]))j++;else i++;
+            }
+            try {String text=new String(b,newStart,j-newStart);
+                out.add(new JSONObject().put("start",start).put("end",i).put("text",text));
+            }catch(JSONException invalid){throw new IllegalArgumentException("span projection",invalid);}
+        }
+        return out;
+    }
+    static String replaceSpan(String before,JSONObject span){
+        int start=span.optInt("start",-1),end=span.optInt("end",-1),count=before.codePointCount(0,before.length());
+        if(start<0||end<start||end>count)throw new IllegalArgumentException("span bounds");
+        return before.substring(0,before.offsetByCodePoints(0,start))+span.optString("text")+before.substring(before.offsetByCodePoints(0,end));
+    }
     void failed(JSONObject req){if(pending==req){pending=null;result=null;}}
     static JSONObject request(JSONObject schema,String id,long editor,long composition,String keys,String literal,String left,JSONArray spans,JSONArray touches) {
         try {

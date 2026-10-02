@@ -39,4 +39,19 @@ public class RimeVocabularyInstallerTest {
         finally { RimeVocabularyInstaller.setLearningEnabled(true); }
         assertFalse(new File(user,"committed_vocab.tsv").exists());
     }
+    @Test public void ordinaryCommitsAndTeachingRetainDistinctOriginsWithSameConversionTable() throws Exception {
+        File user=Files.createTempDirectory("v660-origins").toFile();
+        RimeVocabularyInstaller.rememberCommit(user,"明明魁","ㄇㄧㄥˊㄇㄧㄥˊㄎㄨㄟˊ");
+        String automatic=readUtf8(new File(user,"custom_phrase.txt").toPath());
+        assertEquals("\n",readUtf8(new File(user,"taught_vocab.tsv").toPath()));
+        RimeVocabularyInstaller.remember(user,"明明魁","ㄇㄧㄥˊㄇㄧㄥˊㄎㄨㄟˊ");
+        assertTrue(readUtf8(new File(user,"taught_vocab.tsv").toPath()).contains("明明魁\t"));
+        assertEquals(automatic,readUtf8(new File(user,"custom_phrase.txt").toPath()));
+        RimeVocabularyInstaller.rememberCommit(user,"明明魁","ㄇㄧㄥˊㄇㄧㄥˊㄎㄨㄟˊ");
+        assertTrue(readUtf8(new File(user,"taught_vocab.tsv").toPath()).contains("明明魁\t"));
+        RimeVocabularyInstaller.resetLearned(user);
+        assertEquals("",readUtf8(new File(user,"taught_vocab.tsv").toPath()));
+        assertEquals("",readUtf8(new File(user,"committed_vocab.tsv").toPath()));
+    }
+    private static String readUtf8(java.nio.file.Path path) throws Exception { return new String(Files.readAllBytes(path),java.nio.charset.StandardCharsets.UTF_8); }
 }

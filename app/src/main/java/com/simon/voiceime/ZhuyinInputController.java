@@ -7,11 +7,13 @@ import java.util.List;
 /** Thin UI-facing adapter. The conversion, candidate ranking and learning remain in libchewing. */
 final class ZhuyinInputController {
     interface Engine {
+        default int rowWordLimit(){return 1;}
         default String[] localRepair(){return new String[0];}
         default boolean previewLiteral(int index){return false;}
         default boolean punctuation(String text){return false;}
         default List<String> optionGroups(){return Collections.emptyList();}
         default boolean keyCaret(int at){return false;}
+        default boolean focusAfterKeyEdit(int at){return focusAtKey(at);}
         default boolean focusAtKey(int at){return false;}
         default int keyPreviewCaret(){return -1;}
         default String sentenceKeys() { return ""; }
@@ -117,9 +119,11 @@ final class ZhuyinInputController {
     private final List<int[]> fixedWordRanges=new ArrayList<>();
     private boolean previewFocused;
     private int keyCaret=-1;
+    private String symbolEditKeys="",symbolEditText="";
     private List<String> focusedOptionKinds=Collections.emptyList();
     String[] localRepair(){return retype==null&&fixedComposition.isEmpty()?engine.localRepair():new String[0];}
     int keyCaret(){return keyCaret;}
+    int rowWordLimit(){return Math.max(1,engine.rowWordLimit());}
     String candidateGroup(int i){List<String> groups=engine.optionGroups();return i>=0&&i<groups.size()?groups.get(i):"word";}
     private int tappedCharacter=-1;
     int tappedCharacter(){return tappedCharacter;}
@@ -159,7 +163,7 @@ final class ZhuyinInputController {
             return String.join("",fixedReading.subList(0,previewBoundary))+"│"+String.join("",fixedReading.subList(previewBoundary,fixedReading.size()));
         return String.join("",fixedReading)+engine.phoneticText();
     }
-    State moveCursorToPreviewBoundary(int boundary) { keyCaret=-1;engine.moveCursorToEnd();
+    State moveCursorToPreviewBoundary(int boundary) { symbolEditKeys=symbolEditText="";keyCaret=-1;engine.moveCursorToEnd();
         if(retype!=null)cancelSecondPass();
         if(!fixedComposition.isEmpty()){
             int count=fixedComposition.codePointCount(0,fixedComposition.length());
@@ -180,7 +184,7 @@ final class ZhuyinInputController {
     private int previewTargetStart, previewTargetEnd;
     void setRetypeEngineFactory(java.util.function.Supplier<Engine> factory) { retypeEngineFactory=factory; }
     boolean isSecondPassActive() { return retype != null; }
-    State cancelSecondPass() { keyCaret=-1;
+    State cancelSecondPass() { symbolEditKeys=symbolEditText="";keyCaret=-1;
         closeRetype(); previewFocused=false;previewBoundary=-1;engine.moveCursorToEnd();
         return snapshot(true,false);
     }
@@ -224,14 +228,19 @@ final class ZhuyinInputController {
 
     State press(String key) {
         breakPickRun();
-        if(keyCaret>=0 && (isZhuyin(key)||"backspace".equals(key))){
-            if("backspace".equals(key))engine.backspace();else engine.key(key);
+        if(keyCaret>=0 && (isZhuyin(key)||"space".equals(key)||"backspace".equals(key))){
+            if(symbolEditKeys.isEmpty()){symbolEditKeys=engine.sentenceKeys();symbolEditText=engine.previewText();}
+            if("backspace".equals(key))engine.backspace();else if("space".equals(key))engine.space();else engine.key(key);
             keyCaret=engine.cursorPosition();
-            previewFocused=engine.focusAtKey(keyCaret);
+            if(engine.sentenceKeys().equals(symbolEditKeys)){
+                int keep=keyCaret;engine.prepareSentence(symbolEditKeys,symbolEditText);engine.keyCaret(keep);
+                symbolEditKeys="";symbolEditText="";
+            }
+            previewFocused=engine.focusAfterKeyEdit(keyCaret);
             if(previewFocused){int[] range=engine.previewEditRange();if(range!=null){previewTargetStart=range[0];previewTargetEnd=range[1];}focusedOptionKinds=new ArrayList<>(engine.optionKinds());}
             rawZhuyinKeys.setLength(0);return snapshot(true,true);
         }
-        if(keyCaret>=0){keyCaret=-1;engine.moveCursorToEnd();}
+        if(keyCaret>=0){symbolEditKeys=symbolEditText="";keyCaret=-1;engine.moveCursorToEnd();}
         if(retype!=null){
             if("enter".equals(key))return state().candidates.isEmpty()?cancelSecondPass():chooseCandidate(0);
             // Repeated deletion before retyping extends the explicit edit span,
@@ -317,15 +326,17 @@ final class ZhuyinInputController {
         if(defaultFocus&&picked.accepted&&!picked.commitText.isEmpty()&&before.endsWith(remaining)){
             String consumed=before.substring(0,before.length()-remaining.length());
             if(!consumed.isEmpty()&&RimeVocabularyInstaller.isPhoneticReading(consumed)){
+                boolean joining=!pickRunText.isEmpty();
                 pickRunText+=picked.commitText;pickRunReading+=consumed.replace(" ","ˉ");pickRunRemaining=remaining;
-                if(learningEnabled)engine.learnPhrase(pickRunText,pickRunReading);
+                // One ordinary whole-sentence pick is a commit, not phrase teaching.
+                if(learningEnabled&&joining)engine.learnPhrase(pickRunText,pickRunReading);
                 if(remaining.isEmpty())breakPickRun();
             }else breakPickRun();
         }else breakPickRun();
         return picked;
     }
     private State chooseCandidateInternal(int index) {
-        keyCaret=-1;
+        symbolEditKeys=symbolEditText="";keyCaret=-1;
         if((previewBoundary>=0||previewFocused)&&retype==null&&!engine.regroupLabels().isEmpty()) {
             if(!engine.chooseRegroup(index))return snapshot(false,false);
             previewBoundary=-1;previewFocused=false;
@@ -382,10 +393,9 @@ final class ZhuyinInputController {
 
     State moveCursorLeft() { if(previewBoundary>=0)return moveCursorToPreviewBoundary(Math.max(0,previewBoundary-1));mixedChoices=Collections.emptyList(); engine.moveCursor("left"); return snapshot(true, true); }
     State moveCursorRight() { if(previewBoundary>=0)return moveCursorToPreviewBoundary(Math.min(previewText().codePointCount(0,previewText().length()),previewBoundary+1));mixedChoices=Collections.emptyList(); engine.moveCursor("right"); return snapshot(true, true); }
-    State moveCursorToPreviewCharacter(int codePointIndex) { breakPickRun(); tappedCharacter=codePointIndex;keyCaret=-1;engine.moveCursorToEnd();
+    State moveCursorToPreviewCharacter(int codePointIndex) { breakPickRun();symbolEditKeys=symbolEditText=""; tappedCharacter=codePointIndex;keyCaret=-1;engine.moveCursorToEnd();
         previewBoundary=-1;
         if(retype!=null)cancelSecondPass();
-        if(previewFocused&&codePointIndex>=previewTargetStart&&codePointIndex<previewTargetEnd)return cancelSecondPass();
         int fixed=fixedComposition.codePointCount(0,fixedComposition.length());
         if(codePointIndex>=0&&codePointIndex<fixed){
             fixedTargetStart=codePointIndex;fixedTargetEnd=codePointIndex+1;
@@ -421,10 +431,18 @@ final class ZhuyinInputController {
         }
         if(moved&&engine.previewLiteral(codePointIndex)){keyCaret=engine.cursorPosition();previewFocused=false;return snapshot(true,false);}
         previewFocused=targetable;
+        if(moved&&!engine.previewLiteral(codePointIndex)&&fixed==0){
+            int stop=0,index=0;
+            for(String syllable:engine.phoneticSyllables()){stop+=syllable.length();if(index++==codePointIndex){
+                moveCursorToKey(stop);previewFocused=engine.focusAfterKeyEdit(stop);
+                if(previewFocused){int[] range=engine.previewEditRange();if(range!=null){previewTargetStart=range[0];previewTargetEnd=range[1];}focusedOptionKinds=new ArrayList<>(engine.optionKinds());}
+                tappedCharacter=codePointIndex;return snapshot(true,false);
+            }}
+        }
         return snapshot(targetable, false);
     }
 
-    State clear() { breakPickRun();keyCaret=-1; previewBoundary=-1;fixedReading=Collections.emptyList();retypeSourceReading=Collections.emptyList();closeRetype();fixedComposition="";fixedWordRanges.clear();previewFocused=false; abbreviationKeys.setLength(0); rawZhuyinKeys.setLength(0); abbreviationEntries = Collections.emptyList(); mixedChoices=Collections.emptyList(); associationCandidates = Collections.emptyList(); engine.clear(); return snapshot(true, true); }
+    State clear() { breakPickRun();symbolEditKeys=symbolEditText="";keyCaret=-1; previewBoundary=-1;fixedReading=Collections.emptyList();retypeSourceReading=Collections.emptyList();closeRetype();fixedComposition="";fixedWordRanges.clear();previewFocused=false; abbreviationKeys.setLength(0); rawZhuyinKeys.setLength(0); abbreviationEntries = Collections.emptyList(); mixedChoices=Collections.emptyList(); associationCandidates = Collections.emptyList(); engine.clear(); return snapshot(true, true); }
     State punctuation(String text) {
         breakPickRun();
         if(previewText().isEmpty())return new State("",Collections.emptyList(),text,true,0,"engine",Collections.emptyList(),0,0,true);

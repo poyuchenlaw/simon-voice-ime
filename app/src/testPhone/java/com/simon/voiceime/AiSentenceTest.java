@@ -134,4 +134,65 @@ public class AiSentenceTest {
   c=session(schema);c.begin(550,()->req);req.put("literal","變更");assertFalse(c.fresh(req,600));
   assertEquals(64,expected.length());
  }
+
+ @Test public void keepAndEngineIdenticalPreviewAreHidden() throws Exception {
+  // r6: multi-word clauses are hidden; a lexical word may equal the preview.
+  java.lang.reflect.Method row;
+  try {row=AiSentence.class.getDeclaredMethod("rowOrder",String.class,boolean.class,java.util.List.class,java.util.List.class,java.util.List.class);}
+  catch(NoSuchMethodException absent){throw new AssertionError("No shared row-3 assembly guard: KEEP/engine preview must be hidden",absent);}
+  assertEquals(java.util.List.of(1),row.invoke(null,"不要冤枉你",true,java.util.List.of("不要冤枉你","冤枉"),java.util.List.of("word","word"),java.util.List.of("不要冤枉你")));
+ }
+ @Test public void focusPlacesDifferentAiAfterWordsBeforeCharacters() {
+  assertEquals(java.util.List.of(0,-1,1),AiSentence.rowOrder("不要冤枉你",true,java.util.List.of("冤枉","冤"),java.util.List.of("word","char"),java.util.List.of("往")));
+ }
+ @Test public void outsideFocusDifferentAiRemainsFirst() {
+  assertEquals(java.util.List.of(-1,0,1),AiSentence.rowOrder("不要冤枉你",false,java.util.List.of("冤枉","冤"),java.util.List.of("word","char"),java.util.List.of("往")));
+ }
+ @Test public void lateAiUsesCurrentFocusWithoutMutatingPreview() throws Exception {
+  JSONObject schema=contract(),req=schema.getJSONArray("examples").getJSONObject(0),res=schema.getJSONArray("examples").getJSONObject(1);
+  AiSentence client=session(schema);client.mode("suggestions");client.begin(550,()->req);
+  String preview=req.getString("literal");
+  // Focus changed after begin; rows must be assembled from NOW's state after delivery.
+  assertTrue(client.receive(req,res.toString(),600,(k,t)->true));
+  java.util.List<String> ai=java.util.List.of("朵");
+  assertEquals(java.util.List.of(0,-1,1),AiSentence.rowOrder(preview,true,java.util.List.of("舵","餘"),java.util.List.of("word","char"),ai));
+  assertEquals("舵餘",req.getString("literal"));
+ }
+ @Test public void keepDecisionCannotOfferIdenticalPreview() throws Exception {
+  JSONObject schema=contract(),req=schema.getJSONArray("examples").getJSONObject(0),res=new JSONObject(schema.getJSONArray("examples").getJSONObject(1).toString());
+  res.getJSONObject("decision").put("selected_id","keep").put("display","none");
+  AiSentence client=session(schema);client.mode("suggestions");client.begin(550,()->req);client.receive(req,res.toString(),600,(k,t)->true);
+  assertTrue(client.visible(req,600,false).isEmpty());
+  assertEquals(java.util.List.of(1),AiSentence.rowOrder(req.getString("literal"),false,java.util.List.of("舵餘","舵"),java.util.List.of("word","char"),java.util.List.of(req.getString("literal")),1));
+ }
+
+ @Test public void charOnlyFocusStillKeepsAiBehindFocusedCandidates() {
+  assertEquals(java.util.List.of(0,1,-1),AiSentence.rowOrder("舵餘",true,java.util.List.of("舵","多"),java.util.List.of("char","char"),java.util.List.of("朵")));
+ }
+ @Test public void hiddenWordCannotMakeAiPrecedeCharOnlyFocus() {
+  assertEquals(java.util.List.of(1,-1),AiSentence.rowOrder("舵餘",true,java.util.List.of("舵餘","多"),java.util.List.of("word","char"),java.util.List.of("朵"),1));
+ }
+
+ @Test public void rowThreeRejectsWholeSentenceFromAnySource() {
+  assertEquals(java.util.List.of(1,2),AiSentence.rowOrder("不要冤枉你",true,
+   java.util.List.of("不要冤往你","冤枉","冤"),java.util.List.of("word","word","char"),java.util.List.of("")));
+ }
+
+ @Test public void longSentenceDiffOffersOnlyChangedSpanAndAppliesOnlyThatSpan() throws Exception {
+  java.lang.reflect.Method diff;
+  try {diff=AiSentence.class.getDeclaredMethod("changedSpans",String.class,String.class);}
+  catch(NoSuchMethodException e){throw new AssertionError("AI full response has no changed-span projection",e);}
+  java.util.List<JSONObject> spans=(java.util.List<JSONObject>)diff.invoke(null,"今天髓以先送出文件明天再核對","今天所以先送出文件明天再核對");
+  assertEquals(1,spans.size());assertEquals("所",spans.get(0).getString("text"));
+  assertEquals(2,spans.get(0).getInt("start"));assertEquals(3,spans.get(0).getInt("end"));
+  assertEquals("今天所以先送出文件明天再核對",AiSentence.replaceSpan("今天髓以先送出文件明天再核對",spans.get(0)));
+  assertTrue(((java.util.List<?>)diff.invoke(null,"今天所以先送出文件","今天所以先送出文件")).isEmpty());
+ }
+
+ @Test public void independentAiChangesCanBePickedSeparatelyAndKeepUnicodeAnchors(){
+  java.util.List<JSONObject> spans=AiSentence.changedSpans("😀甲乙丙丁戊己","😀佳乙丙丁午己");
+  assertEquals(2,spans.size());assertEquals("😀佳乙丙丁戊己",AiSentence.replaceSpan("😀甲乙丙丁戊己",spans.get(0)));
+  assertEquals("😀甲乙丙丁午己",AiSentence.replaceSpan("😀甲乙丙丁戊己",spans.get(1)));
+ }
+
 }

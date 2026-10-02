@@ -11,6 +11,7 @@
 #include <rime/dict/prism.h>
 #include <cstring>
 #include <tuple>
+#include <fstream>
 
 
 // Resolve the engine's RTTI rather than the JNI DSO's duplicate weak RTTI.
@@ -65,6 +66,7 @@ struct RegroupOption {
 struct RepairTouch {char literal;std::map<char,double> probability;std::set<char> neighbours;};
 struct RegroupState {
     RimeSessionId probe = 0;
+    std::string user_path;
     std::unique_ptr<rime::Prism> prism;
     std::map<size_t,RepairTouch> touches;
     std::string input, original, preedit, glyph_preedit;
@@ -430,6 +432,53 @@ static bool focus_character(RegroupState& r,RimeSessionId id,int target) {
         }
         if(found)break;
     }
+    // Explicit teaching and installed vocabulary have recorded origins. Ordinary
+    // commits keep their conversion weights but do not acquire a word boundary.
+    bool explicit_word=false;
+    int explicit_length=0;
+    for(const auto& file:{"installed_vocab.tsv","taught_vocab.tsv"}) {
+        std::ifstream source(r.user_path+"/"+file);std::string line;
+        while(std::getline(source,line)) {
+            auto tab=line.find('\t');if(tab==std::string::npos)continue;
+            std::string word=line.substr(0,tab);int length=cp_count(word);
+            if(length<=explicit_length)continue;
+            for(int from=std::max(0,target-length+1);from<=target;from++) {
+                int to=from+length;
+                if(to<=cp_count(r.original)&&cp_slice(r.original,from,to)==word) {
+                    a=from;b=to;explicit_length=length;explicit_word=true;break;
+                }
+            }
+        }
+    }
+    // All unmarked learned spans are resolved against lexical dictionary
+    // windows, including user_phrase and single-component Sentence wrappers.
+    // Rime's automatic user dictionary does not retain the teaching origin.
+    if(!explicit_word&&b-a>1) {
+        int span_start=a,span_end=b;
+        if(regroup(r,rime_get_api(),id,b))if(auto* probe=context(r.probe)) {
+            double best=-1e300;a=target;b=target+1;
+            for(int from=std::max(span_start,target-3);from<=target;from++)
+                for(int to=target+1;to<=std::min(span_end,from+4);to++) {
+                    if(to-from<=1)continue;
+                    probe->Clear();probe->set_input(r.input.substr(0,r.stops[to]));
+                    rime::Composition prefix;prefix.Reset(probe->input());
+                    pin_text(prefix,0,r.stops[from],cp_slice(r.original,0,from));
+                    prefix.Forward();probe->set_composition(std::move(prefix));probe->set_caret_pos(r.stops[to]);
+                    if(probe->composition().empty())continue;
+                    for(int i=0;i<200;i++) {
+                        auto candidate=probe->composition().back().GetCandidateAt(i);if(!candidate)break;
+                        auto phrase=native_phrase(candidate);auto sentence=native_sentence(candidate);
+                        auto type=rime::Candidate::GetGenuineCandidate(candidate)->type();
+                        if(!phrase||(sentence&&sentence->components().size()!=1)||type=="user_table"||type=="user_phrase"
+                            ||candidate->start()!=r.stops[from]||candidate->end()!=r.stops[to]
+                            ||candidate->text()!=cp_slice(r.original,from,to))continue;
+                        RegroupOption word{from,to,candidate->text(),candidate,phrase->weight()};
+                        double score=sentence_score(r,word);
+                        if(score>best){best=score;a=from;b=to;}break;
+                    }
+                }
+        }
+    }
     r.glyph_stops.clear();
     // Focus is a view operation. Moving the live Rime caret through pinned
     // spans would silently retranslate the untouched suffix.
@@ -459,6 +508,10 @@ static bool focus_character(RegroupState& r,RimeSessionId id,int target) {
         }
         RegroupOption option{a,b,candidate->text(),candidate,phrase->weight()};option.homophone=true;
         homophones.push_back(std::move(option));
+    }
+    if(explicit_word) {
+        auto chosen=std::find_if(homophones.begin(),homophones.end(),[&](const auto& option){return option.label==cp_slice(r.original,a,b);});
+        if(chosen!=homophones.end())std::rotate(homophones.begin(),chosen,chosen+1);
     }
     r.options=std::move(homophones);
 
