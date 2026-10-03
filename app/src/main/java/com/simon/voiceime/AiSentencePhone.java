@@ -109,7 +109,7 @@ final class AiSentencePhone {
         if(applying)return;
         // Delayed editor callbacks may describe the composition before written().
         // The live same-field witness distinguishes those from a real cursor move.
-        if(request!=null&&witness())return;
+        if(candidatesStart>=0&&request!=null&&witness())return;
         ZhuyinInputController c=host.controller();String owned=c==null?"":c.state().composingText;
         boolean own=host.allowed()&&host.ownedConnection()!=null&&start==end&&start==candidatesEnd&&candidatesStart>=0
             &&candidatesEnd-candidatesStart==owned.length();
