@@ -34,4 +34,11 @@ public class ZhuyinPreviewBoundaryTest {
  @Test public void clearDiscardsBoundaryAndReturnsNoRegroupLabels(){
   Engine e=new Engine();ZhuyinInputController c=new ZhuyinInputController(e);c.moveCursorToPreviewBoundary(1);c.clear();assertEquals(-1,c.previewBoundary());
  }
+ @Test public void sentenceCadenceRequiresCompleteEngineMapping(){
+  Engine e=new Engine(){public String sentenceKeys(){return String.join("",readings).replace('ˉ',' ');}};
+  ZhuyinInputController c=new ZhuyinInputController(e);assertTrue(c.sentenceBoundary());
+  e.readings.set(2,"ㄅㄧㄥ");assertFalse(c.sentenceBoundary());
+  e.readings.set(2,"ㄅㄧㄥˇ");e.readings.remove(2);assertFalse(c.sentenceBoundary());
+ }
+
 }

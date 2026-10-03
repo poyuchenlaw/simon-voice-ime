@@ -4319,7 +4319,10 @@ public class SimonIMEService extends InputMethodService {
             }
             else {
                 android.text.SpannableString composing=highlightZhuyinTarget(state.composingText,state.targetStart,state.targetEnd);
-                if (ic.setComposingText(composing, 1)) zhuyinComposingConnection = ic; // cursor stays after the full composition
+                if (ic.setComposingText(composing, 1)) {
+                    zhuyinComposingConnection = ic; // cursor stays after the full composition
+                    if (sentencePhone != null) sentencePhone.written();
+                }
             }
         }
         if(zhuyinInput.showIdleShortcuts()) renderZhuyinShortcuts();

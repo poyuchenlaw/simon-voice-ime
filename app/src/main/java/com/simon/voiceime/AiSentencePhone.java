@@ -78,6 +78,7 @@ final class AiSentencePhone {
         if(transaction!=null){transaction.discard();transaction=null;underlineStart=underlineEnd=-1;}
         sentence.mode(prefs().getString("ai_sentence_mode","suggestions"));
         sentence.edit(now(),editorChange,host.allowed());request=null;
+        if(host.controller()!=null&&host.controller().previewText().isEmpty())sentence.begin(now(),"",false,()->null);
         debounceEnd=receive=validation=wouldRender=phoneRender=-1;
         expectedApplySelection=false;
         if(editorChange){compositionStart=compositionEnd=-1;installed.clear();touches.clear();touchKeys="";}
@@ -91,14 +92,31 @@ final class AiSentencePhone {
         }
         pause=()->{if(localOption!=null&&autoEnabled())applyLocal(true);send();};handler.postDelayed(pause,450);
     }
+    /** Called only after the IME has written this composition to its owned editor. */
+    void written(){
+        if(!host.allowed()||host.controller()==null||host.ownedConnection()==null)return;
+        if(!sentence.charsDue(host.controller().previewText())||!host.controller().sentenceBoundary())return;
+        String text=host.controller().state().composingText;
+        ExtractedTextRequest bounds=new ExtractedTextRequest();bounds.hintMaxChars=1;bounds.hintMaxLines=1;
+        ExtractedText value=host.ownedConnection().getExtractedText(bounds,0);
+        if(value==null||value.selectionStart!=value.selectionEnd)return;
+        int end=value.startOffset+value.selectionEnd,start=end-text.length();
+        CharSequence before=host.ownedConnection().getTextBeforeCursor(text.length(),0);
+        if(start<0||(compositionStart>=0&&compositionStart!=start)||before==null||!text.contentEquals(before))return;
+        compositionStart=start;compositionEnd=end;send(true);
+    }
     void selection(int oldStart,int oldEnd,int start,int end,int candidatesStart,int candidatesEnd){
         if(applying)return;
+        // Delayed editor callbacks may describe the composition before written().
+        // The live same-field witness distinguishes those from a real cursor move.
+        if(request!=null&&witness())return;
         ZhuyinInputController c=host.controller();String owned=c==null?"":c.state().composingText;
         boolean own=host.allowed()&&host.ownedConnection()!=null&&start==end&&start==candidatesEnd&&candidatesStart>=0
             &&candidatesEnd-candidatesStart==owned.length();
         if(expectedApplySelection&&own&&candidatesStart==compositionStart&&ownedText.equals(owned)) {
             compositionEnd=candidatesEnd;expectedApplySelection=false;return;
         }
+        if(own&&candidatesStart==compositionStart&&candidatesEnd==compositionEnd)return;
         if(oldStart==start&&oldEnd==end&&candidatesStart==compositionStart&&candidatesEnd==compositionEnd)return;
         boolean verifiedCommit=expectedCommitEnd>=0&&start==end&&end==expectedCommitEnd&&owned.isEmpty();
         expectedCommitEnd=-1;
@@ -180,11 +198,14 @@ final class AiSentencePhone {
 
         } catch(Exception invalid){throw new IllegalArgumentException("sentence snapshot",invalid);}
     }
-    private void send(){
+    private void send(){send(false);}
+    private void send(boolean eager){
         if(!host.allowed()||transaction!=null&&transaction.automatic())return;
         try {
             sentence.mode(prefs().getString("ai_sentence_mode","suggestions"));
-            JSONObject req=sentence.begin(now(),this::snapshot);if(req==null){event("ineligible");return;}
+            ZhuyinInputController controller=host.controller();String preview=controller==null?"":controller.previewText();
+            boolean boundary=eager&&sentence.charsDue(preview)&&controller!=null&&controller.sentenceBoundary();
+            JSONObject req=sentence.begin(now(),preview,boundary,this::snapshot);if(req==null){if(!eager)event("ineligible");return;}
             request=req;debounceEnd=now();
             String base=prefs().getString("server_url","http://100.84.86.128:8001");
             Request httpRequest=new Request.Builder().url(base.replaceAll("/+$","")+"/v1/ime/sentence-candidates")
@@ -403,7 +424,7 @@ final class AiSentencePhone {
         ImeTelemetry t=ImeTelemetry.get();if(t==null)return;
         try {
             JSONObject fields=new JSONObject().put("outcome",outcome).put("client_mode",sentence.mode()).put("failure_count",failureCount)
-                .put("editor_generation",sentence.editorGeneration).put("composition_generation",sentence.compositionGeneration)
+                .put("trigger",sentence.trigger()).put("editor_generation",sentence.editorGeneration).put("composition_generation",sentence.compositionGeneration)
                 .put("last_edit_ms",sentence.lastEdit).put("debounce_end_ms",nullable(debounceEnd)).put("response_receive_ms",nullable(receive))
                 .put("rime_validation_ms",nullable(validation)).put("would_render_ms",nullable(wouldRender)).put("phone_render_ms",nullable(phoneRender));
             if(request!=null)fields.put("request_id",request.getString("request_id"));

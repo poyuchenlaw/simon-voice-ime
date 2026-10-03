@@ -200,4 +200,53 @@ public class AiSentenceTest {
   assertEquals("😀甲乙丙丁午己",AiSentence.replaceSpan("😀甲乙丙丁戊己",spans.get(1)));
  }
 
+ @Test public void nineCharactersWithoutPauseRequestThreeWholePreviews() throws Exception {
+  AiSentence c=new AiSentence(contract());c.mode("suggestions");int sent=0;
+  java.lang.reflect.Method begin;
+  try {begin=AiSentence.class.getDeclaredMethod("begin",long.class,String.class,boolean.class,java.util.function.Supplier.class);}
+  catch(NoSuchMethodException missing){throw new AssertionError("three-character trigger missing",missing);}
+  for(int i=1;i<=9;i++){
+   c.edit(i*10,false,true);final int n=i;
+   java.util.function.Supplier<JSONObject> snapshot=()->AiSentence.request(c.schema,"c"+n,c.editorGeneration,c.compositionGeneration,"ㄉㄨㄛ ".repeat(n),"多".repeat(n),"",new JSONArray(),new JSONArray());
+   JSONObject r=(JSONObject)begin.invoke(c,i*10L,"多".repeat(i),true,snapshot);
+   if(i%3==0){assertNotNull(r);assertEquals("多".repeat(i),r.getString("literal"));sent++;}else assertNull(r);
+  }
+  assertEquals(3,sent);
+ }
+
+ @Test public void incompleteSyllableCannotSendBeforePause() throws Exception {
+  AiSentence c=new AiSentence(contract());c.mode("suggestions");c.edit(10,false,true);
+  assertNull(c.begin(100,"多多多ㄉ",false,()->{throw new AssertionError("mid-syllable snapshot read");}));
+ }
+ @Test public void unchangedTextAndSupersededCharsRemainGuarded() throws Exception {
+  AiSentence c=new AiSentence(contract());c.mode("suggestions");c.edit(10,false,true);
+  JSONObject first=c.begin(10,"多多多",true,()->AiSentence.request(c.schema,"first",c.editorGeneration,c.compositionGeneration,"ㄉㄨㄛ ".repeat(3),"多多多","",new JSONArray(),new JSONArray()));
+  assertNotNull(first);c.edit(20,false,true);assertFalse(c.fresh(first,20));
+  assertNull(c.begin(470,"多多多",true,()->{throw new AssertionError("unchanged snapshot read");}));
+  c.edit(480,false,true);
+  JSONObject second=c.begin(930,"多多多多",true,()->AiSentence.request(c.schema,"second",c.editorGeneration,c.compositionGeneration,"ㄉㄨㄛ ".repeat(4),"多多多多","",new JSONArray(),new JSONArray()));
+  assertNotNull(second);assertEquals("pause",c.trigger());assertFalse(c.receive(first,"{}",940,(k,t)->true));
+ }
+
+ @Test public void clearedCompositionStartsFreshThreeCharacterBudget() throws Exception {
+  AiSentence c=new AiSentence(contract());c.mode("suggestions");c.edit(1,false,true);
+  assertNotNull(c.begin(1,"多多多",true,()->AiSentence.request(c.schema,"one",c.editorGeneration,c.compositionGeneration,"ㄉㄨㄛ ".repeat(3),"多多多","",new JSONArray(),new JSONArray())));
+  c.edit(2,false,true);assertNull(c.begin(2,"",false,()->{throw new AssertionError();}));
+  c.edit(3,false,true);
+  assertNotNull(c.begin(3,"多多多",true,()->AiSentence.request(c.schema,"two",c.editorGeneration,c.compositionGeneration,"ㄉㄨㄛ ".repeat(3),"多多多","",new JSONArray(),new JSONArray())));
+ }
+
+ @Test public void engineRevisingPriorWordDoesNotLoseNewCharacterCadence() throws Exception {
+  AiSentence c=new AiSentence(contract());c.mode("suggestions");c.edit(1,false,true);
+  assertNotNull(c.begin(1,"多多多",true,()->AiSentence.request(c.schema,"one",c.editorGeneration,c.compositionGeneration,"ㄉㄨㄛ ".repeat(3),"多多多","",new JSONArray(),new JSONArray())));
+  c.edit(2,false,true);
+  assertNotNull(c.begin(2,"朵多多多多多",true,()->AiSentence.request(c.schema,"two",c.editorGeneration,c.compositionGeneration,"ㄉㄨㄛ ".repeat(6),"朵多多多多多","",new JSONArray(),new JSONArray())));
+ }
+
+ @Test public void existingPausePathStillAcceptsAbbreviatedReading() throws Exception {
+  AiSentence c=new AiSentence(contract());c.mode("suggestions");c.edit(1,false,true);
+  assertNotNull(c.begin(451,"多多多",false,()->AiSentence.request(c.schema,"pause",c.editorGeneration,c.compositionGeneration,"ㄉㄨㄛ ".repeat(3),"多多多","",new JSONArray(),new JSONArray())));
+  assertEquals("pause",c.trigger());
+ }
+
 }

@@ -165,6 +165,19 @@ final class ZhuyinInputController {
         }
         return engine.phoneticSyllables();
     }
+    /** Engine-mapped full syllables, with no unparsed tail or caret edit. */
+    boolean sentenceBoundary(){
+        if(wordFocused()||keyCaret()>=0||previewBoundary()>=0)return false;
+        String preview=previewText(),keys=sentenceKeys();List<String> reading=phoneticSyllables();
+        if(keys.isEmpty()||" ˉˊˇˋ˙".indexOf(keys.charAt(keys.length()-1))<0)return false;
+        if(preview.isEmpty()||reading.size()!=preview.codePointCount(0,preview.length()))return false;
+        StringBuilder joined=new StringBuilder();
+        for(String syllable:reading){
+            if(syllable.isEmpty())return false;
+            joined.append(syllable);
+        }
+        return joined.toString().replace('ˉ',' ').equals(keys.replace('ˉ',' '));
+    }
     String phoneticText() {
         if(retype!=null&&!retypeSourceReading.isEmpty())return String.join("",retypeSourceReading.subList(0,retypeStart))+retype.phoneticText()+"│"+String.join("",retypeSourceReading.subList(retypeEnd,retypeSourceReading.size()));
         if(previewBoundary>=0&&previewBoundary<=fixedReading.size()&&engine.composingText().isEmpty())

@@ -9,6 +9,10 @@ final class AiSentence {
     long editorGeneration,compositionGeneration,lastEdit;
     private long attempted=-1;
     private boolean eligible;
+    private String lastLiteral="",trigger="pause";
+    String trigger(){return trigger;}
+    boolean charsDue(String preview){return "suggestions".equals(mode)&&preview!=null
+        &&preview.codePointCount(0,preview.length())-lastLiteral.codePointCount(0,lastLiteral.length())>=3;}
     private String mode="shadow";
     JSONObject pending,result;
     private String recordedId,recordedDigest;
@@ -17,16 +21,24 @@ final class AiSentence {
     void mode(String value){mode="off".equals(value)||"suggestions".equals(value)?value:"shadow";}
     String mode(){return mode;}
     void edit(long now,boolean editorChange,boolean allowed){
-        if(editorChange)editorGeneration++;compositionGeneration++;lastEdit=now;eligible=allowed;pending=null;result=null;
+        if(editorChange){editorGeneration++;lastLiteral="";}compositionGeneration++;lastEdit=now;eligible=allowed;pending=null;result=null;
     }
     JSONObject begin(long now,java.util.function.Supplier<JSONObject> snapshot){
+        return begin(now,null,false,snapshot);
+    }
+    JSONObject begin(long now,String preview,boolean boundary,java.util.function.Supplier<JSONObject> snapshot){
         try {
-        if(!eligible||"off".equals(mode)||now-lastEdit<450||now-lastEdit>1500||pending!=null||attempted==compositionGeneration)return null;
-        attempted=compositionGeneration;JSONObject req=snapshot.get();if(req==null)return null;
+        if(preview!=null&&preview.isEmpty()){lastLiteral="";return null;}
+        boolean pause=now-lastEdit>=450&&now-lastEdit<=1500;
+        boolean chars=boundary&&charsDue(preview);
+        if(!eligible||"off".equals(mode)||(!pause&&!chars)||pending!=null||attempted==compositionGeneration)return null;
+        if(preview!=null&&preview.equals(lastLiteral))return null;
+        JSONObject req=snapshot.get();if(req==null)return null;
         validateRequest(schema,req);SentenceContract.require(req.getLong("editor_generation")==editorGeneration&&req.getLong("composition_generation")==compositionGeneration);
+        if(preview==null&&req.getString("literal").equals(lastLiteral))return null;
+        attempted=compositionGeneration;lastLiteral=preview==null?req.getString("literal"):preview;trigger=chars?"chars":"pause";
         recordedId=req.getString("request_id");recordedGeneration=compositionGeneration;recordedDigest=digest(req);
         pending=req;return req;
-
         } catch(Exception invalid){throw new IllegalArgumentException("sentence contract",invalid);}
     }
     boolean fresh(JSONObject req,long now){

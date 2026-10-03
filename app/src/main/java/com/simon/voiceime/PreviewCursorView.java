@@ -14,8 +14,18 @@ public final class PreviewCursorView extends TextView {
     void setDragging(boolean value){dragging=value;lit=true;invalidate();}
     void setActiveSpan(int start,int end){activeStart=start;activeEnd=end;invalidate();}
     private final Runnable blink=new Runnable(){public void run(){lit=!lit;invalidate();postDelayed(this,500);}};
-    @Override protected void onAttachedToWindow(){super.onAttachedToWindow();lit=true;postDelayed(blink,500);}
-    @Override protected void onDetachedFromWindow(){removeCallbacks(blink);super.onDetachedFromWindow();}
+    @Override protected void onAttachedToWindow(){super.onAttachedToWindow();lit=true;postDelayed(blink,500);if(getId()==R.id.boStreamPreview&&getParent() instanceof android.view.View){viewport=(android.view.View)getParent();viewport.addOnLayoutChangeListener(viewportLayout);post(this::fitPreview);}}
+    @Override protected void onDetachedFromWindow(){removeCallbacks(blink);if(viewport!=null)viewport.removeOnLayoutChangeListener(viewportLayout);viewport=null;super.onDetachedFromWindow();}
+    private android.view.View viewport;
+    private final android.view.View.OnLayoutChangeListener viewportLayout=(v,l,t,r,b,ol,ot,or,ob)->fitPreview();
+    private void fitPreview(){
+        if(getId()!=R.id.boStreamPreview||viewport==null||viewport.getWidth()<=0)return;
+        android.util.DisplayMetrics metrics=getResources().getDisplayMetrics();
+        float available=viewport.getWidth()-getTotalPaddingLeft()-getTotalPaddingRight()-10*metrics.density;
+        float glyph=getPaint().measureText("國");if(glyph<=0||available<=0)return;
+        float size=Math.max(14*metrics.scaledDensity,Math.min(18*metrics.scaledDensity,getTextSize()*available/(17*glyph)));
+        if(Math.abs(size-getTextSize())>.25f)setTextSize(android.util.TypedValue.COMPLEX_UNIT_PX,size);
+    }
     private final Paint caretPaint=new Paint(Paint.ANTI_ALIAS_FLAG);
     public PreviewCursorView(Context c,AttributeSet attrs){super(c,attrs);caretPaint.setColor(0xffffc857);}
     void setBoundary(int cp){boundary=cp;lit=true;invalidate();}
