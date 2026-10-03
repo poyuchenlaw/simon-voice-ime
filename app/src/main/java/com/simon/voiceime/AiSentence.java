@@ -66,7 +66,7 @@ final class AiSentence {
         for(int i=0;i<suggestions.size();i++)indices.add(-1-i);
         for(int i=0;i<engine.size();i++)if(!focused||hasWord&&i<groups.size()&&"char".equals(groups.get(i)))indices.add(i);
         Set<String> seen=new HashSet<>();
-        for(int index:indices){String text=index>=0?engine.get(index):suggestions.get(-1-index);if((index>=0||!text.equals(preview))&&rowWord(text,preview,index>=0?limit:Integer.MAX_VALUE)&&seen.add(text))order.add(index);}
+        for(int index:indices){String text=index>=0?engine.get(index):suggestions.get(-1-index);if((index>=0||!text.equals(preview))&&rowWord(text,preview,index>=0||focused?limit:Integer.MAX_VALUE)&&seen.add(text))order.add(index);}
         return order;
     }
     /** Scalar-safe minimal edit blocks; equal anchors separate independent corrections. */

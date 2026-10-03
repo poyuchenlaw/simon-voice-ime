@@ -18,7 +18,27 @@ struct Session {
     size_t unparsed_caret = 0;
     RegroupState regroup;
     int key_caret = -1;
+    std::string sandhi_input;
+    std::vector<rime::an<rime::Candidate>> sandhi_menu;
+    size_t sandhi_base_count=0;
 };
+
+// The normal menu also augments fresh input. Only the separate lookup session
+// sees normalized tones; selection consumes the original, same-length key span.
+static std::vector<RegroupOption> default_sandhi(Session* s) {
+    auto* ctx=s?context(s->id):nullptr;
+    if(!ctx||ctx->composition().empty()||!s->unparsed.empty())return {};
+    const auto& raw=ctx->input();
+    if(raw.find("1j6")==std::string::npos&&raw.find("u6")==std::string::npos&&raw.find("u4")==std::string::npos)return {};
+    if(!capture(s->regroup,s->id))return {};
+    size_t start=ctx->composition().back().start;
+    auto it=std::lower_bound(s->regroup.stops.begin(),s->regroup.stops.end(),start);
+    if(it==s->regroup.stops.end()||*it!=start)return {};
+    int target=static_cast<int>(it-s->regroup.stops.begin());
+    auto options=sandhi_words(s->regroup,target);
+    options.erase(std::remove_if(options.begin(),options.end(),[&](const auto& x){return x.start!=target;}),options.end());
+    return options;
+}
 
 // Native enforcement of the commit invariant in ZhuyinInputController.
 // Space is tone 1; the entire physical-key set renders to glyphs.
@@ -182,10 +202,22 @@ extern "C" JNIEXPORT void JNICALL Java_com_simon_voiceime_RimeZhuyinNative_nativ
             std::string previous_text=s->regroup.original;
             int edit_start=prior_focus_start,edit_end=prior_focus_end;
             size_t original_at=at,old_size=raw.size();
+            // An initial inserted at a syllable boundary belongs to the following
+            // medial/final when their joined code is a complete syllable. The
+            // caret menu itself addresses the preceding character at a boundary.
+            if(aligned&&key<128&&std::string("1qaz2wsxedcrfv5tgbyhn").find(static_cast<char>(key))!=std::string::npos){
+                auto next=std::lower_bound(previous_stops.begin(),previous_stops.end(),at);
+                if(next!=previous_stops.end()&&*next==at&&next+1!=previous_stops.end()){
+                    std::string joined(1,static_cast<char>(key));joined+=raw.substr(at,*(next+1)-at);
+                    if(normal_toned(s->regroup,joined)&&focus_character(s->regroup,s->id,next-previous_stops.begin())){
+                        edit_start=s->regroup.focus_start;edit_end=s->regroup.focus_end;
+                    }
+                }
+            }
             std::vector<std::pair<size_t,size_t>> confirmed;
             if(auto* live=context(s->id))for(const auto& segment:live->composition()){
                 auto candidate=segment.GetSelectedCandidate();
-                if(segment.status==rime::Segment::kConfirmed&&candidate&&candidate->type()!="regroup_context")confirmed.push_back({segment.start,segment.end});
+                if(segment.status==rime::Segment::kConfirmed&&candidate&&candidate->type()!="regroup_context"&&candidate->type()!="key_edit")confirmed.push_back({segment.start,segment.end});
             }
             if(key==0xff08){if(at>0)raw.erase(--at,1);}
             else {
@@ -197,7 +229,34 @@ extern "C" JNIEXPORT void JNICALL Java_com_simon_voiceime_RimeZhuyinNative_nativ
             // outside the edited syllable remain protected.
             if(aligned&&!previous_stops.empty())if(auto* probe=context(s->regroup.probe)){
                 probe->Clear();probe->set_input(raw);probe->set_caret_pos(raw.size());
-                if(cp_count(probe->GetCommitText())==cp_count(previous_text)){
+                // A corrected complete syllable can collapse several old
+                // abbreviation spans. Resolve the new word by raw-key offsets,
+                // rather than requiring the old and new character counts to match.
+                bool raw_word_resolved=false;
+                int delta=static_cast<int>(raw.size())-static_cast<int>(old_size);
+                size_t changed_at=key==0xff08?at:at-1;
+                for(const auto& segment:probe->composition()){
+                    auto candidate=segment.GetSelectedCandidate();auto phrase=native_phrase(candidate);
+                    if(!phrase)continue;
+                    auto spans=phrase->spans();size_t word_start=spans.start();
+                    for(const auto& word:words(candidate)){
+                        size_t word_end=word_start;
+                        for(int i=0;i<cp_count(word.text)&&word_end<spans.end();i++)word_end=spans.NextStop(word_end);
+                        if(cp_count(word.text)>1&&word_start<=changed_at&&changed_at<word_end){
+                            size_t old_start=word_start,old_end=word_end-delta;
+                            auto left=std::lower_bound(previous_stops.begin(),previous_stops.end(),old_start);
+                            auto right=std::lower_bound(previous_stops.begin(),previous_stops.end(),old_end);
+                            if(left!=previous_stops.end()&&right!=previous_stops.end()&&*left==old_start&&*right==old_end){
+                                bool protected_word=false;
+                                for(const auto& chosen:confirmed)if(chosen.first<old_end&&chosen.second>old_start
+                                    && !(chosen.first<=original_at&&chosen.second>=original_at))protected_word=true;
+                                if(!protected_word){edit_start=left-previous_stops.begin();edit_end=right-previous_stops.begin();raw_word_resolved=true;}
+                            }
+                        }
+                        word_start=word_end;
+                    }
+                }
+                if(!raw_word_resolved&&cp_count(probe->GetCommitText())==cp_count(previous_text)){
                     int target=std::max(0,static_cast<int>(std::upper_bound(previous_stops.begin(),previous_stops.end(),original_at?original_at-1:0)-previous_stops.begin())-1),position=0;
                     for(const auto& segment:probe->composition()){
                         for(const auto& word:words(segment.GetSelectedCandidate())){
@@ -244,7 +303,9 @@ extern "C" JNIEXPORT void JNICALL Java_com_simon_voiceime_RimeZhuyinNative_nativ
                     std::vector<size_t> stops(previous_stops.begin(),previous_stops.begin()+edit_start+1);
                     bool mapped=true;
                     for(const auto& candidate:changed){
-                        pin(fixed,candidate->start(),candidate->end(),candidate);
+                        // Reconstruction is not an explicit user choice. Keep its native
+                        // spans, but allow the next edit to join this provisional word.
+                        pin(fixed,candidate->start(),candidate->end(),rime::New<rime::ShadowCandidate>(candidate,"key_edit"));
                         auto phrase=native_phrase(candidate);std::vector<size_t> local;
                         if(phrase){auto spans=phrase->spans();size_t pos=spans.start();while(pos<spans.end()){size_t next=spans.NextStop(pos);if(next<=pos)break;local.push_back(next);pos=next;}}
                         if(local.size()!=static_cast<size_t>(cp_count(candidate->text()))){local.clear();if(candidate->end()-candidate->start()==static_cast<size_t>(cp_count(candidate->text())))for(size_t pos=candidate->start();pos<candidate->end();)local.push_back(++pos);else mapped=false;}
@@ -253,8 +314,14 @@ extern "C" JNIEXPORT void JNICALL Java_com_simon_voiceime_RimeZhuyinNative_nativ
                     for(size_t i=edit_end;i+1<previous_stops.size();i++){
                         pin_text(fixed,previous_stops[i]+delta,previous_stops[i+1]+delta,cp_slice(previous_text,i,i+1));stops.push_back(previous_stops[i+1]+delta);
                     }
-                    fixed.Forward();ctx->set_composition(std::move(fixed));ctx->set_caret_pos(raw.size());
-                    s->regroup.input=raw;if(mapped)s->regroup.stops=std::move(stops);
+                    if(mapped){
+                        fixed.Forward();ctx->set_composition(std::move(fixed));ctx->set_caret_pos(raw.size());
+                        s->regroup.input=raw;s->regroup.stops=std::move(stops);
+                    }else{
+                        // An incomplete edit has no character-to-reading mapping yet.
+                        // Ask the full translator again; do not freeze raw key text.
+                        ctx->Clear();ctx->set_input(raw);ctx->set_caret_pos(raw.size());
+                    }
                 }
             }
             s->key_caret=static_cast<int>(at);
@@ -335,6 +402,7 @@ extern "C" JNIEXPORT void JNICALL Java_com_simon_voiceime_RimeZhuyinNative_nativ
     auto* s=state(h);auto* ctx=s?context(s->id):nullptr;
     if(!ctx||index<0||ctx->composition().empty())return;
     auto selected=ctx->composition().back().GetCandidateAt(index);
+    if(s->sandhi_input==ctx->input()&&static_cast<size_t>(index)>=s->sandhi_base_count&&static_cast<size_t>(index)-s->sandhi_base_count<s->sandhi_menu.size())selected=s->sandhi_menu[index-s->sandhi_base_count];
     if(!selected){
         if(index!=0||ctx->input().empty())return;
         s->commit_reading=glyph_text(ctx->input()+s->unparsed);
@@ -361,8 +429,15 @@ extern "C" JNIEXPORT void JNICALL Java_com_simon_voiceime_RimeZhuyinNative_nativ
     s->regroup.touches=std::move(shifted);s->regroup.cache.clear();s->regroup.input.clear();
     s->regroup.options.clear();s->regroup.boundary=-1;s->regroup.focus_start=s->regroup.focus_end=-1;s->key_caret=-1;
 }
-extern "C" JNIEXPORT void JNICALL Java_com_simon_voiceime_RimeZhuyinNative_nativeSelect(JNIEnv*,jclass,jlong h,jint index){Session*s=state(h);if(s&&index>=0)s->api->select_candidate(s->id,(size_t)index);}
-extern "C" JNIEXPORT void JNICALL Java_com_simon_voiceime_RimeZhuyinNative_nativeClear(JNIEnv*,jclass,jlong h){Session*s=state(h);if(s){s->api->clear_composition(s->id);s->unparsed.clear();s->pending.clear();s->commit_reading.clear();s->key_caret=-1;s->regroup.input.clear();s->regroup.stops.clear();s->regroup.touches.clear();s->regroup.unparsed_mode=false;s->regroup.cache.clear();s->regroup.glyph_preedit.clear();s->regroup.options.clear();s->regroup.boundary=-1;s->regroup.focus_start=s->regroup.focus_end=-1;drain_commit(s);}}
+extern "C" JNIEXPORT void JNICALL Java_com_simon_voiceime_RimeZhuyinNative_nativeSelect(JNIEnv*,jclass,jlong h,jint index){
+    auto* s=state(h);auto* ctx=s?context(s->id):nullptr;if(!ctx||index<0)return;
+    if(s->sandhi_input==ctx->input()&&static_cast<size_t>(index)>=s->sandhi_base_count&&static_cast<size_t>(index)-s->sandhi_base_count<s->sandhi_menu.size()) {
+        auto selected=s->sandhi_menu[index-s->sandhi_base_count];rime::Composition fixed;fixed.Reset(ctx->input());
+        for(const auto& seg:ctx->composition()){if(seg.end>selected->start())break;fixed.push_back(seg);}
+        pin(fixed,selected->start(),selected->end(),selected);fixed.Forward();ctx->set_composition(std::move(fixed));ctx->set_caret_pos(ctx->input().size());
+    }else s->api->select_candidate(s->id,(size_t)index);
+}
+extern "C" JNIEXPORT void JNICALL Java_com_simon_voiceime_RimeZhuyinNative_nativeClear(JNIEnv*,jclass,jlong h){Session*s=state(h);if(s){s->api->clear_composition(s->id);s->unparsed.clear();s->pending.clear();s->commit_reading.clear();s->key_caret=-1;s->regroup.input.clear();s->regroup.stops.clear();s->regroup.touches.clear();s->regroup.sandhi_cache.clear();s->regroup.unparsed_mode=false;s->regroup.cache.clear();s->regroup.glyph_preedit.clear();s->regroup.options.clear();s->regroup.boundary=-1;s->regroup.focus_start=s->regroup.focus_end=-1;drain_commit(s);}}
 extern "C" JNIEXPORT jint JNICALL Java_com_simon_voiceime_RimeZhuyinNative_nativeCursor(JNIEnv*,jclass,jlong h){Session*s=state(h);return s ? static_cast<jint>(s->key_caret>=0?s->key_caret:s->unparsed.empty() ? s->api->get_caret_pos(s->id) : s->unparsed_caret) : 0;}
 extern "C" JNIEXPORT void JNICALL Java_com_simon_voiceime_RimeZhuyinNative_nativeMoveCursor(JNIEnv*,jclass,jlong h,jboolean right){Session*s=state(h);if(!s)return;
     if(!s->unparsed.empty()) {
@@ -444,8 +519,10 @@ extern "C" JNIEXPORT jint JNICALL Java_com_simon_voiceime_RimeZhuyinNative_nativ
     auto* ctx=context(s->id);if(!ctx||ctx->composition().empty())return 1;
     auto& seg=ctx->composition().back();auto selected=seg.GetSelectedCandidate();if(!selected)return 1;
     auto entries=words(selected);if(entries.empty())return 1;
+    auto alternates=default_sandhi(s);
+    if(!alternates.empty())return std::max(cp_count(entries.front().text),alternates.front().end-alternates.front().start);
     int limit=cp_count(entries.front().text);
-    auto type=rime::Candidate::GetGenuineCandidate(selected)->type();
+    auto type=genuine_candidate(selected)->type();
     if(type!="user_table"&&type!="user_phrase"&&limit<cp_count(selected->text()))return std::max(1,limit);
     // Automatic full-clause learning is not a lexical row unit. Resolve its
     // prefix against the same dictionary menu, preserving explicit teaching.
@@ -455,13 +532,16 @@ extern "C" JNIEXPORT jint JNICALL Java_com_simon_voiceime_RimeZhuyinNative_nativ
     }
     for(int i=0;i<200;i++){
         auto candidate=seg.GetCandidateAt(i);if(!candidate)break;
-        auto genuine=rime::Candidate::GetGenuineCandidate(candidate);auto sentence=native_sentence(candidate);
+        auto genuine=genuine_candidate(candidate);auto sentence=native_sentence(candidate);
         if(genuine->type()=="user_table"||genuine->type()=="user_phrase"||sentence&&sentence->components().size()>1)continue;
         if(native_phrase(candidate)&&selected->text().find(candidate->text())==0)return std::max(1,cp_count(candidate->text()));
     }
     return std::max(1,std::min(limit,1));
 }
-extern "C" JNIEXPORT jobjectArray JNICALL Java_com_simon_voiceime_RimeZhuyinNative_nativeCandidates(JNIEnv*e,jclass,jlong h){Session*s=state(h);jclass b=e->FindClass("[B");if(!b)return nullptr;std::vector<std::string> values;if(s){RimeCandidateListIterator iterator{};if(s->api->candidate_list_begin(s->id,&iterator)){do{if(iterator.candidate.text)values.emplace_back(display_text(iterator.candidate.text));}while(values.size()<200&&s->api->candidate_list_next(&iterator));s->api->candidate_list_end(&iterator);}if(values.empty()){auto* ctx=context(s->id);if(ctx&&!ctx->input().empty()&&s->unparsed.empty())values.push_back(display_text(ctx->GetCommitText()));}}jobjectArray out=e->NewObjectArray((jsize)values.size(),b,nullptr);for(size_t i=0;i<values.size();i++){jbyteArray v=bytes(e,values[i]);e->SetObjectArrayElement(out,(jsize)i,v);e->DeleteLocalRef(v);}return out;}
+extern "C" JNIEXPORT jobjectArray JNICALL Java_com_simon_voiceime_RimeZhuyinNative_nativeCandidates(JNIEnv*e,jclass,jlong h){Session*s=state(h);jclass b=e->FindClass("[B");if(!b)return nullptr;std::vector<std::string> values;if(s){RimeCandidateListIterator iterator{};if(s->api->candidate_list_begin(s->id,&iterator)){do{if(iterator.candidate.text)values.emplace_back(display_text(iterator.candidate.text));}while(values.size()<200&&s->api->candidate_list_next(&iterator));s->api->candidate_list_end(&iterator);}s->sandhi_menu.clear();s->sandhi_base_count=values.size();auto* live=context(s->id);s->sandhi_input=live?live->input():"";
+    // Appended candidates cannot displace a correct as-typed word.
+    for(const auto& option:default_sandhi(s)){auto label=display_text(option.label);if(std::find(values.begin(),values.end(),label)!=values.end())continue;values.push_back(label);s->sandhi_menu.push_back(option.candidate);}
+    if(values.empty()){auto* ctx=context(s->id);if(ctx&&!ctx->input().empty()&&s->unparsed.empty())values.push_back(display_text(ctx->GetCommitText()));}}jobjectArray out=e->NewObjectArray((jsize)values.size(),b,nullptr);for(size_t i=0;i<values.size();i++){jbyteArray v=bytes(e,values[i]);e->SetObjectArrayElement(out,(jsize)i,v);e->DeleteLocalRef(v);}return out;}
 extern "C" JNIEXPORT jbyteArray JNICALL Java_com_simon_voiceime_RimeZhuyinNative_nativeTakeCommit(JNIEnv* e,jclass,jlong h) {
     Session* s=state(h); if(!s) return bytes(e, "");
     std::string text; text.swap(s->pending);
@@ -592,7 +672,7 @@ static bool sentence_map(Session* s,const std::string& raw,const std::string& te
             // Installed user_table phrases have no dictionary syllable spans.
             // Their native translator already matches the complete local table code;
             // preserve exact source start/end and text matching for this path.
-            if(rime::Candidate::GetGenuineCandidate(candidate)->type()!="user_table") {
+            if(genuine_candidate(candidate)->type()!="user_table") {
                 auto spans=phrase->spans();size_t pos=spans.start();int syllables=0;
                 while(pos<spans.end()){size_t next=spans.NextStop(pos);if(next<=pos)break;pos=next;++syllables;}
                 if(spans.start()!=start||pos!=end||syllables!=cp_count(value))continue;
@@ -641,7 +721,7 @@ extern "C" JNIEXPORT jboolean JNICALL Java_com_simon_voiceime_RimeZhuyinNative_n
     auto stops=s->regroup.stops;if(static_cast<size_t>(at)>stops.back())return false;
     auto it=std::upper_bound(stops.begin(),stops.end(),static_cast<size_t>(at));
     int target=std::max(0,static_cast<int>(it-stops.begin())-1);
-    bool ok=focus_key(s->regroup,s->id,at);
+    bool ok=edited?edited_word_menu(s->regroup,s->id,at):focus_key(s->regroup,s->id,at);
     if(ok&&edited)std::stable_sort(s->regroup.options.begin(),s->regroup.options.end(),[](const RegroupOption& a,const RegroupOption& b){
         auto priority=[](const RegroupOption& x){return x.homophone&&!x.character?0:x.caret_neighbour?1:x.character?3:2;};
         return priority(a)<priority(b);

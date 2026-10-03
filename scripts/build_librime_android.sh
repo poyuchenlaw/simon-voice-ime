@@ -11,6 +11,8 @@ PREFIX="$ROOT/evidence/rime_spike/android-prefix"
 BOOST_HEADERS="$ROOT/third_party/boost-local/usr/include"
 BOOST_REGEX="$ROOT/third_party/boost-regex-source"
 API=26
+# __FILE__ strings in assertions survive stripping; remap paths at compilation.
+PATH_FLAGS="-ffile-prefix-map=${ROOT%/*}=. -fdebug-prefix-map=${ROOT%/*}=."
 
 for needed in "$TOOLCHAIN" "$RIME/CMakeLists.txt" "$BOOST_HEADERS/boost/version.hpp"; do
   [[ -f "$needed" ]] || { echo "missing prerequisite: $needed" >&2; exit 2; }
@@ -23,7 +25,7 @@ clang="$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/clang++"
 ar="$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar"
 for source in posix_api.cpp regex.cpp regex_debug.cpp static_mutex.cpp wide_posix_api.cpp; do
   "$clang" --target="aarch64-linux-android${API}" -fPIC -std=c++17 \
-    -DBOOST_REGEX_NO_LIB -DBOOST_REGEX_SOURCE \
+    -DBOOST_REGEX_NO_LIB -DBOOST_REGEX_SOURCE $PATH_FLAGS \
     -I"$BOOST_HEADERS" -I"$BOOST_REGEX/include" \
     -c "$BOOST_REGEX/src/$source" -o "$BUILD/boost/${source%.cpp}.o"
 done
@@ -38,7 +40,8 @@ build_dep() {
     -DCMAKE_TOOLCHAIN_FILE="$TOOLCHAIN" \
     -DANDROID_ABI=arm64-v8a -DANDROID_PLATFORM="android-$API" \
     -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="$PREFIX" \
-    -DCMAKE_POSITION_INDEPENDENT_CODE=ON -DBUILD_SHARED_LIBS=OFF "$@"
+    -DCMAKE_POSITION_INDEPENDENT_CODE=ON -DBUILD_SHARED_LIBS=OFF \
+    -DCMAKE_C_FLAGS="$PATH_FLAGS" -DCMAKE_CXX_FLAGS="$PATH_FLAGS" "$@"
   cmake --build "$build" --target install --parallel 2
 }
 
@@ -51,8 +54,8 @@ cmake -S "$RIME/deps/opencc" -B "$opencc_build" \
   -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="$PREFIX" \
   -DCMAKE_POSITION_INDEPENDENT_CODE=ON -DBUILD_SHARED_LIBS=OFF \
   -DCMAKE_PREFIX_PATH="$PREFIX" -DLIBMARISA="$PREFIX/lib/libmarisa.a" \
-  -DCMAKE_CXX_FLAGS="-I$PREFIX/include" \
-  -DUSE_SYSTEM_MARISA=ON -DUSE_SYSTEM_DARTS=OFF -DENABLE_GTEST=OFF
+  -DCMAKE_C_FLAGS="$PATH_FLAGS" -DCMAKE_CXX_FLAGS="$PATH_FLAGS -I$PREFIX/include" \
+  -DUSE_SYSTEM_MARISA=ON -DUSE_SYSTEM_DARTS=OFF -DENABLE_GTEST=OFF -DSHARE_INSTALL_PREFIX=share
 cmake --build "$opencc_build" --target libopencc --parallel 2
 mkdir -p "$PREFIX/include/opencc" "$PREFIX/lib"
 cp -a "$RIME/deps/opencc/src/"*.h "$RIME/deps/opencc/src/"*.hpp "$PREFIX/include/opencc/"
@@ -67,6 +70,7 @@ cmake -S "$RIME" -B "$BUILD/librime" \
   -DBUILD_STATIC=ON -DBUILD_SHARED_LIBS=ON -DBUILD_MERGED_PLUGINS=ON \
   -DBUILD_SEPARATE_LIBS=OFF -DBUILD_TEST=OFF -DBUILD_SAMPLE=OFF \
   -DBUILD_DATA=OFF -DENABLE_LOGGING=OFF \
+  -DCMAKE_C_FLAGS="$PATH_FLAGS" -DCMAKE_CXX_FLAGS="$PATH_FLAGS" \
   -DBoost_ROOT="$PREFIX" -DBoost_INCLUDE_DIR="$PREFIX/include" \
   -DBoost_LIBRARY_DIR_RELEASE="$PREFIX/lib" \
   -DBoost_REGEX_LIBRARY_RELEASE="$PREFIX/lib/libboost_regex.a"

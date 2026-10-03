@@ -22,6 +22,8 @@ extern "C" void* __dynamic_cast(const void*,const void*,const void*,std::ptrdiff
 #include <dlfcn.h>
 template<class T,class B> static T* engine_cast(B* value) {
     if(!value)return nullptr;
+    // Locally constructed edit wrappers carry this DSO's RTTI.
+    if(auto* local=dynamic_cast<T*>(value))return local;
 #ifdef __ANDROID__
     static void* library=dlopen("librime.so",RTLD_NOW|RTLD_NOLOAD);
     if(!library)return nullptr;
@@ -33,15 +35,29 @@ template<class T,class B> static T* engine_cast(B* value) {
     return dynamic_cast<T*>(value);
 #endif
 }
+// Edited candidates are wrapped by JNI, while translator candidates belong
+// to librime. Unwrap both RTTI domains before asking for native word spans.
+static rime::an<rime::Candidate> genuine_candidate(rime::an<rime::Candidate> candidate) {
+    while(candidate) {
+        if(auto* shadow=engine_cast<rime::ShadowCandidate>(candidate.get())) {
+            candidate=shadow->item();continue;
+        }
+        if(auto* unique=engine_cast<rime::UniquifiedCandidate>(candidate.get())) {
+            if(!unique->items().empty()){candidate=unique->items().front();continue;}
+        }
+        break;
+    }
+    return candidate;
+}
 static rime::an<rime::Phrase> native_phrase(const rime::an<rime::Candidate>& candidate) {
     if(!candidate)return nullptr;
-    auto genuine=rime::Candidate::GetGenuineCandidate(candidate);
+    auto genuine=genuine_candidate(candidate);
     auto* result=engine_cast<rime::Phrase>(genuine.get());
     return result?rime::an<rime::Phrase>(genuine,result):nullptr;
 }
 static rime::an<rime::Sentence> native_sentence(const rime::an<rime::Candidate>& candidate) {
     if(!candidate)return nullptr;
-    auto genuine=rime::Candidate::GetGenuineCandidate(candidate);
+    auto genuine=genuine_candidate(candidate);
     auto* result=engine_cast<rime::Sentence>(genuine.get());
     return result?rime::an<rime::Sentence>(genuine,result):nullptr;
 }
@@ -80,6 +96,9 @@ struct RegroupState {
     std::unique_ptr<rime::Grammar> grammar;
     std::string cache_input,cache_preview;
     std::map<int,std::vector<RegroupOption>> cache;
+    std::string sandhi_cache_input,sandhi_cache_preview;
+    std::vector<size_t> sandhi_cache_stops;
+    std::map<int,std::vector<RegroupOption>> sandhi_cache;
 
 };
 static rime::Context* context(RimeSessionId id) {
@@ -129,7 +148,7 @@ static bool capture(RegroupState& r,RimeSessionId id) {
                 // boundaries explicitly present in the typed reading; ambiguous
                 // multi-syllable inputs stay with Rime's ordinary menu.
                 ends.clear();
-                if(rime::Candidate::GetGenuineCandidate(cand)->type()=="user_table"){
+                if(genuine_candidate(cand)->type()=="user_table"){
                     for(size_t at=cand->start();at<cand->end();++at)
                         if(std::string(" 6347").find(r.input[at])!=std::string::npos)ends.push_back(at+1);
                     if(ends.empty()||ends.back()!=cand->end())ends.push_back(cand->end());
@@ -148,7 +167,8 @@ static std::string grouping(const rime::an<rime::Candidate>& cand) {
     return out;
 }
 static std::vector<rime::DictEntry> words(const rime::an<rime::Candidate>& cand) {
-    auto genuine=rime::Candidate::GetGenuineCandidate(cand);
+    if(!cand)return {}; // Deleting the only vowel can leave an untranslated segment.
+    auto genuine=genuine_candidate(cand);
     auto sentence=native_sentence(genuine);if(sentence)return sentence->components();
     auto phrase=native_phrase(genuine);if(phrase)return {phrase->entry()};
     rime::DictEntry word;word.text=cand->text();word.weight=0;return {word};
@@ -236,7 +256,7 @@ static void append_repairs(RegroupState& r,rime::Context* probe,int boundary,int
                     auto candidate=probe->composition().back().GetCandidateAt(i);if(!candidate)break;
                     auto phrase=native_phrase(candidate);
                     if(!phrase||candidate->start()!=from||candidate->end()!=to||cp_count(candidate->text())!=1)continue;
-                    if(rime::Candidate::GetGenuineCandidate(candidate)->type()!="user_table"){auto spans=phrase->spans();if(spans.start()!=from||spans.NextStop(from)!=to)continue;}
+                    if(genuine_candidate(candidate)->type()!="user_table"){auto spans=phrase->spans();if(spans.start()!=from||spans.NextStop(from)!=to)continue;}
                     bool duplicate=false;for(auto& old:r.options)if(old.start==a&&old.end==b&&old.label==candidate->text()&&old.repaired_code==corrected){duplicate=true;break;}
                     if(duplicate)continue;
                     RegroupOption option{a,b,candidate->text(),candidate,phrase->weight()};
@@ -418,16 +438,66 @@ static bool select_regroup(RegroupState& r,RimeSessionId id,int index) {
     r.options.clear();r.boundary=-1;r.focus_start=r.focus_end=-1;return true;
 }
 
+// Mandarin surface tones are alternate dictionary readings only. Keep raw keys
+// and literal-tone candidates intact; accept only 不/一 at the changed syllable.
+static std::vector<RegroupOption> sandhi_words(RegroupState& r,int target) {
+    std::vector<RegroupOption> result;
+    const int count=static_cast<int>(r.stops.size())-1;
+    if(count<2)return result;
+    struct Change {int syllable;char tone;std::string glyph;};
+    std::vector<Change> changes;
+    for(int i=0;i+1<count;i++) {
+        auto code=r.input.substr(r.stops[i],r.stops[i+1]-r.stops[i]);
+        auto next=r.input.substr(r.stops[i+1],r.stops[i+2]-r.stops[i+1]);
+        if(next.empty())continue;
+        char tone=next.back();
+        if(code=="1j6"&&tone=='4')changes.push_back({i,'4',"不"});
+        if((code=="u6"&&tone=='4')||(code=="u4"&&(tone==' '||tone=='6'||tone=='3')))changes.push_back({i,' ',"一"});
+    }
+    if(changes.empty())return result;
+    if(r.sandhi_cache_input!=r.input||r.sandhi_cache_preview!=r.original||r.sandhi_cache_stops!=r.stops) {
+        r.sandhi_cache.clear();r.sandhi_cache_input=r.input;r.sandhi_cache_preview=r.original;r.sandhi_cache_stops=r.stops;
+    }
+    auto cached=r.sandhi_cache.find(target);if(cached!=r.sandhi_cache.end())return cached->second;
+    if(!r.probe){auto* api=rime_get_api();r.probe=api->create_session();api->select_schema(r.probe,"bopomofo_express");}
+    auto* probe=context(r.probe);if(!probe)return result;
+    std::set<std::tuple<int,int,std::string>> seen;
+    for(int a=std::max(0,target-3);a<=target;a++)for(int b=target+1;b<=std::min(count,a+4);b++) {
+        std::vector<Change> local;for(auto change:changes)if(change.syllable>=a&&change.syllable+1<b)local.push_back(change);
+        // At most three eligible positions in a four-syllable lexical window.
+        for(unsigned mask=1;mask<(1u<<local.size());mask++) {
+            auto input=r.input.substr(0,r.stops[b]);
+            for(unsigned i=0;i<local.size();i++)if(mask&(1u<<i))input[r.stops[local[i].syllable+1]-1]=local[i].tone;
+            probe->Clear();probe->set_input(input);
+            rime::Composition prefix;prefix.Reset(input);pin_text(prefix,0,r.stops[a],cp_slice(r.original,0,a));
+            prefix.Forward();probe->set_composition(std::move(prefix));probe->set_caret_pos(r.stops[b]);
+            if(probe->composition().empty())continue;
+            for(int i=0;i<200;i++) {
+                auto candidate=probe->composition().back().GetCandidateAt(i);if(!candidate)break;
+                auto phrase=native_phrase(candidate);auto sentence=native_sentence(candidate);
+                if(!phrase||candidate->start()!=r.stops[a]||candidate->end()!=r.stops[b]||cp_count(candidate->text())!=b-a||(sentence&&sentence->components().size()!=1))continue;
+                auto spans=phrase->spans();size_t at=spans.start();int slot=a;bool same=true;
+                while(at<spans.end()&&slot<b){at=spans.NextStop(at);if(at!=r.stops[++slot]){same=false;break;}}
+                if(!same||slot!=b)continue;
+                bool matches=true;for(unsigned j=0;j<local.size();j++)if(mask&(1u<<j))if(cp_slice(candidate->text(),local[j].syllable-a,local[j].syllable-a+1)!=local[j].glyph)matches=false;
+                if(!matches||!seen.emplace(a,b,candidate->text()).second)continue;
+                RegroupOption option{a,b,candidate->text(),candidate,phrase->weight()};option.homophone=true;result.push_back(std::move(option));
+            }
+        }
+    }
+    r.sandhi_cache[target]=result;return result;
+}
+
 static bool focus_character(RegroupState& r,RimeSessionId id,int target) {
     r.boundary=-1;r.focus_start=r.focus_end=-1;r.options.clear();
     if(!capture(r,id)||target<0||static_cast<size_t>(target+1)>=r.stops.size())return false;
     auto* ctx=context(id);int a=0,b=cp_count(r.original),position=0;
-    bool found=false;
+    bool found=false,context_word=false;
     for(auto& seg:ctx->composition()){
         auto candidate=seg.GetSelectedCandidate();if(!candidate)continue;
         for(const auto& word:words(candidate)){
             int end=position+cp_count(word.text);
-            if(target>=position&&target<end){a=position;b=end;found=true;break;}
+            if(target>=position&&target<end){a=position;b=end;found=true;context_word=!native_phrase(candidate);break;}
             position=end;
         }
         if(found)break;
@@ -453,10 +523,10 @@ static bool focus_character(RegroupState& r,RimeSessionId id,int target) {
     // All unmarked learned spans are resolved against lexical dictionary
     // windows, including user_phrase and single-component Sentence wrappers.
     // Rime's automatic user dictionary does not retain the teaching origin.
-    if(!explicit_word&&b-a>1) {
-        int span_start=a,span_end=b;
+    if(!explicit_word&&(b-a>1||context_word)) {
+        int span_start=context_word?std::max(0,target-3):a,span_end=context_word?std::min(cp_count(r.original),target+4):b;
         if(regroup(r,rime_get_api(),id,b))if(auto* probe=context(r.probe)) {
-            double best=-1e300;a=target;b=target+1;
+            double best=-1e300,fallback=-1e300;int fallback_a=target,fallback_b=target+1;a=target;b=target+1;
             for(int from=std::max(span_start,target-3);from<=target;from++)
                 for(int to=target+1;to<=std::min(span_end,from+4);to++) {
                     if(to-from<=1)continue;
@@ -468,16 +538,25 @@ static bool focus_character(RegroupState& r,RimeSessionId id,int target) {
                     for(int i=0;i<200;i++) {
                         auto candidate=probe->composition().back().GetCandidateAt(i);if(!candidate)break;
                         auto phrase=native_phrase(candidate);auto sentence=native_sentence(candidate);
-                        auto type=rime::Candidate::GetGenuineCandidate(candidate)->type();
+                        auto type=genuine_candidate(candidate)->type();
                         if(!phrase||(sentence&&sentence->components().size()!=1)||type=="user_table"||type=="user_phrase"
                             ||candidate->start()!=r.stops[from]||candidate->end()!=r.stops[to]
-                            ||candidate->text()!=cp_slice(r.original,from,to))continue;
+                            ||cp_count(candidate->text())!=to-from)continue;
                         RegroupOption word{from,to,candidate->text(),candidate,phrase->weight()};
                         double score=sentence_score(r,word);
-                        if(score>best){best=score;a=from;b=to;}break;
+                        if(candidate->text()==cp_slice(r.original,from,to)){if(score>best){best=score;a=from;b=to;}break;}
+                        else if(from==span_start&&to==span_end&&score>fallback){fallback=score;fallback_a=from;fallback_b=to;}
                     }
                 }
+            if(best==-1e300&&fallback>-1e300){a=fallback_a;b=fallback_b;}
         }
+    }
+    auto sandhi=sandhi_words(r,target);
+    // Recover a lexical span when the surface tone split it into characters.
+    // A matching existing preview is preferred; otherwise use native lookup order.
+    if(!explicit_word&&!sandhi.empty()&&b-a==1) {
+        auto chosen=std::find_if(sandhi.begin(),sandhi.end(),[&](const auto& x){return x.label==cp_slice(r.original,x.start,x.end);});
+        const auto& word=chosen==sandhi.end()?sandhi.front():*chosen;a=word.start;b=word.end;
     }
     r.glyph_stops.clear();
     // Focus is a view operation. Moving the live Rime caret through pinned
@@ -500,7 +579,7 @@ static bool focus_character(RegroupState& r,RimeSessionId id,int target) {
         auto candidate=probe->composition().back().GetCandidateAt(i);if(!candidate)break;
         auto phrase=native_phrase(candidate);
         if(!phrase||candidate->start()!=r.stops[a]||candidate->end()!=r.stops[b]||cp_count(candidate->text())!=b-a)continue;
-        if(rime::Candidate::GetGenuineCandidate(candidate)->type()!="user_table") {
+        if(genuine_candidate(candidate)->type()!="user_table") {
             auto spans=phrase->spans();size_t at=spans.start();int slot=a;
             bool same=at==r.stops[a];
             while(same&&at<spans.end()){size_t end=spans.NextStop(at);if(end<=at||++slot>b||end!=r.stops[slot]){same=false;break;}at=end;}
@@ -513,6 +592,9 @@ static bool focus_character(RegroupState& r,RimeSessionId id,int target) {
         auto chosen=std::find_if(homophones.begin(),homophones.end(),[&](const auto& option){return option.label==cp_slice(r.original,a,b);});
         if(chosen!=homophones.end())std::rotate(homophones.begin(),chosen,chosen+1);
     }
+    // Literal words retain their native order before any alternate reading.
+    std::set<std::string> labels;for(const auto& x:homophones)labels.insert(x.label);
+    for(const auto& x:sandhi)if(x.start==a&&x.end==b&&labels.insert(x.label).second)homophones.push_back(x);
     r.options=std::move(homophones);
 
 
@@ -573,7 +655,37 @@ static bool focus_key(RegroupState& r,RimeSessionId id,int at) {
     r.options.clear();std::set<std::string> seen;
     for(const auto& option:near)if(r.options.size()<8&&seen.insert(option.label).second)r.options.push_back(option);
     for(const auto& option:rest)if(option.homophone&&seen.insert(option.label).second)r.options.push_back(option);
-    for(const auto& item:r.cache)for(const auto& option:item.second)if(option.repaired_input.empty()&&!option.homophone&&seen.insert(option.label).second)r.options.push_back(option);
+    for(const auto& item:r.cache)for(const auto& option:item.second)if(!option.literal&&option.start==r.focus_start&&option.end==r.focus_end&&option.repaired_input.empty()&&!option.homophone&&native_phrase(option.candidate)&&(!native_sentence(option.candidate)||native_sentence(option.candidate)->components().size()==1)&&seen.insert(option.label).second)r.options.push_back(option);
     int slips=0;for(const auto& option:rest)if(!option.repaired_input.empty()&&slips<20&&seen.insert(option.label).second){r.options.push_back(option);++slips;}
+    return true;
+}
+
+// After a symbol edit, query the entire lexical reading rather than the split
+// character menus. Candidate offsets stay anchored to the unchanged sentence.
+static bool edited_word_menu(RegroupState& r,RimeSessionId id,int at) {
+    if(!focus_key(r,id,at))return false;
+    int a=r.focus_start,b=r.focus_end;
+    auto* probe=context(r.probe);if(!probe)return false;
+    probe->Clear();probe->set_input(r.input.substr(0,r.stops[b]));
+    rime::Composition prefix;prefix.Reset(probe->input());
+    pin_text(prefix,0,r.stops[a],cp_slice(r.original,0,a));
+    prefix.Forward();probe->set_composition(std::move(prefix));probe->set_caret_pos(r.stops[b]);
+    std::vector<RegroupOption> lexical;
+    if(!probe->composition().empty())for(int i=0;i<200;i++) {
+        auto candidate=probe->composition().back().GetCandidateAt(i);if(!candidate)break;
+        auto phrase=native_phrase(candidate);if(!phrase||candidate->start()!=r.stops[a]||candidate->end()>r.stops[b])continue;
+        auto end=std::lower_bound(r.stops.begin()+a+1,r.stops.begin()+b+1,candidate->end());
+        if(end==r.stops.begin()+b+1||*end!=candidate->end())continue;
+        int stop=static_cast<int>(end-r.stops.begin());
+        if(cp_count(candidate->text())>stop-a)continue;
+        auto sentence=native_sentence(candidate);if(sentence&&sentence->components().size()>1)continue;
+        RegroupOption option{a,stop,candidate->text(),candidate,phrase->weight()};
+        option.homophone=true;option.character=stop-a==1&&b-a>1;lexical.push_back(std::move(option));
+    }
+    // Word candidates from surface-tone lookup follow as-typed words and
+    // precede the character fallbacks without replacing any literal choices.
+    std::set<std::string> labels;for(const auto& x:lexical)labels.insert(x.label);
+    for(const auto& x:r.options)if(x.homophone&&!x.character&&x.start==a&&x.end==b&&labels.insert(x.label).second)lexical.push_back(x);
+    if(!lexical.empty())r.options=std::move(lexical);
     return true;
 }

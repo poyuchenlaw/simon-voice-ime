@@ -2,8 +2,8 @@ plugins {
     id 'com.android.application'
 }
 
-def phoneVersionCodeValue = rootProject.findProperty("phoneVersionCode")?.toString() ?: "95"
-def phoneVersionNameValue = rootProject.findProperty("phoneVersionName")?.toString() ?: "6.60"
+def phoneVersionCodeValue = rootProject.findProperty("phoneVersionCode")?.toString() ?: "96"
+def phoneVersionNameValue = rootProject.findProperty("phoneVersionName")?.toString() ?: "6.61"
 
 android {
     namespace 'com.simon.voiceime'

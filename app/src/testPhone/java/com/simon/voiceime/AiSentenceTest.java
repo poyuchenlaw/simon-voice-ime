@@ -173,6 +173,11 @@ public class AiSentenceTest {
   assertEquals(java.util.List.of(1,-1),AiSentence.rowOrder("舵餘",true,java.util.List.of("舵餘","多"),java.util.List.of("word","char"),java.util.List.of("朵"),1));
  }
 
+ @Test public void focusedRowRejectsLateClauseFromOldFocus() {
+  assertEquals(java.util.List.of(0),AiSentence.rowOrder("不要冤枉你",true,
+   java.util.List.of("冤枉"),java.util.List.of("word"),java.util.List.of("不要冤往你"),2));
+ }
+
  @Test public void rowThreeRejectsWholeSentenceFromAnySource() {
   assertEquals(java.util.List.of(1,2),AiSentence.rowOrder("不要冤枉你",true,
    java.util.List.of("不要冤往你","冤枉","冤"),java.util.List.of("word","word","char"),java.util.List.of("")));

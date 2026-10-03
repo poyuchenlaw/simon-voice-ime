@@ -3,7 +3,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 OUT="${1:-$ROOT/evidence/v660/host}"
 JDK="${JAVA_HOME:-/home/simon/.local/jdk/jdk-17.0.2}"
-HOST_LIB_DIR="/home/simon/simon-voice-ime/evidence/rime_spike/host-install-octagram/lib"
+HOST_LIB_DIR="${HOST_LIB_DIR:-/home/simon/simon-voice-ime/evidence/rime_spike/host-install-octagram/lib}"
 mkdir -p "$OUT/classes" "$OUT/lib" "$OUT/user"
 "$JDK/bin/javac" -encoding UTF-8 -cp /home/simon/android-sdk/platforms/android-34/android.jar -d "$OUT/classes" \
  "$ROOT/scripts/v639_hostsrc/com/simon/voiceime/ZhuyinWordIndex.java" \
@@ -67,7 +67,7 @@ generated=E/'AiSentencePhoneProjectionHarness.java';generated.write_text(body)
 files=[source/n for n in ['AiSentence.java','SentenceContract.java','AiComposition.java','ZhuyinInputController.java','RimeVocabularyInstaller.java']]+[W/'scripts/v639_hostsrc/com/simon/voiceime/ZhuyinWordIndex.java']+[W/'app/src/phone/java/com/simon/voiceime'/n for n in ['ZhuyinKeyMap.java','RimeZhuyinEngine.java','RimeZhuyinNative.java']]+[generated,W/'scripts/v660_hostsrc/AiWordSpanCompositionTest.java',W/'app/src/testPhone/java/com/simon/voiceime/AiSentenceTest.java']
 subprocess.run([str(J/'javac'),'-encoding','UTF-8','-cp',cp,'-d',str(C),*map(str,files)],check=True)
 factory=True;user=E/('junit-user-green' if factory else 'junit-user-red');user.mkdir(exist_ok=True)
-H=Path('/home/simon/simon-voice-ime/evidence/rime_spike/host-install-octagram/lib');lib=E/'lib'
+H=Path(os.environ.get('HOST_LIB_DIR','/home/simon/simon-voice-ime/evidence/rime_spike/host-install-octagram/lib'));lib=E/'lib'
 command=[str(J/'java'),f'-Djava.library.path={lib}:{H}',f'-Dr5.assets={W}/app/src/phone/assets/rime',f'-Dr5.contract={W}/app/src/main/assets/sentence-contract.json',f'-Dr5.user={user}',f'-Dr5.factory={str(factory).lower()}','-cp',str(C)+':'+str(W/'app/src/testPhone/resources')+':'+cp,'org.junit.runner.JUnitCore','com.simon.voiceime.AiWordSpanCompositionTest']
 if factory:command+=['com.simon.voiceime.AiSentenceTest']
 r=subprocess.run(command,env=dict(os.environ,LD_LIBRARY_PATH=f'{H}:{lib}'))
