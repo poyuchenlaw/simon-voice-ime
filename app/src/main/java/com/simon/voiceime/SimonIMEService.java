@@ -4273,7 +4273,16 @@ public class SimonIMEService extends InputMethodService {
             reading.post(()->{
                 if(!(reading.getParent() instanceof HorizontalScrollView)||reading.getLayout()==null)return;
                 HorizontalScrollView scroll=(HorizontalScrollView)reading.getParent();
-                if(zhuyinInput.keyCaret()<0){if(zhuyinInput.previewBoundary()<0&&!zhuyinInput.wordFocused())scroll.fullScroll(View.FOCUS_RIGHT);}
+                if(zhuyinInput.keyCaret()<0){
+                    int boundary=zhuyinInput.previewBoundary();
+                    if(boundary>=0){
+                        int at=0,index=0;
+                        for(String syllable:zhuyinInput.phoneticSyllables()){if(index++>=boundary)break;at+=syllable.length();}
+                        at=Math.min(at,reading.getText().length());
+                        int x=(int)reading.getLayout().getPrimaryHorizontal(at)+reading.getPaddingLeft();
+                        scroll.scrollTo(Math.max(0,x-scroll.getWidth()/2),0);
+                    }else if(!zhuyinInput.wordFocused())scroll.fullScroll(View.FOCUS_RIGHT);
+                }
                 else {
                     String text=reading.getText().toString();int at=Math.min(text.length(),zhuyinInput.keyCaret());
                     int x=(int)reading.getLayout().getPrimaryHorizontal(at)+reading.getPaddingLeft();
@@ -4407,16 +4416,30 @@ public class SimonIMEService extends InputMethodService {
         if(row.getTag(R.id.boPhoneticPreview)!=null)return;
         row.setTag(R.id.boPhoneticPreview,Boolean.TRUE);
         row.setOnTouchListener(new View.OnTouchListener(){
-            float downX;boolean dragging;int last=-1;
+            float downX;boolean dragging,scrolling;int scrollStart;int last=-1;
             @Override public boolean onTouch(View view,MotionEvent event){
                 if(zhuyinInput==null||row.getLayout()==null)return false;
                 int action=event.getActionMasked();
-                if(action==MotionEvent.ACTION_DOWN){downX=event.getX();dragging=false;last=-1;view.getParent().requestDisallowInterceptTouchEvent(true);return true;}
+                if(action==MotionEvent.ACTION_DOWN){
+                    downX=event.getRawX();dragging=false;scrolling=false;last=-1;
+                    scrollStart=view.getParent() instanceof HorizontalScrollView?((HorizontalScrollView)view.getParent()).getScrollX():0;
+                    view.getParent().requestDisallowInterceptTouchEvent(true);return true;
+                }
                 if(action==MotionEvent.ACTION_CANCEL){if(row instanceof PreviewCursorView)((PreviewCursorView)row).setDragging(false);view.getParent().requestDisallowInterceptTouchEvent(false);return true;}
                 if(action!=MotionEvent.ACTION_UP&&action!=MotionEvent.ACTION_MOVE)return true;
-                if(Math.abs(event.getX()-downX)>dp(4))dragging=true;
+                float travel=event.getRawX()-downX;
+                if(Math.abs(travel)>dp(4))dragging=true;
+                if(Math.abs(travel)>dp(48))scrolling=true;
+                if(scrolling&&view.getParent() instanceof HorizontalScrollView){
+                    ((HorizontalScrollView)view.getParent()).scrollTo(Math.max(0,scrollStart-Math.round(travel)),0);
+                    if(row instanceof PreviewCursorView)((PreviewCursorView)row).setDragging(false);
+                    if(action==MotionEvent.ACTION_UP)view.getParent().requestDisallowInterceptTouchEvent(false);
+                    return true;
+                }
                 if(row instanceof PreviewCursorView)((PreviewCursorView)row).setDragging(dragging&&action!=MotionEvent.ACTION_UP);
-                if(action==MotionEvent.ACTION_MOVE&&!dragging)return true;
+                // Short drags select a key on release; a broad swipe scrolls without
+                // moving the caret or scheduling caret-centering callbacks.
+                if(action==MotionEvent.ACTION_MOVE)return true;
                 String text=row.getText().toString();float x=event.getX()-row.getTotalPaddingLeft()+row.getScrollX();
                 int nearest=0;float distance=Float.MAX_VALUE;
                 for(int cp=0;cp<=text.codePointCount(0,text.length());cp++){

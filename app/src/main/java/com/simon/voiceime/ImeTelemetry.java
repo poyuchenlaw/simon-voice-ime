@@ -49,9 +49,10 @@ final class ImeTelemetry {
     }
     ImeTelemetry(Context context, File spool, String version, Transport transport) {
         this.context=context; this.spool=new TelemetrySpool(spool,MAX_BYTES); this.appVersion=version; this.transport=transport;
+        installCrashHandlers();
         thread.start(); handler=new Handler(thread.getLooper());
         handler.postDelayed(new Runnable(){public void run(){flush(false);if(handler!=null)handler.postDelayed(this,15_000);}},15_000);
-        installCrashHandlers(); collectPreviousExits();
+        collectPreviousExits();
     }
     private static String version(Context c) {
         try { return c.getPackageManager().getPackageInfo(c.getPackageName(),0).versionName; }
@@ -81,15 +82,43 @@ final class ImeTelemetry {
         return event;
     }
     static JSONObject makeCrashEvent(String threadName, Throwable failure, int maxStackChars) throws Exception {
-        StringWriter writer = new StringWriter();
-        failure.printStackTrace(new PrintWriter(writer));
-        String stack = writer.toString();
-        if (stack.length() > maxStackChars) stack = stack.substring(0, maxStackChars);
-        return new JSONObject().put("type", "crash")
-                .put("where", threadName == null ? "unknown" : threadName)
-                .put("exception_class", failure.getClass().getName())
-                .put("message", redact(failure.getMessage() == null ? "" : failure.getMessage()))
-                .put("stack", redact(stack));
+        // Throwable.printStackTrace includes arbitrary message/cause text. Keep
+        // frame metadata and safe diagnostic messages, never editor/audio content.
+        StringBuilder stack=new StringBuilder();
+        Set<Throwable> seen=Collections.newSetFromMap(new IdentityHashMap<Throwable,Boolean>());
+        for(Throwable cause=failure;cause!=null&&seen.add(cause)&&stack.length()<maxStackChars;cause=cause.getCause()){
+            stack.append(cause.getClass().getName()).append('\n');
+            for(StackTraceElement frame:cause.getStackTrace()){
+                stack.append("  at ").append(frame.toString()).append('\n');
+                if(stack.length()>=maxStackChars)break;
+            }
+        }
+        if(stack.length()>maxStackChars)stack.setLength(Math.max(0,maxStackChars));
+        String message=failure.getMessage();
+        return new JSONObject().put("type","crash").put("kind","java").put("capture","uncaught_handler")
+                .put("where", "main".equals(threadName)?"main":"background")
+                .put("exception_class",failure.getClass().getName())
+                .put("message",safeCrashMessage(message)).put("message_present",message!=null)
+                .put("stack",stack.toString());
+    }
+    private static String safeCrashMessage(String message){
+        if(message==null||message.isEmpty())return "";
+        if("window token missing".equals(message))return message;
+        if(message.length()<=160&&message.matches("(?:length|index|size|start|end|offset|count)[=: ]+[0-9-]+(?:[;, ]+(?:length|index|size|start|end|offset|count)[=: ]+[0-9-]+)*"))return message;
+        return "[content omitted]";
+    }
+
+    static String safeExitTrace(String raw,int maximum){
+        StringBuilder frames=new StringBuilder();
+        for(String line:raw.split("\\r?\\n")){
+            String frame=line.trim();
+            if(frame.matches("at (?:com\\.simon\\.voiceime|android|java|javax|dalvik|okhttp3|okio|org\\.json)\\.[A-Za-z0-9_.$<>]+\\((?:[A-Za-z0-9_$]+\\.java:[0-9]+|Native Method|Unknown Source)\\)")){
+                frames.append(frame).append('\n');
+                if(frames.length()>=maximum)break;
+            }
+        }
+        if(frames.length()>maximum)frames.setLength(Math.max(0,maximum));
+        return frames.toString();
     }
     private void enqueue(JSONObject event){spool.add(event);}
     void key(String page,String key,float x,float y,float cx,float cy,boolean protectedField) {
@@ -176,7 +205,7 @@ final class ImeTelemetry {
     String lastResult(){return lastResult;} long lastUploadMs(){return lastUploadMs;}
     void uploadNow(){if(handler!=null)handler.post(()->flush(true));}
     private void installCrashHandlers(){Thread.UncaughtExceptionHandler prior=Thread.getDefaultUncaughtExceptionHandler();Thread.setDefaultUncaughtExceptionHandler((t,e)->{
-        try{JSONObject crash=makeCrashEvent(t.getName(),e,MAX_CRASH_STACK_CHARS);crash.remove("type");recordUrgent("crash","voice",crash);}catch(Exception ignored){}
+        try{JSONObject crash=makeCrashEvent(t.getName(),e,MAX_CRASH_STACK_CHARS);crash.remove("type");recordUrgent("crash","voice",crash);}catch(Exception captureFailure){Log.e("ImeTelemetry","uncaught crash capture failed",captureFailure);}
         if(prior!=null)prior.uncaughtException(t,e);
     });}
     private static String redact(String s){return s.replaceAll("(?i)(Bearer\\s+)[^\\s]+","$1[redacted]");}
@@ -206,8 +235,18 @@ final class ImeTelemetry {
         if(rows!=null)for(ApplicationExitInfo x:rows){long ts=x.getTimestamp();if(ts<=sent)continue;int reason=x.getReason();
             if(reason==ApplicationExitInfo.REASON_CRASH||reason==ApplicationExitInfo.REASON_CRASH_NATIVE||reason==ApplicationExitInfo.REASON_ANR){
                 String kind=reason==ApplicationExitInfo.REASON_ANR?"anr":reason==ApplicationExitInfo.REASON_CRASH_NATIVE?"native":"java";
-                String trace="";try(InputStream in=x.getTraceInputStream()){if(in!=null){byte[] b=new byte[4096];int n=in.read(b);if(n>0)trace=redact(new String(b,0,n,StandardCharsets.UTF_8).substring(0,Math.min(n,2048)));}}catch(Exception ignored){}
-                recordUrgent("crash","voice",new JSONObject().put("kind",kind).put("reason",x.getDescription()==null?"exit-"+reason:x.getDescription()).put("trace",trace));
+                String trace="",traceStatus="unavailable";
+                try(InputStream in=x.getTraceInputStream()){
+                    if(in!=null){
+                        byte[] bytes=new byte[65536];int used=0,count;
+                        while(used<bytes.length&&(count=in.read(bytes,used,bytes.length-used))>0)used+=count;
+                        trace=safeExitTrace(new String(bytes,0,used,StandardCharsets.UTF_8),MAX_CRASH_STACK_CHARS);
+                        traceStatus=trace.isEmpty()?"frame_filter_empty":"frames_only";
+                    }
+                }catch(Exception readFailure){traceStatus="read_error";}
+                recordUrgent("crash","voice",new JSONObject().put("kind",kind).put("capture","exit_history")
+                        .put("reason",exitReasonName(reason)).put("reason_code",reason).put("exit_ts",ts)
+                        .put("status",x.getStatus()).put("trace",trace).put("trace_status",traceStatus));
             } else {
                 recordUrgent("exit","voice",new JSONObject().put("reason_code",reason).put("reason_name",exitReasonName(reason))
                         .put("status",x.getStatus()).put("importance",x.getImportance()).put("pss_kb",x.getPss()).put("rss_kb",x.getRss())

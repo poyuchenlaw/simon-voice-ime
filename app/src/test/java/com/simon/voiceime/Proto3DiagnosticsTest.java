@@ -53,4 +53,23 @@ public class Proto3DiagnosticsTest {
             assertTrue(q.bytes()<=128);assertEquals(0,q.size());
         } finally { for(File f:dir.listFiles())f.delete();dir.delete(); }
     }
+    @Test public void crashDetailsOmitTypedTextAndAudioFromMessagesAndCauses() throws Exception {
+        RuntimeException failure=new RuntimeException("typed-private-sentence /data/private-audio.wav",new IllegalArgumentException("spoken-private-sentence"));
+        JSONObject event=ImeTelemetry.makeCrashEvent("main",failure,8192);
+        assertEquals("java.lang.RuntimeException",event.getString("exception_class"));
+        assertFalse("typed content must not enter crash telemetry",event.toString().contains("typed-private-sentence"));
+        assertFalse("audio path must not enter crash telemetry",event.toString().contains("private-audio.wav"));
+        assertFalse("cause message must not enter crash telemetry",event.toString().contains("spoken-private-sentence"));
+        assertTrue(event.getString("stack").contains("crashDetailsOmitTypedTextAndAudioFromMessagesAndCauses"));
+    }
+
+    @Test public void systemExitTraceKeepsOnlyKnownJavaFrames() throws Exception {
+        String raw="private typed sentence /private/audio.wav\njava.lang.IllegalArgumentException: spoken-private\n    at com.simon.voiceime.SimonIMEService.onCreate(SimonIMEService.java:570)\n    at android.app.ActivityThread.handleCreateService(ActivityThread.java:120)\n  at attacker.Private.typedInput(private-audio.wav:5)\n";
+        String safe=ImeTelemetry.safeExitTrace(raw,8192);
+        assertTrue(safe.contains("SimonIMEService.onCreate(SimonIMEService.java:570)"));
+        assertTrue(safe.contains("ActivityThread.handleCreateService"));
+        assertFalse(safe.contains("private"));assertFalse(safe.contains("spoken"));
+        assertTrue(ImeTelemetry.safeExitTrace(raw,40).length()<=40);
+    }
+
 }
