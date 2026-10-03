@@ -6,6 +6,9 @@ import java.util.*;
 public class ZhuyinPreviewBoundaryTest {
  static class Engine extends ZhuyinSecondPassTest.Engine {
   int boundary=-1,chosen=-1;boolean ended;
+  List<String> readings=new ArrayList<>(Arrays.asList("ㄐㄧㄚˇ","ㄧˇ","ㄅㄧㄥˇ"));
+  public List<String> phoneticSyllables(){return readings;}
+  public boolean prepareSentence(String keys,String value){text=value;readings=value.equals("甲丙")?new ArrayList<>(Arrays.asList("ㄐㄧㄚˇ","ㄅㄧㄥˇ")):readings;return true;}
   Engine(){super(false);text="甲乙丙";range=new int[]{1,2};}
   public boolean regroup(int b){if(b<0||b>3)return false;boundary=b;return true;}
   public List<String> regroupLabels(){return Arrays.asList("甲乙｜丙","甲｜乙丙");}
@@ -18,10 +21,11 @@ public class ZhuyinPreviewBoundaryTest {
   assertEquals(Arrays.asList("甲乙｜丙","甲｜乙丙"),c.state().candidates);
   assertEquals("甲乙丙",c.chooseCandidate(1).composingText);assertEquals(1,e.chosen);assertEquals(-1,c.previewBoundary());
  }
- @Test public void boundaryBackspaceTargetsPreviousSyllableAndCancelReturnsToEnd(){
+ @Test public void boundaryBackspaceDeletesOneCharacterAndItsReading(){
   Engine e=new Engine();ZhuyinInputController c=new ZhuyinInputController(e);c.setRetypeEngineFactory(()->new ZhuyinSecondPassTest.Engine(true));
   c.moveCursorToPreviewBoundary(2);assertEquals("甲丙",c.press("backspace").composingText);
-  assertEquals("甲乙丙",c.cancelSecondPass().composingText);assertTrue(e.ended);assertEquals(-1,c.previewBoundary());
+  assertEquals(Arrays.asList("ㄐㄧㄚˇ","ㄅㄧㄥˇ"),c.phoneticSyllables());assertEquals(1,c.previewBoundary());
+  assertEquals("甲丙",c.cancelSecondPass().composingText);assertTrue(e.ended);assertEquals(-1,c.previewBoundary());
  }
  @Test public void zeroBoundaryDoesNotDeletePreviousSyllable(){
   Engine e=new Engine();ZhuyinInputController c=new ZhuyinInputController(e);c.setRetypeEngineFactory(()->new ZhuyinSecondPassTest.Engine(true));

@@ -124,7 +124,15 @@ final class RimeZhuyinEngine implements ZhuyinInputController.Engine, AutoClosea
         }return false;
     }
     private int keyLengthBefore(int at){int n=0;for(int i=0;i<at;i++)n+=count(parts.get(i).keys());return n;}
-    @Override public boolean regroup(int boundary){return current().regroup(boundary-textOffset());}
+    @Override public boolean regroup(int boundary){
+        int offset=0;
+        for(int i=0;i<parts.size();i++){
+            Part p=parts.get(i);int length=count(p.text());
+            if(p.engine!=null&&boundary>=offset&&boundary<=offset+length){active=i;caret=-1;return current().regroup(boundary-offset);}
+            offset+=length;
+        }
+        return false;
+    }
     @Override public boolean chooseRegroup(int index){boolean ok=current().chooseRegroup(index);if(ok)moveCursorToEnd();return ok;}
     @Override public boolean prepareSentence(String keys,String text){
         List<Part> mapped=new ArrayList<>();int keyStart=0,textStart=0;

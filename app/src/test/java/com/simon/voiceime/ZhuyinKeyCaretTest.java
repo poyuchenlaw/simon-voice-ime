@@ -17,6 +17,11 @@ public class ZhuyinKeyCaretTest {
   public List<String> optionKinds(){return Arrays.asList("homophone","regroup");}
   public boolean chooseRegroup(int i){regroupCount++;return i>=0&&i<2;}
  }
+ @Test public void idleShortcutsReturnAfterCommit(){
+  Engine e=new Engine();ZhuyinInputController c=new ZhuyinInputController(e);
+  assertTrue(c.showIdleShortcuts());c.press("ㄅ");assertFalse(c.showIdleShortcuts());
+  c.press("enter");assertTrue(c.showIdleShortcuts());
+ }
  @Test public void keyEditUsesNativePositionAndRetainsSuffix(){
   Engine e=new Engine();ZhuyinInputController c=new ZhuyinInputController(e);c.press("ㄇ");c.press("ㄚ");c.press("ㄌ");
   assertTrue(c.moveCursorToKey(2).accepted);c.press("backspace");assertEquals("ㄇㄌ",c.sentenceKeys());assertEquals(1,c.keyCaret());

@@ -122,6 +122,7 @@ final class ZhuyinInputController {
     private String symbolEditKeys="",symbolEditText="";
     private List<String> focusedOptionKinds=Collections.emptyList();
     String[] localRepair(){return retype==null&&fixedComposition.isEmpty()?engine.localRepair():new String[0];}
+    boolean showIdleShortcuts(){return previewText().isEmpty() && sentenceKeys().isEmpty() && retype==null;}
     int keyCaret(){return keyCaret;}
     int rowWordLimit(){return Math.max(1,engine.rowWordLimit());}
     String candidateGroup(int i){List<String> groups=engine.optionGroups();return i>=0&&i<groups.size()?groups.get(i):"word";}
@@ -131,7 +132,7 @@ final class ZhuyinInputController {
     boolean wordFocused(){return previewFocused;}
     State moveCursorToKey(int at){
         breakPickRun();
-        if(retype!=null)cancelSecondPass();
+        if(retype!=null){if(textInsertion&&!retype.state().candidates.isEmpty())chooseCandidate(0);else cancelSecondPass();}
         if(!fixedComposition.isEmpty())return snapshot(false,false);
         if(!engine.keyCaret(at))return snapshot(false,false);
         keyCaret=at;previewBoundary=-1;previewFocused=engine.focusAtKey(at);
@@ -140,6 +141,7 @@ final class ZhuyinInputController {
         return snapshot(true,false);
     }
     private int previewBoundary=-1;
+    private boolean textInsertion;
     void recordTouch(int[] keys,double[] probabilities,boolean[] adjacent){if(retype!=null)retype.recordTouch(keys,probabilities,adjacent);else engine.recordTouch(keys,probabilities,adjacent);}
     String sentenceKeys() {
         if(retype!=null)return "";
@@ -154,9 +156,15 @@ final class ZhuyinInputController {
         if(!separate.prepareSentence(keys,text)){draft.close();return null;}
         return draft;
     }
-    int previewBoundary() { return previewBoundary; }
+    int previewBoundary() { return textInsertion&&retype!=null?retypeStart+retype.previewText().codePointCount(0,retype.previewText().length()):previewBoundary; }
     String previewText() { return retype!=null||!fixedComposition.isEmpty()?state().composingText:engine.previewText(); }
-    List<String> phoneticSyllables(){return engine.phoneticSyllables();}
+    List<String> phoneticSyllables(){
+        if(textInsertion&&retype!=null){
+            List<String> joined=new ArrayList<>(retypeSourceReading.subList(0,retypeStart));
+            joined.addAll(retype.phoneticSyllables());joined.addAll(retypeSourceReading.subList(retypeEnd,retypeSourceReading.size()));return joined;
+        }
+        return engine.phoneticSyllables();
+    }
     String phoneticText() {
         if(retype!=null&&!retypeSourceReading.isEmpty())return String.join("",retypeSourceReading.subList(0,retypeStart))+retype.phoneticText()+"│"+String.join("",retypeSourceReading.subList(retypeEnd,retypeSourceReading.size()));
         if(previewBoundary>=0&&previewBoundary<=fixedReading.size()&&engine.composingText().isEmpty())
@@ -164,7 +172,7 @@ final class ZhuyinInputController {
         return String.join("",fixedReading)+engine.phoneticText();
     }
     State moveCursorToPreviewBoundary(int boundary) { symbolEditKeys=symbolEditText="";keyCaret=-1;engine.moveCursorToEnd();
-        if(retype!=null)cancelSecondPass();
+        if(retype!=null){if(textInsertion&&!retype.state().candidates.isEmpty())chooseCandidate(0);else cancelSecondPass();}
         if(!fixedComposition.isEmpty()){
             int count=fixedComposition.codePointCount(0,fixedComposition.length());
             if(boundary<0||boundary>count)return snapshot(false,false);
@@ -188,10 +196,10 @@ final class ZhuyinInputController {
         closeRetype(); previewFocused=false;previewBoundary=-1;engine.moveCursorToEnd();
         return snapshot(true,false);
     }
-    private void closeRetype() { if(retype!=null){retype.close();retype=null;}retypeCommitted=""; }
+    private void closeRetype() { if(retype!=null){retype.close();retype=null;}retypeCommitted="";textInsertion=false; }
     private State retypeState(State part) {
         retypeCommitted += part.commitText;
-        String draft = retypeCommitted + part.composingText;
+        String draft = retypeCommitted + (textInsertion?retype.previewText():part.composingText);
         List<String> choices=new ArrayList<>();
         for(String choice:part.candidates)choices.add(retypeCommitted+choice);
         if(choices.isEmpty()&&!draft.isEmpty())choices.add(draft);
@@ -226,8 +234,34 @@ final class ZhuyinInputController {
         }
     }
 
+    private State deleteAtTextCaret() {
+        String text=previewText();int boundary=previewBoundary;
+        if(boundary<=0)return snapshot(true,false);
+        List<String> readings=new ArrayList<>(engine.phoneticSyllables());
+        int count=text.codePointCount(0,text.length());
+        if(readings.size()!=count)return snapshot(false,false);
+        int from=text.offsetByCodePoints(0,boundary-1),to=text.offsetByCodePoints(0,boundary);
+        readings.remove(boundary-1);
+        if(!engine.prepareSentence(String.join("",readings).replace("ˉ"," "),text.substring(0,from)+text.substring(to)))return snapshot(false,false);
+        rawZhuyinKeys.setLength(0);abbreviationKeys.setLength(0);mixedChoices=Collections.emptyList();
+        return moveCursorToPreviewBoundary(boundary-1);
+    }
+    private boolean beginTextInsertion() {
+        if(retypeEngineFactory==null)return false;
+        String text=previewText();List<String> readings=new ArrayList<>(engine.phoneticSyllables());
+        if(readings.size()!=text.codePointCount(0,text.length()))return false;
+        Engine separate=retypeEngineFactory.get();if(separate==null)return false;
+        retypeOriginal=text;retypeStart=retypeEnd=previewBoundary;retypeSourceReading=readings;
+        retype=new ZhuyinInputController(separate,abbreviationIndex);retype.setLearningEnabled(learningEnabled);
+        textInsertion=true;previewFocused=false;return true;
+    }
+
     State press(String key) {
         breakPickRun();
+        if(previewBoundary>=0&&retype==null){
+            if("backspace".equals(key))return deleteAtTextCaret();
+            if(isZhuyin(key)&&!beginTextInsertion())return snapshot(false,false);
+        }
         if(keyCaret>=0 && (isZhuyin(key)||"space".equals(key)||"backspace".equals(key))){
             if(symbolEditKeys.isEmpty()){symbolEditKeys=engine.sentenceKeys();symbolEditText=engine.previewText();}
             if("backspace".equals(key))engine.backspace();else if("space".equals(key))engine.space();else engine.key(key);
@@ -242,10 +276,13 @@ final class ZhuyinInputController {
         }
         if(keyCaret>=0){symbolEditKeys=symbolEditText="";keyCaret=-1;engine.moveCursorToEnd();}
         if(retype!=null){
+            if(textInsertion&&"backspace".equals(key)&&retype.previewText().isEmpty()){
+                int boundary=retypeStart;closeRetype();moveCursorToPreviewBoundary(boundary);return deleteAtTextCaret();
+            }
             if("enter".equals(key))return state().candidates.isEmpty()?cancelSecondPass():chooseCandidate(0);
             // Repeated deletion before retyping extends the explicit edit span,
             // including words for which the old engine exposed no phrase boundary.
-            if("backspace".equals(key)&&retypeCommitted.isEmpty()&&retype.state().composingText.isEmpty()&&retypeStart>0){
+            if(!textInsertion&&"backspace".equals(key)&&retypeCommitted.isEmpty()&&retype.state().composingText.isEmpty()&&retypeStart>0){
                 retypeStart--;return retypeState(retype.state());
             }
             return retypeState(retype.press(key));
@@ -347,6 +384,17 @@ final class ZhuyinInputController {
             if(index<0||index>=preview.candidates.size())return preview;
             String replacement=preview.candidates.get(index);
             List<String> draftReading=new ArrayList<>(retype.engine.phoneticSyllables());
+            if(textInsertion){
+                State selected=retype.chooseCandidate(index);
+                replacement=retypeCommitted+selected.commitText+retype.previewText();
+                List<String> joined=new ArrayList<>(retypeSourceReading.subList(0,retypeStart));joined.addAll(draftReading);joined.addAll(retypeSourceReading.subList(retypeEnd,retypeSourceReading.size()));
+                int from=retypeOriginal.offsetByCodePoints(0,retypeStart),to=retypeOriginal.offsetByCodePoints(0,retypeEnd);
+                String text=retypeOriginal.substring(0,from)+replacement+retypeOriginal.substring(to);
+                if(joined.size()!=text.codePointCount(0,text.length())||!engine.prepareSentence(String.join("",joined).replace("ˉ"," "),text))return retypeState(retype.state());
+                int boundary=retypeStart+replacement.codePointCount(0,replacement.length());
+                closeRetype();rawZhuyinKeys.setLength(0);abbreviationKeys.setLength(0);mixedChoices=Collections.emptyList();
+                return moveCursorToPreviewBoundary(boundary);
+            }
             retype.chooseCandidate(index);
             if(!retypeSourceReading.isEmpty()){
                 List<String> joined=new ArrayList<>(retypeSourceReading.subList(0,retypeStart));joined.addAll(draftReading);joined.addAll(retypeSourceReading.subList(retypeEnd,retypeSourceReading.size()));fixedReading=joined;
@@ -395,7 +443,7 @@ final class ZhuyinInputController {
     State moveCursorRight() { if(previewBoundary>=0)return moveCursorToPreviewBoundary(Math.min(previewText().codePointCount(0,previewText().length()),previewBoundary+1));mixedChoices=Collections.emptyList(); engine.moveCursor("right"); return snapshot(true, true); }
     State moveCursorToPreviewCharacter(int codePointIndex) { breakPickRun();symbolEditKeys=symbolEditText=""; tappedCharacter=codePointIndex;keyCaret=-1;engine.moveCursorToEnd();
         previewBoundary=-1;
-        if(retype!=null)cancelSecondPass();
+        if(retype!=null){if(textInsertion&&!retype.state().candidates.isEmpty())chooseCandidate(0);else cancelSecondPass();}
         int fixed=fixedComposition.codePointCount(0,fixedComposition.length());
         if(codePointIndex>=0&&codePointIndex<fixed){
             fixedTargetStart=codePointIndex;fixedTargetEnd=codePointIndex+1;
@@ -453,7 +501,7 @@ final class ZhuyinInputController {
         return snapshot(true,true);
     }
     State flushForPunctuation() {
-        if(retype!=null)cancelSecondPass();
+        if(retype!=null){if(textInsertion&&!retype.state().candidates.isEmpty())chooseCandidate(0);else cancelSecondPass();}
         if(!fixedComposition.isEmpty()&&engine.composingText().isEmpty())return press("enter");
         if (engine.composingText() == null || engine.composingText().isEmpty()) return snapshot(true, true);
         abbreviationKeys.setLength(0); abbreviationEntries = Collections.emptyList(); mixedChoices = Collections.emptyList(); associationCandidates = Collections.emptyList();

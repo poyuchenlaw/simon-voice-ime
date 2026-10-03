@@ -4254,7 +4254,7 @@ public class SimonIMEService extends InputMethodService {
         if(sentencePhone!=null)sentencePhone.changed(false);
         renderZhuyinStreamPreview(zhuyinInput.previewText());
         if(sentencePhone!=null&&boStreamPreview!=null)boStreamPreview.setText(sentencePhone.mark(zhuyinInput.previewText()));
-        if(boStreamPreview instanceof PreviewCursorView)((PreviewCursorView)boStreamPreview).setBoundary(zhuyinInput.keyCaret()>=0?zhuyinInput.keyPreviewCaret():zhuyinInput.wordFocused()?zhuyinInput.tappedCharacter():zhuyinInput.previewBoundary());
+        if(boStreamPreview instanceof PreviewCursorView)((PreviewCursorView)boStreamPreview).setBoundary(zhuyinInput.keyCaret()>=0?zhuyinInput.keyPreviewCaret():zhuyinInput.previewBoundary()>=0?zhuyinInput.previewBoundary():zhuyinInput.wordFocused()?zhuyinInput.tappedCharacter():-1);
         TextView reading=bopomofoKeyboard==null?null:bopomofoKeyboard.findViewById(R.id.boPhoneticPreview);
         if(reading!=null){
             String phonetic=zhuyinInput.phoneticText();
@@ -4313,8 +4313,8 @@ public class SimonIMEService extends InputMethodService {
                 if (ic.setComposingText(composing, 1)) zhuyinComposingConnection = ic; // cursor stays after the full composition
             }
         }
-        renderZhuyinCandidates(state.candidates, state.candidateKind);
-        renderSentenceOptions();
+        if(zhuyinInput.showIdleShortcuts()) renderZhuyinShortcuts();
+        else { renderZhuyinCandidates(state.candidates, state.candidateKind); renderSentenceOptions(); }
     }
 
     private void confirmStableZhuyinCommit(InputConnection ic, String committed) {
@@ -4375,12 +4375,12 @@ public class SimonIMEService extends InputMethodService {
                     if(cp>0&&layout.getPrimaryHorizontal(utf)>x)cp--;
                     if(touchShadow!=null)touchShadow.invalidate();
                     cursorInteractionKind="char_tap";cursorInteractionVia="text_caret";
-                    applyZhuyinState(zhuyinInput.moveCursorToPreviewCharacter(Math.min(count-1,cp)));
+                    applyZhuyinState(zhuyinInput.moveCursorToPreviewBoundary(nearest));
                     recordCursorEvent("char_tap",zhuyinInput.wordFocused()?"open":"cancel","",-1,0,0);
                 }else if(boundary&&nearest!=lastBoundary){
                     lastBoundary=nearest;if(touchShadow!=null)touchShadow.invalidate();
                     cursorInteractionKind=dragging?"drag":"boundary";cursorInteractionVia="text_caret";
-                    applyZhuyinState(nearest>0?zhuyinInput.moveCursorToPreviewCharacter(Math.min(count-1,nearest-1)):zhuyinInput.moveCursorToKey(0));
+                    applyZhuyinState(zhuyinInput.moveCursorToPreviewBoundary(nearest));
                     recordCursorEvent(cursorInteractionKind,"open","",-1,0,0);
                 }
                 if(action==MotionEvent.ACTION_UP)v.getParent().requestDisallowInterceptTouchEvent(false);
@@ -4459,6 +4459,7 @@ public class SimonIMEService extends InputMethodService {
     }
     private void renderSentenceOptions(){
         if(boCandidateItems==null||zhuyinInput==null)return;
+        if(zhuyinInput.showIdleShortcuts()){renderZhuyinShortcuts();return;}
         // Assemble from the live focus on EVERY render, including delayed AI delivery.
         boolean focused=zhuyinInput.wordFocused()||zhuyinInput.keyCaret()>=0||zhuyinInput.previewBoundary()>=0;
         List<String> labels=new ArrayList<>(),groups=new ArrayList<>(),suggestions=new ArrayList<>();
@@ -4505,6 +4506,22 @@ public class SimonIMEService extends InputMethodService {
         } catch (RuntimeException error) {
             Log.w(TAG, "Could not place cursor inside Zhuyin composition", error);
         }
+    }
+
+    private void renderZhuyinShortcuts() {
+        if(boCandidateItems==null || ("shortcuts".equals(renderedZhuyinCandidateKind)&&boCandidateItems.getChildCount()==2))return;
+        boCandidateItems.removeAllViews();rowEngineViews.clear();
+        renderedZhuyinCandidates=java.util.Collections.emptyList();renderedZhuyinCandidateCount=0;
+        renderedZhuyinCandidateKind="shortcuts";
+        String[] labels={"📋 剪貼簿","⚡ 常用詞"};Panel[] panels={Panel.CLIPBOARD,Panel.COMMANDS};
+        for(int i=0;i<labels.length;i++){
+            TextView chip=new TextView(this);chip.setText(labels[i]);chip.setContentDescription(labels[i]);
+            chip.setGravity(Gravity.CENTER);chip.setTextSize(15f);chip.setTextColor(getColor(R.color.key_text));
+            chip.setBackgroundResource(R.color.key_bg);chip.setPadding(dp(12),0,dp(12),0);
+            final Panel panel=panels[i];chip.setOnClickListener(v->togglePanel(panel));
+            boCandidateItems.addView(chip,new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT,dp(48)));
+        }
+        if(boCandidateScroll!=null)boCandidateScroll.scrollTo(0,0);
     }
 
     private void renderZhuyinCandidates(List<String> candidates, String kind) {
