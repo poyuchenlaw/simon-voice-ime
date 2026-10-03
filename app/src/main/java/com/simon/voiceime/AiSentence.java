@@ -32,10 +32,10 @@ final class AiSentence {
         boolean pause=now-lastEdit>=450&&now-lastEdit<=1500;
         boolean chars=boundary&&charsDue(preview);
         if(!eligible||"off".equals(mode)||(!pause&&!chars)||pending!=null||attempted==compositionGeneration)return null;
-        if(preview!=null&&preview.equals(lastLiteral))return null;
+        if(!pause&&preview!=null&&preview.equals(lastLiteral))return null;
         JSONObject req=snapshot.get();if(req==null)return null;
         validateRequest(schema,req);SentenceContract.require(req.getLong("editor_generation")==editorGeneration&&req.getLong("composition_generation")==compositionGeneration);
-        if(preview==null&&req.getString("literal").equals(lastLiteral))return null;
+        if(!pause&&preview==null&&req.getString("literal").equals(lastLiteral))return null;
         attempted=compositionGeneration;lastLiteral=preview==null?req.getString("literal"):preview;trigger=chars?"chars":"pause";
         recordedId=req.getString("request_id");recordedGeneration=compositionGeneration;recordedDigest=digest(req);
         pending=req;return req;

@@ -222,7 +222,8 @@ public class AiSentenceTest {
   AiSentence c=new AiSentence(contract());c.mode("suggestions");c.edit(10,false,true);
   JSONObject first=c.begin(10,"多多多",true,()->AiSentence.request(c.schema,"first",c.editorGeneration,c.compositionGeneration,"ㄉㄨㄛ ".repeat(3),"多多多","",new JSONArray(),new JSONArray()));
   assertNotNull(first);c.edit(20,false,true);assertFalse(c.fresh(first,20));
-  assertNull(c.begin(470,"多多多",true,()->{throw new AssertionError("unchanged snapshot read");}));
+  assertFalse(c.charsDue("多多多")); // Same preview has zero net new characters.
+  assertNull(c.begin(100,"多多多",true,()->{throw new AssertionError("unchanged chars snapshot read");}));
   c.edit(480,false,true);
   JSONObject second=c.begin(930,"多多多多",true,()->AiSentence.request(c.schema,"second",c.editorGeneration,c.compositionGeneration,"ㄉㄨㄛ ".repeat(4),"多多多多","",new JSONArray(),new JSONArray()));
   assertNotNull(second);assertEquals("pause",c.trigger());assertFalse(c.receive(first,"{}",940,(k,t)->true));
@@ -246,6 +247,27 @@ public class AiSentenceTest {
  @Test public void existingPausePathStillAcceptsAbbreviatedReading() throws Exception {
   AiSentence c=new AiSentence(contract());c.mode("suggestions");c.edit(1,false,true);
   assertNotNull(c.begin(451,"多多多",false,()->AiSentence.request(c.schema,"pause",c.editorGeneration,c.compositionGeneration,"ㄉㄨㄛ ".repeat(3),"多多多","",new JSONArray(),new JSONArray())));
+  assertEquals("pause",c.trigger());
+ }
+
+ @Test public void pauseResendsSameTextAfterEditOncePerGeneration() throws Exception {
+  AiSentence c=new AiSentence(contract());c.mode("suggestions");c.edit(10,false,true);
+  JSONObject first=c.begin(10,"多多多",true,()->AiSentence.request(c.schema,"first",c.editorGeneration,c.compositionGeneration,"ㄉㄨㄛ ".repeat(3),"多多多","",new JSONArray(),new JSONArray()));
+  assertNotNull(first);
+  c.edit(20,false,true);c.edit(30,false,true);
+  assertFalse(c.fresh(first,30));
+  assertNull(c.begin(479,"多多多",true,()->{throw new AssertionError("before pause");}));
+  JSONObject second=c.begin(480,"多多多",true,()->AiSentence.request(c.schema,"second",c.editorGeneration,c.compositionGeneration,"ㄉㄨㄛ ".repeat(3),"多多多","",new JSONArray(),new JSONArray()));
+  assertNotNull(second);assertEquals("pause",c.trigger());
+  assertNull(c.begin(481,"多多多",true,()->{throw new AssertionError("duplicate generation");}));
+  assertFalse(c.receive(first,"{}",481,(k,t)->true));
+ }
+
+ @Test public void legacyPauseOverloadResendsSameLiteralAfterEdit() throws Exception {
+  AiSentence c=new AiSentence(contract());c.mode("suggestions");c.edit(10,false,true);
+  assertNotNull(c.begin(460,()->AiSentence.request(c.schema,"one",c.editorGeneration,c.compositionGeneration,"ㄉㄨㄛ ","多","",new JSONArray(),new JSONArray())));
+  c.edit(470,false,true);
+  assertNotNull(c.begin(920,()->AiSentence.request(c.schema,"two",c.editorGeneration,c.compositionGeneration,"ㄉㄨㄛ ","多","",new JSONArray(),new JSONArray())));
   assertEquals("pause",c.trigger());
  }
 
