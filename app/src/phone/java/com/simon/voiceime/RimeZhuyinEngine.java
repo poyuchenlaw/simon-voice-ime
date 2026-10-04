@@ -24,29 +24,29 @@ final class RimeZhuyinEngine implements ZhuyinInputController.Engine, AutoClosea
     RimeZhuyinEngine(String shared,String user){this(new SingleRimeZhuyinEngine(shared,user));}
     RimeZhuyinEngine(Context c)throws Exception{this(new SingleRimeZhuyinEngine(c));}
     private RimeZhuyinEngine(SingleRimeZhuyinEngine e){shared=e.sharedPath;user=e.userPath;parts.add(new Part(e));}
-    private SingleRimeZhuyinEngine current(){return parts.get(active).engine;}
+    private SingleRimeZhuyinEngine current(){return parts.isEmpty()?null:parts.get(active).engine;}
     private SingleRimeZhuyinEngine fresh(){return new SingleRimeZhuyinEngine(shared,user);}
     private static int count(String s){return s.codePointCount(0,s.length());}
     private int keyOffset(){int n=0;for(int i=0;i<active;i++)n+=count(parts.get(i).keys());return n;}
     private int textOffset(){int n=0;for(int i=0;i<active;i++)n+=count(parts.get(i).text());return n;}
     private String join(boolean keys){StringBuilder b=new StringBuilder();for(Part p:parts)b.append(keys?p.keys():p.text());return b.toString();}
-    @Override public int rowWordLimit(){return current().rowWordLimit();}
-    @Override public String[] localRepair(){
+    @Override public int rowWordLimit(){if(parts.isEmpty()){return 1;}return current().rowWordLimit();}
+    @Override public String[] localRepair(){if(parts.isEmpty()){return new String[0];}
         String[] fix=current().nativeEngine.localRepair();if(fix.length!=2)return fix;
         StringBuilder keys=new StringBuilder(),text=new StringBuilder();
         for(int i=0;i<parts.size();i++){Part p=parts.get(i);keys.append(i==active?fix[0].replace("ˉ"," "):p.keys());text.append(i==active?fix[1]:p.text());}
         return new String[]{keys.toString(),text.toString()};
     }
-    @Override public String sentenceKeys(){return join(true);}
-    @Override public String previewText(){return join(false);}
-    @Override public String composingText(){return parts.size()==1?current().composingText():previewText();}
-    @Override public String phoneticText(){return join(true).replace(" ","ˉ");}
-    @Override public List<String> phoneticSyllables(){List<String> out=new ArrayList<>();for(Part p:parts)if(p.engine==null)out.add(p.literal);else out.addAll(p.engine.phoneticSyllables());return out;}
-    @Override public boolean commitsAreRendered(){return true;}
-    @Override public boolean preservesUnparsedInput(){return true;}
-    @Override public int cursorPosition(){return keyOffset()+current().cursorPosition();}
-    @Override public int keyPreviewCaret(){int p=current().keyPreviewCaret();return p<0?-1:textOffset()+p;}
-    @Override public boolean keyCaret(int at){
+    @Override public String sentenceKeys(){if(parts.isEmpty()){return "";}return join(true);}
+    @Override public String previewText(){if(parts.isEmpty()){return "";}return join(false);}
+    @Override public String composingText(){if(parts.isEmpty()){return "";}return parts.size()==1?current().composingText():previewText();}
+    @Override public String phoneticText(){if(parts.isEmpty()){return "";}return join(true).replace(" ","ˉ");}
+    @Override public List<String> phoneticSyllables(){if(parts.isEmpty()){return java.util.Collections.emptyList();}List<String> out=new ArrayList<>();for(Part p:parts)if(p.engine==null)out.add(p.literal);else out.addAll(p.engine.phoneticSyllables());return out;}
+    @Override public boolean commitsAreRendered(){if(parts.isEmpty()){return false;}return true;}
+    @Override public boolean preservesUnparsedInput(){if(parts.isEmpty()){return false;}return true;}
+    @Override public int cursorPosition(){if(parts.isEmpty()){return 0;}return keyOffset()+current().cursorPosition();}
+    @Override public int keyPreviewCaret(){if(parts.isEmpty()){return -1;}int p=current().keyPreviewCaret();return p<0?-1:textOffset()+p;}
+    @Override public boolean keyCaret(int at){if(parts.isEmpty()){return false;}
         if(at<0||at>count(sentenceKeys()))return false;
         for(Part p:parts)if(p.engine!=null)p.engine.moveCursorToEnd();
         int offset=0;
@@ -56,30 +56,30 @@ final class RimeZhuyinEngine implements ZhuyinInputController.Engine, AutoClosea
         }
         return false;
     }
-    @Override public boolean focusAtKey(int at){
+    @Override public boolean focusAtKey(int at){if(parts.isEmpty()){return false;}
         if(at==0)return false;
         String keys=sentenceKeys();if(at>0&&!" ".equals(keys.substring(at-1,at))&&ZhuyinKeyMap.physicalKey(keys.substring(at-1,at))<0)return false;
         return current().focusAtKey(at-keyOffset());
     }
-    @Override public boolean focusAfterKeyEdit(int at){return current().focusAfterKeyEdit(at-keyOffset());}
-    @Override public void moveCursorToEnd(){for(Part p:parts)if(p.engine!=null)p.engine.moveCursorToEnd();active=parts.size()-1;caret=-1;}
-    @Override public void moveCursor(String direction){int at=caret<0?cursorPosition():caret;keyCaret(Math.max(0,Math.min(count(sentenceKeys()),at+("left".equals(direction)?-1:1))));}
-    @Override public void key(String symbol){current().key(symbol);if(caret>=0)caret=cursorPosition();}
-    @Override public void recordTouch(int[] k,double[] p,boolean[] a){current().recordTouch(k,p,a);}
-    @Override public void backspace(){
+    @Override public boolean focusAfterKeyEdit(int at){if(parts.isEmpty()){return false;}return current().focusAfterKeyEdit(at-keyOffset());}
+    @Override public void moveCursorToEnd(){if(parts.isEmpty()){return;}for(Part p:parts)if(p.engine!=null)p.engine.moveCursorToEnd();active=parts.size()-1;caret=-1;}
+    @Override public void moveCursor(String direction){if(parts.isEmpty()){return;}int at=caret<0?cursorPosition():caret;keyCaret(Math.max(0,Math.min(count(sentenceKeys()),at+("left".equals(direction)?-1:1))));}
+    @Override public void key(String symbol){if(parts.isEmpty()){return;}current().key(symbol);if(caret>=0)caret=cursorPosition();}
+    @Override public void recordTouch(int[] k,double[] p,boolean[] a){if(parts.isEmpty()){return;}current().recordTouch(k,p,a);}
+    @Override public void backspace(){if(parts.isEmpty()){return;}
         if(current().cursorPosition()==0&&active>0&&parts.get(active-1).engine==null){
             parts.remove(active-1);active--;caret=keyOffset();current().keyCaret(0);return;
         }
         current().backspace();if(caret>=0)caret=cursorPosition();
     }
-    @Override public void space(){current().space();}
-    @Override public void enter(){
+    @Override public void space(){if(parts.isEmpty()){return;}current().space();}
+    @Override public void enter(){if(parts.isEmpty()){return;}
         // The visible conversion is the authoritative Enter payload, including
         // pinned local choices and literal boundaries. No second translation.
         String text=previewText();clear();pending=text;
     }
-    @Override public void choose(int index){current().choose(index);}
-    @Override public List<String> candidates(){
+    @Override public void choose(int index){if(parts.isEmpty()){return;}current().choose(index);}
+    @Override public List<String> candidates(){if(parts.isEmpty()){return java.util.Collections.emptyList();}
         if(parts.size()==1)return current().candidates();
         List<String> out=new ArrayList<>();choices.clear();
         // Latest segment first; shorter prefix candidates remain selectable
@@ -89,7 +89,7 @@ final class RimeZhuyinEngine implements ZhuyinInputController.Engine, AutoClosea
         }
         return out;
     }
-    @Override public void chooseAndCommit(int index){
+    @Override public void chooseAndCommit(int index){if(parts.isEmpty()){return;}
         if(parts.size()==1){current().chooseAndCommit(index);return;}
         candidates();if(index<0||index>=choices.size())return;int[] selected=choices.get(index);active=selected[0];
         current().chooseAndCommit(selected[1]);String value=current().takeCommit();if(value.isEmpty())return;
@@ -102,20 +102,20 @@ final class RimeZhuyinEngine implements ZhuyinInputController.Engine, AutoClosea
         for(int i=0;i<remove;i++){Part p=parts.remove(0);if(p.engine!=null)p.engine.close();}
         if(parts.isEmpty())parts.add(new Part(fresh()));pending+=prefix;moveCursorToEnd();
     }
-    @Override public String takeCommit(){String s=pending;pending="";String own=current().takeCommit();
+    @Override public String takeCommit(){if(parts.isEmpty()){return "";}String s=pending;pending="";String own=current().takeCommit();
         if(!own.isEmpty()){StringBuilder prefix=new StringBuilder();for(int i=0;i<active;i++)prefix.append(parts.get(i).text());
             for(int i=0;i<active;i++){Part p=parts.get(0);if(p.engine!=null)p.engine.close();parts.remove(0);}active=0;s+=prefix.toString()+own;
         }return s;
     }
-    @Override public List<String> optionKinds(){return current().optionKinds();}
-    @Override public List<String> optionGroups(){return current().optionGroups();}
-    @Override public List<String> regroupLabels(){return current().regroupLabels();}
-    String[] regroupReadings(){return current().regroupReadings();}
+    @Override public List<String> optionKinds(){if(parts.isEmpty()){return java.util.Collections.emptyList();}return current().optionKinds();}
+    @Override public List<String> optionGroups(){if(parts.isEmpty()){return java.util.Collections.emptyList();}return current().optionGroups();}
+    @Override public List<String> regroupLabels(){if(parts.isEmpty()){return java.util.Collections.emptyList();}return current().regroupLabels();}
+    String[] regroupReadings(){if(parts.isEmpty())return new String[0];return current().regroupReadings();}
     private int[] offset(int[] r){if(r==null)return null;return new int[]{r[0]+textOffset(),r[1]+textOffset()};}
-    @Override public int[] previewEditRange(){return offset(current().previewEditRange());}
-    @Override public int[] previewSelectionRange(){return offset(current().previewSelectionRange());}
-    @Override public boolean previewLiteral(int target){int offset=0;for(Part p:parts){int n=count(p.text());if(target>=offset&&target<offset+n)return p.engine==null;offset+=n;}return false;}
-    @Override public boolean moveCursorToPreviewCharacter(int target){
+    @Override public int[] previewEditRange(){if(parts.isEmpty()){return null;}return offset(current().previewEditRange());}
+    @Override public int[] previewSelectionRange(){if(parts.isEmpty()){return null;}return offset(current().previewSelectionRange());}
+    @Override public boolean previewLiteral(int target){if(parts.isEmpty()){return false;}int offset=0;for(Part p:parts){int n=count(p.text());if(target>=offset&&target<offset+n)return p.engine==null;offset+=n;}return false;}
+    @Override public boolean moveCursorToPreviewCharacter(int target){if(parts.isEmpty()){return false;}
         int offset=0;for(int i=0;i<parts.size();i++){Part p=parts.get(i);int n=count(p.text());
             if(target>=offset&&target<offset+n){
                 if(p.engine==null)return keyCaret(keyLengthBefore(i)+count(p.literal));
@@ -124,7 +124,7 @@ final class RimeZhuyinEngine implements ZhuyinInputController.Engine, AutoClosea
         }return false;
     }
     private int keyLengthBefore(int at){int n=0;for(int i=0;i<at;i++)n+=count(parts.get(i).keys());return n;}
-    @Override public boolean regroup(int boundary){
+    @Override public boolean regroup(int boundary){if(parts.isEmpty()){return false;}
         int offset=0;
         for(int i=0;i<parts.size();i++){
             Part p=parts.get(i);int length=count(p.text());
@@ -133,7 +133,7 @@ final class RimeZhuyinEngine implements ZhuyinInputController.Engine, AutoClosea
         }
         return false;
     }
-    @Override public boolean chooseRegroup(int index){boolean ok=current().chooseRegroup(index);if(ok)moveCursorToEnd();return ok;}
+    @Override public boolean chooseRegroup(int index){if(parts.isEmpty()){return false;}boolean ok=current().chooseRegroup(index);if(ok)moveCursorToEnd();return ok;}
     // Long text edits already have verified readings for the unchanged context.
     // Validate only the changed span, then reuse the existing native restore path.
     // Build off to the side so a refused edit preserves the old sentence/caret.
@@ -177,7 +177,7 @@ final class RimeZhuyinEngine implements ZhuyinInputController.Engine, AutoClosea
             return true;
         }finally{if(!installed)mapped.close();}
     }
-    @Override public boolean prepareSentence(String keys,String text){
+    @Override public boolean prepareSentence(String keys,String text){if(parts.isEmpty()){return false;}
         Boolean edited=prepareLongTextEdit(keys,text);if(edited!=null)return edited;
         List<Part> mapped=new ArrayList<>();int keyStart=0,textStart=0;
         try{
@@ -193,9 +193,9 @@ final class RimeZhuyinEngine implements ZhuyinInputController.Engine, AutoClosea
         }catch(Exception invalid){for(Part p:mapped)if(p.engine!=null)p.engine.close();return false;}
         for(Part p:parts)if(p.engine!=null)p.engine.close();parts.clear();parts.addAll(mapped);active=parts.size()-1;caret=-1;return previewText().equals(text);
     }
-    @Override public void learnPhrase(String w,String p){current().learnPhrase(w,p);}
-    @Override public List<String[]> personalPhrases(){return current().personalPhrases();}
-    @Override public boolean punctuation(String text){
+    @Override public void learnPhrase(String w,String p){if(parts.isEmpty()){return;}current().learnPhrase(w,p);}
+    @Override public List<String[]> personalPhrases(){if(parts.isEmpty()){return java.util.Collections.emptyList();}return current().personalPhrases();}
+    @Override public boolean punctuation(String text){if(parts.isEmpty()){return false;}
         SingleRimeZhuyinEngine old=current();String keys=old.sentenceKeys();int at=caret<0?keys.length():caret-keyOffset();
         List<String> reading=old.phoneticSyllables();String shown=old.previewText();int stop=0,split=-1;
         for(int i=0;i<=reading.size();i++){if(stop==at){split=i;break;}if(i<reading.size())stop+=reading.get(i).length();}
@@ -211,7 +211,7 @@ final class RimeZhuyinEngine implements ZhuyinInputController.Engine, AutoClosea
         parts.remove(active);old.close();parts.add(active,new Part(left));parts.add(active+1,new Part(text));parts.add(active+2,new Part(right));active+=2;
         caret=keyOffset();current().keyCaret(0);return true;
     }
-    @Override public void clear(){for(Part p:parts)if(p.engine!=null)p.engine.clear();
+    @Override public void clear(){if(parts.isEmpty()){return;}for(Part p:parts)if(p.engine!=null)p.engine.clear();
         SingleRimeZhuyinEngine kept=current();for(Part p:parts)if(p.engine!=null&&p.engine!=kept)p.engine.close();
         parts.clear();parts.add(new Part(kept));active=0;caret=-1;pending="";choices.clear();}
     @Override public void close(){for(Part p:parts)if(p.engine!=null)p.engine.close();parts.clear();}

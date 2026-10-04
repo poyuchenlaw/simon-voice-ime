@@ -65,7 +65,7 @@ public class CrashPersistence666AndroidTest extends TestCase {
             second=new ImeTelemetry(c,spool,"next-version",(u,b,body)->503);
             String replay=new String(java.nio.file.Files.readAllBytes(spool.toPath()),StandardCharsets.UTF_8);
             boolean found=false;for(String line:replay.split("\\n"))if(!line.isEmpty()){
-                JSONObject e;try{e=new JSONObject(line);}catch(org.json.JSONException invalid){continue;}if("error".equals(e.optString("type"))&&"previous_uncaught_handler".equals(e.optString("capture"))){found=true;assertTrue(e.getString("stack").contains("SimonIMEService.java:4436"));assertEquals("fixture",e.getString("crash_app_version"));assertTrue(e.getLong("crash_ts")<=e.getLong("ts"));}
+                JSONObject e;try{e=new JSONObject(line);}catch(org.json.JSONException invalid){continue;}if("error".equals(e.optString("type"))&&"previous_uncaught_handler".equals(e.optString("capture"))){found=true;assertEquals("java.lang.RuntimeException",e.getString("exception_class"));assertTrue(e.getString("stack").contains("SimonIMEService.java:4436"));assertEquals("fixture",e.getString("crash_app_version"));assertTrue(e.getLong("crash_ts")<=e.getLong("ts"));}
             }
             assertTrue("next-start error event must contain persisted frame",found);
             assertFalse("replayed private file must be cleared",pending.exists());

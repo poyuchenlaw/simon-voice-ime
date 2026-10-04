@@ -5600,10 +5600,10 @@ public class SimonIMEService extends InputMethodService {
         flushPendingVoiceAudio(true);
         dismissSymbolPopup();
         if(layoutDiagnostics!=null){layoutDiagnostics.close();layoutDiagnostics=null;}
-        if(sentencePhone!=null)sentencePhone.close();
-        if (zhuyinInput != null) zhuyinInput.close();
-        if (zhuyinWordIndex != null) zhuyinWordIndex.close();
-        if (touchLearning != null) touchLearning.close();
+        if (sentencePhone != null) { sentencePhone.close(); sentencePhone = null; }
+        if (zhuyinInput != null) { zhuyinInput.close(); zhuyinInput = null; }
+        if (zhuyinWordIndex != null) { zhuyinWordIndex.close(); zhuyinWordIndex = null; }
+        if (touchLearning != null) { touchLearning.close(); touchLearning = null; }
         if (isRecording) {
             String pendingId=activePendingSessionId;
             if(pendingId!=null&&voicePendingQueue!=null){voicePendingQueue.execute(() -> voicePendingQueue.markPending(pendingId,"service_destroyed"));recordVoiceEvent("pending_saved",pendingId,voicePendingQueue.audioMs(pendingId),0,0,"","",voicePendingQueue.totalBytes(),0);}
