@@ -687,7 +687,7 @@ static bool sentence_map(Session* s,const std::string& raw,const std::string& te
 }
 extern "C" JNIEXPORT jboolean JNICALL Java_com_simon_voiceime_RimeZhuyinNative_nativePrepareSentence(JNIEnv* env,jclass,jlong h,jstring keys,jstring literal) {
     auto* s=state(h);if(!s)return false;std::string raw=jstr(env,keys),text=jstr(env,literal);
-    if(raw.empty()||raw.size()>128||text.empty()||cp_count(text)>64)return false;
+    if(raw.empty()||raw.size()>256||text.empty()||cp_count(text)>64)return false;
     for(char c:raw)if(kPhysical.find(c)==std::string::npos)return false;
     std::vector<SentencePiece> pieces;std::set<std::pair<size_t,size_t>> failed;
     bool valid=sentence_map(s,raw,text,0,0,pieces,failed,InitClock::now()+std::chrono::milliseconds(35));

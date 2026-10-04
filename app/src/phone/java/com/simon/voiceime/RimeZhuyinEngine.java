@@ -134,7 +134,51 @@ final class RimeZhuyinEngine implements ZhuyinInputController.Engine, AutoClosea
         return false;
     }
     @Override public boolean chooseRegroup(int index){boolean ok=current().chooseRegroup(index);if(ok)moveCursorToEnd();return ok;}
+    // Long text edits already have verified readings for the unchanged context.
+    // Validate only the changed span, then reuse the existing native restore path.
+    // Build off to the side so a refused edit preserves the old sentence/caret.
+    private Boolean prepareLongTextEdit(String keys,String text){
+        if(parts.size()!=1||count(text)>64)return null;
+        String previous=previewText();int oldCount=count(previous),newCount=count(text);
+        if(oldCount<=32)return null;
+        List<String> oldReading=phoneticSyllables();
+        if(oldReading.size()!=oldCount)return null;
+        List<String> normalized=new ArrayList<>();
+        for(String r:oldReading)normalized.add(r.replace("ˉ"," "));
+        if(!String.join("",normalized).equals(sentenceKeys().replace("ˉ"," ")))return null;
+        int prefix=0,keyStart=0,suffix=0,keyEnd=keys.length();
+        while(prefix<Math.min(oldCount,newCount)){
+            int a=previous.offsetByCodePoints(0,prefix),b=text.offsetByCodePoints(0,prefix);
+            String r=normalized.get(prefix);
+            if(previous.codePointAt(a)!=text.codePointAt(b)||!keys.startsWith(r,keyStart))break;
+            keyStart+=r.length();prefix++;
+        }
+        while(suffix<Math.min(oldCount-prefix,newCount-prefix)){
+            int a=previous.offsetByCodePoints(0,oldCount-suffix-1),b=text.offsetByCodePoints(0,newCount-suffix-1);
+            String r=normalized.get(oldCount-suffix-1);int start=keyEnd-r.length();
+            if(previous.codePointAt(a)!=text.codePointAt(b)||start<keyStart||!keys.startsWith(r,start))break;
+            keyEnd=start;suffix++;
+        }
+        if(prefix==0&&suffix==0)return null;
+        String middleText=text.substring(text.offsetByCodePoints(0,prefix),text.offsetByCodePoints(0,newCount-suffix));
+        String middleKeys=keys.substring(keyStart,keyEnd);
+        SingleRimeZhuyinEngine mapped=fresh();boolean installed=false;
+        try{
+            List<String> readings=new ArrayList<>(normalized.subList(0,prefix));
+            if(!middleKeys.isEmpty()){
+                if(!mapped.prepareSentence(middleKeys,middleText))return false;
+                for(String r:mapped.phoneticSyllables())readings.add(r.replace("ˉ"," "));
+            }else if(!middleText.isEmpty())return false;
+            readings.addAll(normalized.subList(oldCount-suffix,oldCount));
+            if(readings.size()!=newCount||!String.join("",readings).equals(keys))return false;
+            mapped.nativeEngine.restore(readings,text);
+            if(!mapped.previewText().equals(text)||!mapped.sentenceKeys().replace("ˉ"," ").equals(keys))return false;
+            for(Part part:parts)part.engine.close();parts.clear();parts.add(new Part(mapped));active=0;caret=-1;installed=true;
+            return true;
+        }finally{if(!installed)mapped.close();}
+    }
     @Override public boolean prepareSentence(String keys,String text){
+        Boolean edited=prepareLongTextEdit(keys,text);if(edited!=null)return edited;
         List<Part> mapped=new ArrayList<>();int keyStart=0,textStart=0;
         try{
             for(int i=0;i<keys.length();i++)if(keys.charAt(i)!=' '&&ZhuyinKeyMap.physicalKey(keys.substring(i,i+1))<0){

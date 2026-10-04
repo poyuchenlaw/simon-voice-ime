@@ -489,7 +489,8 @@ public class SimonIMEService extends InputMethodService {
     // Keyboard switching
     private View voiceKeyboard;
     private View bopomofoKeyboard;
-    private ReadingReveal readingReveal;
+    private PreviewReveal readingReveal;
+    private PreviewReveal textReveal;
     private View englishKeyboard;
     private View numbersKeyboard;
     private boolean shiftActive = false;
@@ -4313,42 +4314,57 @@ public class SimonIMEService extends InputMethodService {
     }
 
     private void revealZhuyinReadingAfterLayout(TextView reading) {
-        // Coalesce refreshes until layout has measured the new reading width.
-        if(readingReveal!=null){
-            if(readingReveal.reading==reading)return;
-            readingReveal.cancel();
-        }
-        readingReveal=new ReadingReveal(reading);
-        reading.addOnAttachStateChangeListener(readingReveal);
-        readingReveal.tree.addOnPreDrawListener(readingReveal);
+        revealZhuyinPreviewAfterLayout(reading, true);
     }
 
-    private final class ReadingReveal implements android.view.ViewTreeObserver.OnPreDrawListener,View.OnAttachStateChangeListener {
+    private void revealZhuyinPreviewAfterLayout(TextView row, boolean phonetic) {
+        PreviewReveal pending=phonetic?readingReveal:textReveal;
+        if(pending!=null){
+            if(pending.reading==row)return;
+            pending.cancel();
+        }
+        PreviewReveal reveal=new PreviewReveal(row,phonetic);
+        if(phonetic)readingReveal=reveal;else textReveal=reveal;
+        row.addOnAttachStateChangeListener(reveal);
+        reveal.tree.addOnPreDrawListener(reveal);
+    }
+
+    private final class PreviewReveal implements android.view.ViewTreeObserver.OnPreDrawListener,View.OnAttachStateChangeListener {
         final TextView reading;
+        final boolean phonetic;
         android.view.ViewTreeObserver tree;
-        ReadingReveal(TextView reading){this.reading=reading;tree=reading.getViewTreeObserver();}
+        PreviewReveal(TextView reading,boolean phonetic){this.reading=reading;this.phonetic=phonetic;tree=reading.getViewTreeObserver();}
         void cancel(){
             if(tree.isAlive())tree.removeOnPreDrawListener(this);
             android.view.ViewTreeObserver current=reading.getViewTreeObserver();
             if(current!=tree&&current.isAlive())current.removeOnPreDrawListener(this);
             reading.removeOnAttachStateChangeListener(this);
             if(readingReveal==this)readingReveal=null;
+            if(textReveal==this)textReveal=null;
         }
         @Override public void onViewAttachedToWindow(View view){tree=reading.getViewTreeObserver();}
         @Override public void onViewDetachedFromWindow(View view){cancel();}
         @Override public boolean onPreDraw(){
             cancel();
             if(!reading.isAttachedToWindow()||zhuyinInput==null||reading.getLayout()==null||!(reading.getParent() instanceof HorizontalScrollView))return true;
-            int at=zhuyinInput.keyCaret();boolean centered=at>=0;
-            if(at<0){
-                int boundary=zhuyinInput.previewBoundary();
-                if(boundary>=0){
-                    centered=true;at=0;int index=0;
-                    for(String syllable:zhuyinInput.phoneticSyllables()){if(index++>=boundary)break;at+=syllable.length();}
-                }else if(!zhuyinInput.wordFocused())at=reading.getText().length();
-                else return true;
+            int at;boolean centered;
+            if(phonetic){
+                at=zhuyinInput.keyCaret();centered=at>=0;
+                if(at<0){
+                    int boundary=zhuyinInput.previewBoundary();
+                    if(boundary>=0){
+                        centered=true;at=0;int index=0;
+                        for(String syllable:zhuyinInput.phoneticSyllables()){if(index++>=boundary)break;at+=syllable.length();}
+                    }else if(!zhuyinInput.wordFocused())at=reading.getText().length();
+                    else return true;
+                }
+                at=Math.min(at,reading.getText().length());
+            }else{
+                String text=reading.getText().toString();int count=text.codePointCount(0,text.length());
+                int cp=zhuyinInput.keyCaret()>=0?zhuyinInput.keyPreviewCaret():zhuyinInput.previewBoundary()>=0?zhuyinInput.previewBoundary():zhuyinInput.wordFocused()?zhuyinInput.tappedCharacter():count;
+                centered=zhuyinInput.keyCaret()>=0||zhuyinInput.previewBoundary()>=0||zhuyinInput.wordFocused();
+                at=text.offsetByCodePoints(0,Math.max(0,Math.min(count,cp)));
             }
-            at=Math.min(at,reading.getText().length());
             int x=Math.round(reading.getLayout().getPrimaryHorizontal(at))+reading.getPaddingLeft();
             HorizontalScrollView scroll=(HorizontalScrollView)reading.getParent();
             // Explicit caret moves retain their original centered context.
@@ -4433,19 +4449,7 @@ public class SimonIMEService extends InputMethodService {
             }
         });
         }
-        boStreamPreview.post(() -> {
-            if(zhuyinInput.previewBoundary()>=0)return;
-            android.view.ViewParent parent = boStreamPreview.getParent();
-            if (parent instanceof HorizontalScrollView) {
-                HorizontalScrollView scroll=(HorizontalScrollView)parent;
-                ZhuyinInputController.State state=zhuyinInput.state();
-                if(state.targetEnd>state.targetStart&&boStreamPreview.getLayout()!=null){
-                    int count=text.codePointCount(0,text.length());int cp=Math.max(0,Math.min(count,state.targetStart));
-                    int x=(int)boStreamPreview.getLayout().getPrimaryHorizontal(text.offsetByCodePoints(0,cp));
-                    scroll.smoothScrollTo(Math.max(0,x-scroll.getWidth()/2),0);
-                }else scroll.fullScroll(View.FOCUS_RIGHT);
-            }
-        });
+        revealZhuyinPreviewAfterLayout(boStreamPreview,false);
     }
 
     private void installKeyCaretTouch(TextView row) {
