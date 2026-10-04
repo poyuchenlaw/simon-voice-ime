@@ -489,6 +489,7 @@ public class SimonIMEService extends InputMethodService {
     // Keyboard switching
     private View voiceKeyboard;
     private View bopomofoKeyboard;
+    private ReadingReveal readingReveal;
     private View englishKeyboard;
     private View numbersKeyboard;
     private boolean shiftActive = false;
@@ -4270,25 +4271,7 @@ public class SimonIMEService extends InputMethodService {
             reading.setContentDescription("注音游標 "+slot+"；作用音節 "+start+"–"+end);
             if(reading instanceof PreviewCursorView)((PreviewCursorView)reading).setBoundary(zhuyinInput.keyCaret());
             installKeyCaretTouch(reading);
-            reading.post(()->{
-                if(!(reading.getParent() instanceof HorizontalScrollView)||reading.getLayout()==null)return;
-                HorizontalScrollView scroll=(HorizontalScrollView)reading.getParent();
-                if(zhuyinInput.keyCaret()<0){
-                    int boundary=zhuyinInput.previewBoundary();
-                    if(boundary>=0){
-                        int at=0,index=0;
-                        for(String syllable:zhuyinInput.phoneticSyllables()){if(index++>=boundary)break;at+=syllable.length();}
-                        at=Math.min(at,reading.getText().length());
-                        int x=(int)reading.getLayout().getPrimaryHorizontal(at)+reading.getPaddingLeft();
-                        scroll.scrollTo(Math.max(0,x-scroll.getWidth()/2),0);
-                    }else if(!zhuyinInput.wordFocused())scroll.fullScroll(View.FOCUS_RIGHT);
-                }
-                else {
-                    String text=reading.getText().toString();int at=Math.min(text.length(),zhuyinInput.keyCaret());
-                    int x=(int)reading.getLayout().getPrimaryHorizontal(at)+reading.getPaddingLeft();
-                    scroll.scrollTo(Math.max(0,x-scroll.getWidth()/2),0);
-                }
-            });
+            revealZhuyinReadingAfterLayout(reading);
         }
         InputConnection ic = getCurrentInputConnection();
         if (ic != null) {
@@ -4327,6 +4310,56 @@ public class SimonIMEService extends InputMethodService {
         }
         if(zhuyinInput.showIdleShortcuts()) renderZhuyinShortcuts();
         else { renderZhuyinCandidates(state.candidates, state.candidateKind); renderSentenceOptions(); }
+    }
+
+    private void revealZhuyinReadingAfterLayout(TextView reading) {
+        // Coalesce refreshes until layout has measured the new reading width.
+        if(readingReveal!=null){
+            if(readingReveal.reading==reading)return;
+            readingReveal.cancel();
+        }
+        readingReveal=new ReadingReveal(reading);
+        reading.addOnAttachStateChangeListener(readingReveal);
+        readingReveal.tree.addOnPreDrawListener(readingReveal);
+    }
+
+    private final class ReadingReveal implements android.view.ViewTreeObserver.OnPreDrawListener,View.OnAttachStateChangeListener {
+        final TextView reading;
+        android.view.ViewTreeObserver tree;
+        ReadingReveal(TextView reading){this.reading=reading;tree=reading.getViewTreeObserver();}
+        void cancel(){
+            if(tree.isAlive())tree.removeOnPreDrawListener(this);
+            android.view.ViewTreeObserver current=reading.getViewTreeObserver();
+            if(current!=tree&&current.isAlive())current.removeOnPreDrawListener(this);
+            reading.removeOnAttachStateChangeListener(this);
+            if(readingReveal==this)readingReveal=null;
+        }
+        @Override public void onViewAttachedToWindow(View view){tree=reading.getViewTreeObserver();}
+        @Override public void onViewDetachedFromWindow(View view){cancel();}
+        @Override public boolean onPreDraw(){
+            cancel();
+            if(!reading.isAttachedToWindow()||zhuyinInput==null||reading.getLayout()==null||!(reading.getParent() instanceof HorizontalScrollView))return true;
+            int at=zhuyinInput.keyCaret();boolean centered=at>=0;
+            if(at<0){
+                int boundary=zhuyinInput.previewBoundary();
+                if(boundary>=0){
+                    centered=true;at=0;int index=0;
+                    for(String syllable:zhuyinInput.phoneticSyllables()){if(index++>=boundary)break;at+=syllable.length();}
+                }else if(!zhuyinInput.wordFocused())at=reading.getText().length();
+                else return true;
+            }
+            at=Math.min(at,reading.getText().length());
+            int x=Math.round(reading.getLayout().getPrimaryHorizontal(at))+reading.getPaddingLeft();
+            HorizontalScrollView scroll=(HorizontalScrollView)reading.getParent();
+            // Explicit caret moves retain their original centered context.
+            if(centered){scroll.scrollTo(Math.max(0,x-scroll.getWidth()/2),0);return true;}
+            int left=scroll.getScrollX(),right=left+scroll.getWidth(),handle=dp(5);
+            // Forward typing reveals only what left the viewport, without an
+            // animation towards a stale width or a second scroll mechanism.
+            if(x<left+handle)scroll.scrollTo(Math.max(0,Math.min(left,x-Math.max(reading.getPaddingLeft(),handle))),0);
+            else if(x>right-handle)scroll.scrollTo(Math.max(left,x+Math.max(reading.getPaddingRight(),handle)-scroll.getWidth()),0);
+            return true;
+        }
     }
 
     private void confirmStableZhuyinCommit(InputConnection ic, String committed) {
