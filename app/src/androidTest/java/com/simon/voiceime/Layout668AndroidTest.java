@@ -180,4 +180,24 @@ public class Layout668AndroidTest extends TestCase {
         assertEquals("one real commit per composition",1,commits);assertEquals("one layout diagnostic per composition",1,count);
     }
 
+    public void testDrawDiagnosticsDoNotQuerySettings()throws Exception {
+        Instrumentation instrumentation=InstrumentationRegistry.getInstrumentation();
+        instrumentation.runOnMainSync(()->{
+            final int[] providerLookups={0};
+            android.content.Context context=new android.content.ContextWrapper(instrumentation.getTargetContext()){
+                @Override public android.content.ContentResolver getContentResolver(){providerLookups[0]++;return super.getContentResolver();}
+            };
+            LinearLayout tree=new LinearLayout(context);
+            for(int id:new int[]{R.id.boStreamPreview,R.id.boPhoneticPreview,R.id.boCandidateBar,R.id.bopomofoKeyboard}){
+                TextView child=new TextView(context);child.setId(id);tree.addView(child);
+            }
+            LayoutDiagnostics diagnostics=new LayoutDiagnostics(context,tree,null);
+            diagnostics.composition(true);providerLookups[0]=0;
+            try{
+                for(int draw=0;draw<100;draw++)diagnostics.onDraw();
+                assertEquals("draw callbacks must not query settings providers",0,providerLookups[0]);
+            }finally{diagnostics.close();}
+        });
+    }
+
 }
