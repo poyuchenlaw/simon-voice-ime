@@ -8,6 +8,7 @@ import android.os.Build;
 import android.os.Handler;
 import android.os.HandlerThread;
 import android.util.Log;
+import android.util.AtomicFile;
 import org.json.JSONArray;
 import org.json.JSONObject;
 import java.io.*;
@@ -34,6 +35,8 @@ final class ImeTelemetry {
     interface Transport { int post(String url, String bearer, String body) throws Exception; }
     private final Context context;
     private final TelemetrySpool spool;
+    private final File spoolPath;
+    private final AtomicFile pendingCrash;
     private final String appVersion;
     private final String session = UUID.randomUUID().toString();
     private final HandlerThread thread = new HandlerThread("IME-Diagnostics");
@@ -48,10 +51,11 @@ final class ImeTelemetry {
         this(context, new File(context.getFilesDir(), "ime-diagnostics.jsonl"), version(context), ImeTelemetry::httpPost);
     }
     ImeTelemetry(Context context, File spool, String version, Transport transport) {
-        this.context=context; this.spool=new TelemetrySpool(spool,MAX_BYTES); this.appVersion=version; this.transport=transport;
+        this.context=context; this.spoolPath=spool; this.pendingCrash=new AtomicFile(new File(context.getFilesDir(),"ime-pending-crash.json")); this.spool=new TelemetrySpool(spool,MAX_BYTES); this.appVersion=version; this.transport=transport;
         installCrashHandlers();
         thread.start(); handler=new Handler(thread.getLooper());
         handler.postDelayed(new Runnable(){public void run(){flush(false);if(handler!=null)handler.postDelayed(this,15_000);}},15_000);
+        replayPendingCrash();
         collectPreviousExits();
     }
     private static String version(Context c) {
@@ -204,10 +208,57 @@ final class ImeTelemetry {
     static String stableBatchId(List<JSONObject> events)throws Exception{MessageDigest d=MessageDigest.getInstance("SHA-256");for(JSONObject e:events)d.update(e.toString().getBytes(StandardCharsets.UTF_8));byte[] b=d.digest();StringBuilder s=new StringBuilder();for(byte x:b)s.append(String.format(Locale.ROOT,"%02x",x&255));return s.toString();}
     String lastResult(){return lastResult;} long lastUploadMs(){return lastUploadMs;}
     void uploadNow(){if(handler!=null)handler.post(()->flush(true));}
-    private void installCrashHandlers(){Thread.UncaughtExceptionHandler prior=Thread.getDefaultUncaughtExceptionHandler();Thread.setDefaultUncaughtExceptionHandler((t,e)->{
-        try{JSONObject crash=makeCrashEvent(t.getName(),e,MAX_CRASH_STACK_CHARS);crash.remove("type");recordUrgent("crash","voice",crash);}catch(Exception captureFailure){Log.e("ImeTelemetry","uncaught crash capture failed",captureFailure);}
-        if(prior!=null)prior.uncaughtException(t,e);
-    });}
+    private void installCrashHandlers(){
+        Thread.UncaughtExceptionHandler prior=Thread.getDefaultUncaughtExceptionHandler();
+        Thread.setDefaultUncaughtExceptionHandler((t,e)->{
+            try{
+                JSONObject crash=makeCrashEvent(t.getName(),e,MAX_CRASH_STACK_CHARS);
+                // Independent, bounded synchronous record: no key text, message,
+                // thread name or unsent interaction batch is persisted here.
+                JSONObject safe=new JSONObject().put("crash_ts",System.currentTimeMillis()).put("crash_app_version",appVersion).put("crash_session",session).put("crash_id",UUID.randomUUID().toString())
+                        .put("exception_class",crash.getString("exception_class")).put("stack",crash.getString("stack"));
+                FileOutputStream out=null;
+                try{out=pendingCrash.startWrite();out.write(safe.toString().getBytes(StandardCharsets.UTF_8));pendingCrash.finishWrite(out);}
+                catch(Exception writeFailure){if(out!=null)pendingCrash.failWrite(out);throw writeFailure;}
+            }catch(Exception captureFailure){Log.e("ImeTelemetry","uncaught crash persistence failed",captureFailure);}
+            finally{if(prior!=null)prior.uncaughtException(t,e);}
+        });
+    }
+    private void replayPendingCrash(){
+        if(!pendingCrash.getBaseFile().exists()&&!new File(pendingCrash.getBaseFile()+".bak").exists())return;
+        try(InputStream in=pendingCrash.openRead()){
+            // Manual bounded read works on every supported API (minSdk 26).
+            // JSON may escape each character to six bytes.
+            byte[] bytes=new byte[MAX_CRASH_STACK_CHARS*6+4096];int used=0,count;
+            while(used<bytes.length&&(count=in.read(bytes,used,bytes.length-used))!=-1)used+=count;
+            if(in.read()!=-1)throw new org.json.JSONException("private crash record exceeds bound");
+            JSONObject crash=new JSONObject(new String(bytes,0,used,StandardCharsets.UTF_8));
+            crash.put("kind","java").put("capture","previous_uncaught_handler");
+            JSONObject event=makeEvent(System.currentTimeMillis(),session,appVersion,"error","voice",crash,false);
+            // Delete the pending record only after reading back the durable spool.
+            boolean stored=storedCrash(crash.getString("crash_id"));
+            if(!stored){enqueue(event);stored=storedCrash(crash.getString("crash_id"));}
+            if(stored)pendingCrash.delete();else Log.w("ImeTelemetry","crash replay not durable; private record retained for next start");
+        }catch(org.json.JSONException invalid){
+            // A malformed record cannot become valid on retry. Drop only this
+            // single bounded private record, reporting the failure without content.
+            pendingCrash.delete();
+            try{recordUrgent("error","voice",new JSONObject().put("capture","invalid_pending_crash"));}
+            catch(org.json.JSONException diagnosticFailure){Log.e("ImeTelemetry","invalid crash diagnostic could not be created",diagnosticFailure);}
+            Log.w("ImeTelemetry","invalid private crash record cleared");
+        }catch(Exception replayFailure){Log.e("ImeTelemetry","private crash replay failed; record retained",replayFailure);}
+    }
+    private boolean storedCrash(String id)throws Exception{
+        if(!spoolPath.isFile())return false;
+        try(BufferedReader in=new BufferedReader(new InputStreamReader(new FileInputStream(spoolPath),StandardCharsets.UTF_8))){
+            for(String line;(line=in.readLine())!=null;){
+                JSONObject event;
+                try{event=new JSONObject(line);}catch(org.json.JSONException torn){continue;}
+                if(id.equals(event.optString("crash_id"))&&"previous_uncaught_handler".equals(event.optString("capture")))return true;
+            }
+        }
+        return false;
+    }
     private static String redact(String s){return s.replaceAll("(?i)(Bearer\\s+)[^\\s]+","$1[redacted]");}
     private static String exitReasonName(int reason) {
         switch(reason) {
