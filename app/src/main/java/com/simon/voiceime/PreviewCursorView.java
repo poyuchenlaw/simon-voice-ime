@@ -35,8 +35,13 @@ public final class PreviewCursorView extends TextView {
         if(getId()!=R.id.boStreamPreview||viewport==null||viewport.getWidth()<=0)return;
         android.util.DisplayMetrics metrics=getResources().getDisplayMetrics();
         float available=viewport.getWidth()-getTotalPaddingLeft()-getTotalPaddingRight()-10*metrics.density;
-        float glyph=getPaint().measureText("國");if(glyph<=0||available<=0)return;
-        float size=Math.max(14*metrics.scaledDensity,Math.min(18*metrics.scaledDensity,getTextSize()*available/(17*glyph)));
+        // Measure from an immutable reference, not the previous fitted size.
+        // Hinted CJK advances round to pixels; feeding the last size back into
+        // the ratio can alternate across that rounding boundary every layout.
+        float referenceSize=18*metrics.scaledDensity;
+        Paint reference=new Paint(getPaint());reference.setTextSize(referenceSize);
+        float glyph=reference.measureText("國");if(glyph<=0||available<=0)return;
+        float size=Math.max(14*metrics.scaledDensity,Math.min(referenceSize,referenceSize*available/(17*glyph)));
         if(Math.abs(size-getTextSize())>.25f)setTextSize(android.util.TypedValue.COMPLEX_UNIT_PX,size);
     }
     private final Paint caretPaint=new Paint(Paint.ANTI_ALIAS_FLAG);

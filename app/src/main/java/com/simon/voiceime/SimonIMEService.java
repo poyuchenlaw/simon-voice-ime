@@ -489,6 +489,7 @@ public class SimonIMEService extends InputMethodService {
     // Keyboard switching
     private View voiceKeyboard;
     private View bopomofoKeyboard;
+    private LayoutDiagnostics layoutDiagnostics;
     private PreviewReveal readingReveal;
     private PreviewReveal textReveal;
     private View englishKeyboard;
@@ -848,6 +849,8 @@ public class SimonIMEService extends InputMethodService {
 
         boCandidateScroll = rootView.findViewById(R.id.boCandidateScroll);
         boCandidateItems = rootView.findViewById(R.id.boCandidateItems);
+        if(layoutDiagnostics!=null)layoutDiagnostics.close();
+        layoutDiagnostics=new LayoutDiagnostics(this,rootView,imeTelemetry);
         boStreamPreview = rootView.findViewById(R.id.boStreamPreview);
         if (boStreamPreview != null) boStreamPreview.setMovementMethod(android.text.method.LinkMovementMethod.getInstance());
         renderedZhuyinCandidates = Collections.emptyList();
@@ -4403,6 +4406,7 @@ public class SimonIMEService extends InputMethodService {
 
     private void renderZhuyinStreamPreview(String text) {
         if (boStreamPreview == null) return;
+        if(layoutDiagnostics!=null)layoutDiagnostics.composition(text!=null&&!text.isEmpty());
         if (text == null || text.isEmpty()) {
             boStreamPreview.setText("");
             return;
@@ -5595,6 +5599,7 @@ public class SimonIMEService extends InputMethodService {
     public void onDestroy() {
         flushPendingVoiceAudio(true);
         dismissSymbolPopup();
+        if(layoutDiagnostics!=null){layoutDiagnostics.close();layoutDiagnostics=null;}
         if(sentencePhone!=null)sentencePhone.close();
         if (zhuyinInput != null) zhuyinInput.close();
         if (zhuyinWordIndex != null) zhuyinWordIndex.close();
