@@ -52,6 +52,8 @@ final class ZhuyinInputController {
         final String composingText;
         final List<String> candidates;
         final String commitText;
+        final String engineTop1, aiSuggestion;
+        final boolean aiTaken, corrected;
         final boolean accepted;
         final int cursorPosition;
         final String candidateKind;
@@ -71,6 +73,13 @@ final class ZhuyinInputController {
         }
         State(String composingText,List<String> candidates,String commitText,boolean accepted,int cursorPosition,
               String candidateKind,List<ZhuyinWordIndex.Entry> abbreviationEntries,int targetStart,int targetEnd,boolean renderedCommit) {
+            this(composingText,candidates,commitText,accepted,cursorPosition,candidateKind,abbreviationEntries,targetStart,targetEnd,renderedCommit,"","");
+        }
+        private State(String composingText,List<String> candidates,String commitText,boolean accepted,int cursorPosition,
+              String candidateKind,List<ZhuyinWordIndex.Entry> abbreviationEntries,int targetStart,int targetEnd,boolean renderedCommit,String top,String ai) {
+            this.engineTop1=top;this.aiSuggestion=ai;
+            this.aiTaken=!ai.isEmpty()&&commitText.equals(ai);
+            this.corrected=!commitText.equals(top);
             this.composingText = composingText;
             this.candidates = candidates;
             this.commitText = renderedCommit ? commitText : renderCommitKeysyms(commitText);
@@ -97,6 +106,59 @@ final class ZhuyinInputController {
             out.append(index<0 ? c : COMMIT_GLYPHS.charAt(index));
         }
         return out.toString();
+    }
+
+    // Kept only in memory for the current composition. Never emits a new text field.
+    private String commitBaseline=null, shownAi="";
+    void resetCommitTelemetry(){commitBaseline=null;shownAi="";}
+    void shownAiSuggestion(String text){shownAi=text==null?"":text;}
+    void inheritCommitTelemetry(ZhuyinInputController before){
+        commitBaseline=before.commitBaseline==null?before.previewText():before.commitBaseline;
+        shownAi=before.shownAi;
+    }
+    private State commitTransition(java.util.function.Supplier<State> operation,boolean edit){
+        String preview=previewText(),keys=sentenceKeys();
+        String baseline=commitBaseline==null?preview:commitBaseline,ai=shownAi;
+        if(baseline.isEmpty()&&!associationCandidates.isEmpty())baseline=associationCandidates.get(0);
+        List<String> reading=new ArrayList<>(phoneticSyllables());
+        State after=operation.get();
+        if(!after.commitText.isEmpty()){
+            String remaining=sentenceKeys();int span=-1;
+            if(!keys.isEmpty()&&keys.endsWith(remaining)){
+                int consumed=keys.length()-remaining.length(),offset=0,count=0;
+                for(String syllable:reading){offset+=syllable.replace('ˉ',' ').length();count++;if(offset==consumed){span=count;break;}if(offset>consumed)break;}
+            }
+            // A full commit owns the whole prior preview; a partial commit owns
+            // the consumed syllables, even if the selected word changes length.
+            if(remaining.isEmpty()&&after.composingText.isEmpty())span=baseline.codePointCount(0,baseline.length());
+            if(span<0)span=after.commitText.codePointCount(0,after.commitText.length());
+            span=Math.min(span,baseline.codePointCount(0,baseline.length()));
+            int cut=baseline.offsetByCodePoints(0,span);
+            String top=baseline.substring(0,cut);
+            if(top.isEmpty()&&preview.isEmpty())top=after.commitText; // literal punctuation
+            commitBaseline=after.composingText.isEmpty()?null:baseline.substring(cut);
+            shownAi="";
+            return new State(after.composingText,after.candidates,after.commitText,after.accepted,after.cursorPosition,
+                after.candidateKind,after.abbreviationEntries,after.targetStart,after.targetEnd,true,top,ai);
+        }
+        boolean changed=!keys.equals(sentenceKeys())||!preview.equals(previewText());
+        if(edit&&changed){
+            shownAi="";
+            String next=previewText();
+            if(commitBaseline!=null&&baseline.codePointCount(0,baseline.length())==preview.codePointCount(0,preview.length())){
+                // Keep pre-choice text for unaffected syllables when appending
+                // punctuation/input or editing elsewhere in the composition.
+                int[] old=preview.codePoints().toArray(),now=next.codePoints().toArray();
+                int prefix=0,suffix=0;
+                while(prefix<old.length&&prefix<now.length&&old[prefix]==now[prefix])prefix++;
+                while(suffix<old.length-prefix&&suffix<now.length-prefix&&old[old.length-1-suffix]==now[now.length-1-suffix])suffix++;
+                int a=baseline.offsetByCodePoints(0,prefix),b=baseline.offsetByCodePoints(0,old.length-suffix);
+                int c=next.offsetByCodePoints(0,prefix),d=next.offsetByCodePoints(0,now.length-suffix);
+                commitBaseline=baseline.substring(0,a)+next.substring(c,d)+baseline.substring(b);
+            }else commitBaseline=null;
+        }
+        else if(changed&&commitBaseline==null)commitBaseline=baseline;
+        return after;
     }
 
     private final Engine engine;
@@ -270,6 +332,9 @@ final class ZhuyinInputController {
     }
 
     State press(String key) {
+        return commitTransition(()->pressInternal(key),true);
+    }
+    private State pressInternal(String key) {
         breakPickRun();
         if(previewBoundary>=0&&retype==null){
             if("backspace".equals(key))return deleteAtTextCaret();
@@ -369,6 +434,9 @@ final class ZhuyinInputController {
     }
 
     State chooseCandidate(int index) {
+        return commitTransition(()->chooseCandidateTracked(index),false);
+    }
+    private State chooseCandidateTracked(int index) {
         boolean defaultFocus=!previewFocused&&previewBoundary<0&&keyCaret<0&&retype==null;
         String before=sentenceKeys();
         if(!defaultFocus||!before.equals(pickRunRemaining))breakPickRun();
@@ -503,8 +571,11 @@ final class ZhuyinInputController {
         return snapshot(targetable, false);
     }
 
-    State clear() { breakPickRun();symbolEditKeys=symbolEditText="";keyCaret=-1; previewBoundary=-1;fixedReading=Collections.emptyList();retypeSourceReading=Collections.emptyList();closeRetype();fixedComposition="";fixedWordRanges.clear();previewFocused=false; abbreviationKeys.setLength(0); rawZhuyinKeys.setLength(0); abbreviationEntries = Collections.emptyList(); mixedChoices=Collections.emptyList(); associationCandidates = Collections.emptyList(); engine.clear(); return snapshot(true, true); }
+    State clear() { commitBaseline=null;shownAi="";breakPickRun();symbolEditKeys=symbolEditText="";keyCaret=-1; previewBoundary=-1;fixedReading=Collections.emptyList();retypeSourceReading=Collections.emptyList();closeRetype();fixedComposition="";fixedWordRanges.clear();previewFocused=false; abbreviationKeys.setLength(0); rawZhuyinKeys.setLength(0); abbreviationEntries = Collections.emptyList(); mixedChoices=Collections.emptyList(); associationCandidates = Collections.emptyList(); engine.clear(); return snapshot(true, true); }
     State punctuation(String text) {
+        return commitTransition(()->punctuationInternal(text),true);
+    }
+    private State punctuationInternal(String text) {
         breakPickRun();
         if(previewText().isEmpty())return new State("",Collections.emptyList(),text,true,0,"engine",Collections.emptyList(),0,0,true);
         if(retype!=null)return retypeState(retype.punctuation(text));
@@ -514,6 +585,9 @@ final class ZhuyinInputController {
         return snapshot(true,true);
     }
     State flushForPunctuation() {
+        return commitTransition(this::flushForPunctuationInternal,false);
+    }
+    private State flushForPunctuationInternal() {
         if(retype!=null){if(textInsertion&&!retype.state().candidates.isEmpty())chooseCandidate(0);else cancelSecondPass();}
         if(!fixedComposition.isEmpty()&&engine.composingText().isEmpty())return press("enter");
         if (engine.composingText() == null || engine.composingText().isEmpty()) return snapshot(true, true);
@@ -527,6 +601,9 @@ final class ZhuyinInputController {
         return associationSnapshot();
     }
     State chooseAssociation(int index) {
+        return commitTransition(()->chooseAssociationInternal(index),false);
+    }
+    private State chooseAssociationInternal(int index) {
         breakPickRun();
         if (index < 0 || index >= associationCandidates.size()) return associationSnapshot();
         String value = associationCandidates.get(index);

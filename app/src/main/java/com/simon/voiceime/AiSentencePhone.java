@@ -71,6 +71,7 @@ final class AiSentencePhone {
     private SharedPreferences prefs(){return context.getSharedPreferences("simon_ime_prefs",Context.MODE_PRIVATE);}
     void changed(boolean editorChange){
         if(applying)return;
+        if(editorChange&&host.controller()!=null)host.controller().resetCommitTelemetry();
         if(editorChange)revertedSpan=null;else if(revertedSpan!=null&&host.controller()!=null)revertedSpan.edited(host.controller().sentenceKeys());
         if(transaction!=null&&!editorChange&&host.controller()!=null&&host.controller().sentenceKeys().equals(keyWitness)&&host.controller().state().composingText.equals(ownedText))return;
         if(call!=null){call.cancel();call=null;event("cancelled");}
@@ -252,6 +253,7 @@ final class AiSentencePhone {
     }
     void rendered(JSONObject candidate,int rank){
         if(rank<=0||!rowOptions().contains(candidate)||!Integer.valueOf(rank).equals(displayedRanks.get(candidate)))return;
+        if("ai".equals(candidate.optString("source","ai")))host.controller().shownAiSuggestion(candidate.optString("text"));
         suggestionEvent("shown",candidate.optString("source","ai"),rank,candidate.optString("text").codePointCount(0,candidate.optString("text").length()));
         if(phoneRender<0){phoneRender=now();event("rendered");}
     }

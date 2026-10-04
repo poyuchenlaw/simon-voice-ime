@@ -615,7 +615,7 @@ public class SimonIMEService extends InputMethodService {
             public ZhuyinInputController controller(){return zhuyinInput;}
             public InputConnection ownedConnection(){InputConnection ic=getCurrentInputConnection();return ic!=null&&ic==zhuyinComposingConnection?ic:null;}
             public boolean allowed(){EditorInfo info=getCurrentInputEditorInfo();return !protectedInputField&&info!=null&&info.inputType!=0&&info.packageName!=null&&currentKeyboardMode==KeyboardMode.BOPOMOFO;}
-            public void replace(ZhuyinInputController controller){zhuyinInput=controller;applyZhuyinState(controller.state());}
+            public void replace(ZhuyinInputController controller){controller.inheritCommitTelemetry(zhuyinInput);zhuyinInput=controller;applyZhuyinState(controller.state());}
             public void render(){renderSentenceOptions();}
             public void commitSuggestion(){applyZhuyinState(zhuyinInput.press("enter"));}
         }); } catch(Exception unavailable){Log.w(TAG,"Sentence layer unavailable; local keyboard retained",unavailable);}
@@ -3789,7 +3789,7 @@ public class SimonIMEService extends InputMethodService {
             imeTelemetry.record("candidate",page,new JSONObject().put("shown",shown).put("chosen_index",chosen).put("candidate_kind","bopomofo".equals(page)?renderedZhuyinCandidateKind:"engine").put("chosen_kind",chosen>=0&&zhuyinInput!=null&&"bopomofo".equals(page)?("association".equals(renderedZhuyinCandidateKind)?"association":zhuyinInput.candidateOrigin(chosen)):""),protectedInputField);
         }catch(Exception error){Log.w(TAG,"candidate telemetry unavailable",error);}
     }
-    private void recordCommitEvent(String page,String text,String first,String ai,boolean corrected){if(imeTelemetry==null)return;try{imeTelemetry.record("commit",page,new JSONObject().put("text",text).put("engine_top1",first==null?"":first).put("ai_suggestion",ai==null?"":ai).put("corrected",corrected).put("via","bopomofo".equals(page)?zhuyinCommitVia:"other").put("committed_codepoints",text.codePointCount(0,text.length())),protectedInputField);}catch(Exception ignored){}}
+    private void recordCommitEvent(String page,String text,String first,String ai,boolean corrected,boolean aiTaken){if(imeTelemetry==null)return;try{imeTelemetry.record("commit",page,new JSONObject().put("text",text).put("engine_top1",first==null?"":first).put("ai_suggestion",ai==null?"":ai).put("corrected",corrected).put("ai_taken",aiTaken).put("via","bopomofo".equals(page)?zhuyinCommitVia:"other").put("committed_codepoints",text.codePointCount(0,text.length())),protectedInputField);}catch(Exception ignored){}}
     private void recordCorrectionEvent(String page,String segment,String from,String to,String via){if(imeTelemetry==null)return;try{imeTelemetry.record("correction",page,new JSONObject().put("segment",segment).put("from",from).put("to",to).put("via",via),protectedInputField);}catch(Exception ignored){}}
 
     private void switchKeyboard(KeyboardMode mode) {
@@ -4251,6 +4251,12 @@ public class SimonIMEService extends InputMethodService {
                 && "ㄅㄆㄇㄈㄉㄊㄋㄌㄍㄎㄏㄐㄑㄒㄓㄔㄕㄖㄗㄘㄙㄧㄨㄩㄚㄛㄜㄝㄞㄟㄠㄡㄢㄣㄤㄥㄦˊˇˋ˙".contains(key);
     }
 
+    private boolean commitZhuyinText(InputConnection ic,ZhuyinInputController.State state){
+        if(!commitTextProgrammatically(ic,state.commitText))return false;
+        recordCommitEvent("bopomofo",state.commitText,state.engineTop1,state.aiSuggestion,state.corrected,state.aiTaken);
+        return true;
+    }
+
     private void applyZhuyinState(ZhuyinInputController.State state) {
         if (state == null) return;
         if(sentencePhone!=null)sentencePhone.changed(false);
@@ -4277,9 +4283,7 @@ public class SimonIMEService extends InputMethodService {
         InputConnection ic = getCurrentInputConnection();
         if (ic != null) {
             if (!state.commitText.isEmpty()) {
-                String top=state.candidates.isEmpty()?"":state.candidates.get(0);
-                recordCommitEvent("bopomofo",state.commitText,top,"",false);
-                commitTextProgrammatically(ic, state.commitText);
+                commitZhuyinText(ic,state);
                 if(sentencePhone!=null)sentencePhone.committed(state.commitText,state.commitText.equals(sentenceInstalledCommit));
                 sentenceInstalledCommit=null;
                 zhuyinComposingConnection = null;
