@@ -51,6 +51,15 @@ public final class CompleteUntonedHostTest {
    check(c.sentenceKeys().equals(old),"choice retains all physical keys");intact(c);
    check(c.textPreview().startsWith("臺光")&&!c.textPreview().startsWith("臺光網"),"臺光 must consume full ㄍㄨㄤ: "+c.textPreview());
    System.out.println("PASS cursor 臺光 range="+choice.start+":"+choice.end+" reading="+c.phoneticSyllables()+" preview="+c.textPreview());
+   c.clear();type(c,"ㄊㄞˊㄍㄨㄤㄉㄧㄢˋㄏㄢˋㄔㄨㄤˋㄧˋㄌㄜ");
+   c.moveCursorToPreviewBoundary(1);
+   ZhuyinInputController.TextChoice middle=null;
+   for(var x:c.textChoices())if(x.label.equals("臺光")&&x.start==0&&x.end==2){middle=x;break;}
+   check(middle!=null,"G1 middle cursor must offer spanning 臺光");
+   check(middle.wordFocus,"G2 boundary word menu retains wordFocus context");
+   old=c.sentenceKeys();c.chooseTextCandidate(middle);
+   check(c.sentenceKeys().equals(old)&&c.textPreview().startsWith("臺光"),"middle choice preserves keys and word");intact(c);
+   System.out.println("PASS middle cursor range="+middle.start+":"+middle.end+" wordFocus="+middle.wordFocus);
    c.clear();type(c,"ㄨㄛˇㄖㄨˊㄍㄧㄠˋㄍㄣㄋㄧˇㄕㄨㄛ");
    check(c.phoneticSyllables().contains("ㄍ"),"果=ㄍ before ㄧ remains abbreviation");
    check(!c.textPreview().matches(".*[A-Za-z].*"),"shortcut leaked raw ASCII");

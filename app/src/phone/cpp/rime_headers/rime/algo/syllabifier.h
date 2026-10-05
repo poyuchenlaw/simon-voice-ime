@@ -20,9 +20,12 @@ class Corrector;
 
 using SyllableId = int32_t;
 
+inline constexpr double kCompleteSyllablePenalty = 100.0;
+
 struct EdgeProperties : SpellingProperties {
   EdgeProperties(SpellingProperties sup) : SpellingProperties(sup) {};
   EdgeProperties() = default;
+  bool complete_syllable_conflict = false;
   // 切分歧義編碼段的起始位置
   set<size_t> ambiguous_source_positions;
 };
@@ -58,12 +61,14 @@ class Syllabifier {
                                   Prism& prism,
                                   SyllableGraph* graph);
   RIME_DLL void EnableCorrection(Corrector* corrector);
+  void PreferCompleteSyllables(bool enabled) { prefer_complete_syllables_ = enabled; }
 
  protected:
   void CheckOverlappedSpellings(SyllableGraph* graph, size_t start, size_t end);
   void Transpose(SyllableGraph* graph);
 
   string delimiters_;
+  bool prefer_complete_syllables_ = false;
   bool enable_completion_ = false;
   bool strict_spelling_ = false;
   Corrector* corrector_ = nullptr;

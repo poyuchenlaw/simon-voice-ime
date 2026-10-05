@@ -28,6 +28,7 @@ speller:
       - zhuyin:/keymap_bopomofo
 
 translator:
+  prefer_complete_syllables: true
   prism: bopomofo_express
   enable_user_dict: true
   enable_sentence: true

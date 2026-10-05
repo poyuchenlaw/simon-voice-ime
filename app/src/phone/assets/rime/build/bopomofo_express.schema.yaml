@@ -298,6 +298,7 @@ taiwan_defaults:
     - reverse_lookup
     - user_table
 translator:
+  prefer_complete_syllables: true
   contextual_suggestions: true
   dictionary: terra_pinyin
   enable_sentence: true

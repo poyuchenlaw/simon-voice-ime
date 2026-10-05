@@ -217,7 +217,7 @@ final class ZhuyinInputController {
         Engine probe=engine.copyForTextEdit();boolean cloned=probe!=null;if(probe==null)probe=retypeEngineFactory.get();if(probe==null)return textChoiceCache;
         try{
             // Character alternatives address only the tapped syllable. The
-            // boundary menu supplies words ending there without repeating
+            // boundary menu supplies words containing the tapped character without repeating
             // lexical focus resolution across the unchanged long prefix.
             probe.setTextLayout(textLayout);
             if(!cloned&&!probe.prepareSentence(candidateKeys(keys),text)||!probe.moveCursorToPreviewCharacter(boundary-1))return textChoiceCache;
@@ -240,9 +240,9 @@ final class ZhuyinInputController {
                 // the words that were reachable in the previous layout.
                 List<String> wordLabels=probe.regroupLabels();List<int[]> wordRanges=probe.optionRanges();List<TextChoice> ordered=new ArrayList<>();
                 java.util.Set<String> seen=new java.util.HashSet<>();
-                // A tapped boundary also offers words ending there, even when
-                // the lexical focus extends into the following character.
-                for(int n=0;n<wordLabels.size();n++){String label=wordLabels.get(n);int[] range=n<wordRanges.size()?wordRanges.get(n):null;if(wordFocus&&(range==null||range[0]>=boundary||range[1]!=boundary))continue;if(!label.isEmpty()&&!label.contains("｜")&&!label.codePoints().anyMatch(ZhuyinInputController::isPhoneticGlyph)){ordered.add(new TextChoice(label,"word",text,keys,boundary,n,false,false,range==null?-1:range[0],range==null?-1:range[1]));seen.add(label);}}
+                // A tapped boundary offers native words containing its left glyph,
+                // including a word that continues across the caret.
+                for(int n=0;n<wordLabels.size();n++){String label=wordLabels.get(n);int[] range=n<wordRanges.size()?wordRanges.get(n):null;if(wordFocus&&(range==null||range[0]>=boundary||range[1]<boundary))continue;if(!label.isEmpty()&&!label.contains("｜")&&!label.codePoints().anyMatch(ZhuyinInputController::isPhoneticGlyph)){ordered.add(new TextChoice(label,"word",text,keys,boundary,n,false,wordFocus,range==null?-1:range[0],range==null?-1:range[1]));seen.add(label);}}
                 for(TextChoice c:choices)if(!"word".equals(c.kind)||seen.add(c.label))ordered.add(c);
                 choices=ordered;
             }

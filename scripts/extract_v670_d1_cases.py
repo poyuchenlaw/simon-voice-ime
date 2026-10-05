@@ -25,6 +25,9 @@ for day in range(2,6):
   elif t in ('commit','exit') or t=='correction' and r.get('via') in ('backspace','candidate') or t=='cursor' and r.get('action') in ('edit','choose'):
    flush('mutation:'+t)
  flush('eof')
+# Optional G7 population: include runs without any complete multi-key syllable.
+if len(sys.argv) > 3:
+ Path(sys.argv[3]).write_text(''.join(json.dumps({'source':source,'first_line':events[0][0],'last_line':events[-1][0],'keys':''.join(k for _,k in events),'run_end':reason},ensure_ascii=False)+'\n' for source,events,reason in runs))
 for source,events,end_reason in runs:
  keys=''.join(k for _,k in events)
  for i,k in enumerate(keys):
