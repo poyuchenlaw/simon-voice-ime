@@ -57,10 +57,14 @@ final class RimeZhuyinNative implements AutoCloseable {
     private static native void nativeSelectCommit(long h, int index);
     void choose(int index) { commitReading = decode(nativeVocabularyReading(handle)); nativeSelect(handle, index); }
     boolean focusCharacter(int index) { return nativeFocusCharacter(handle,index); }
+    boolean focusCharacterOnly(int index) { return nativeFocusCharacterOnly(handle,index); }
+    private static native boolean nativeFocusCharacterOnly(long h,int target);
     void recordTouch(int[] keys,double[] probabilities,boolean[] adjacent){nativeRecordTouch(handle,keys,probabilities,adjacent);}
     String[] regroupReadings(){byte[][] values=nativeRegroupReadings(handle);String[] out=new String[values.length];for(int i=0;i<values.length;i++)out[i]=decode(values[i]);return out;}
     boolean regroup(int boundary) { return nativeRegroup(handle,boundary); }
     boolean chooseRegroup(int index) { return nativeChooseRegroup(handle,index); }
+    int[][] optionRanges(){return nativeOptionRanges(handle);}
+    private static native int[][] nativeOptionRanges(long h);
     String[] optionGroups(){return nativeOptionGroups(handle);}
     private static native String[] nativeOptionGroups(long h);
     void restore(java.util.List<String> readings,String text){

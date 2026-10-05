@@ -17,7 +17,7 @@ public final class PreviewCursorView extends TextView {
     }
     @Override protected void onMeasure(int widthSpec,int heightSpec){
         super.onMeasure(widthSpec,heightSpec);
-        if(getId()!=R.id.boStreamPreview||getText().length()==0)return;
+        if(getId()!=R.id.boStreamPreview||getText().length()==0||!(getParent() instanceof android.widget.HorizontalScrollView))return;
         compositionWidth=Math.max(compositionWidth,getMeasuredWidth());
         setMeasuredDimension(compositionWidth,getMeasuredHeight());
     }
@@ -54,15 +54,21 @@ public final class PreviewCursorView extends TextView {
         int at=boundary<0?count:Math.min(boundary,count);
         int utf=text.offsetByCodePoints(0,at);
         float x=getTotalPaddingLeft()+getLayout().getPrimaryHorizontal(utf)-getScrollX();
-        float top=getExtendedPaddingTop()+getLayout().getLineTop(0);
-        float bottom=getExtendedPaddingTop()+getLayout().getLineBottom(0);
+        int line=getLayout().getLineForOffset(utf);
+        float top=getExtendedPaddingTop()+getLayout().getLineTop(line);
+        float bottom=getExtendedPaddingTop()+getLayout().getLineBottom(line);
         caretPaint.setStrokeWidth(getResources().getDisplayMetrics().density*(dragging?4:3));
         caretPaint.setColor(getCurrentTextColor());
         float cap=getResources().getDisplayMetrics().density*5;
         if(activeStart>=0&&activeEnd>activeStart&&activeEnd<=count){
-            float left=getTotalPaddingLeft()+getLayout().getPrimaryHorizontal(text.offsetByCodePoints(0,activeStart))-getScrollX();
-            float right=getTotalPaddingLeft()+getLayout().getPrimaryHorizontal(text.offsetByCodePoints(0,activeEnd))-getScrollX();
-            canvas.drawLine(left,bottom+2,right,bottom+2,caretPaint);
+            int from=text.offsetByCodePoints(0,activeStart),to=text.offsetByCodePoints(0,activeEnd);
+            for(int n=getLayout().getLineForOffset(from);n<=getLayout().getLineForOffset(to);n++){
+                int a=Math.max(from,getLayout().getLineStart(n)),b=Math.min(to,getLayout().getLineEnd(n));if(a>=b)continue;
+                float left=getTotalPaddingLeft()+getLayout().getPrimaryHorizontal(a)-getScrollX();
+                float right=getTotalPaddingLeft()+(b==getLayout().getLineEnd(n)?getLayout().getLineRight(n):getLayout().getPrimaryHorizontal(b))-getScrollX();
+                float y=getExtendedPaddingTop()+getLayout().getLineBottom(n)+2;
+                canvas.drawLine(left,y,right,y,caretPaint);
+            }
         }
         if(!lit&&!dragging)return;
         x=Math.max(cap,Math.min(getWidth()-cap,x));

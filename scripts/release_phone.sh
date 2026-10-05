@@ -110,6 +110,13 @@ if [[ -z "$PHONE_VERSION_CODE" ]]; then
   PHONE_VERSION_CODE=$((LATEST_CODE + 1))
 fi
 
+# Packaging a previously accepted, freshly reproduced APK must not rebuild its
+# native libraries. This mode requires an exact expected final fingerprint.
+if [[ -n "${RELEASE_PREBUILT_APK:-}" ]]; then
+  [[ "${RELEASE_EXPECTED_SHA256:-}" =~ ^[0-9a-f]{64}$ ]] || { echo "prebuilt mode requires RELEASE_EXPECTED_SHA256" >&2; exit 2; }
+  BUILT="$(readlink -f "$RELEASE_PREBUILT_APK")"
+  [[ -s "$BUILT" ]] || { echo "prebuilt phone APK missing" >&2; exit 2; }
+else
 scripts/build_apkdiffpatch_android.sh > "$EVIDENCE/native-build.log" 2>&1
 make -C "$ROOT/third_party/ApkDiffPatch" -j2 > "$EVIDENCE/host-tools-build.log" 2>&1
 GRADLE_USER_HOME="$GRADLE_HOME" "$ROOT/gradlew" --project-cache-dir "$PROJECT_CACHE_DIR" --offline --no-daemon --offline \
@@ -117,6 +124,7 @@ GRADLE_USER_HOME="$GRADLE_HOME" "$ROOT/gradlew" --project-cache-dir "$PROJECT_CA
   testPhoneReleaseUnitTest assemblePhoneRelease > "$EVIDENCE/gradle-build.log" 2>&1
 BUILT="$ROOT/app/build/outputs/apk/phone/release/app-phone-release.apk"
 [[ -s "$BUILT" ]] || { echo "Gradle phone APK missing" >&2; exit 2; }
+fi
 RIME_TMP="$WORK/rime-assets"
 rm -rf "$RIME_TMP"; mkdir -p "$RIME_TMP"
 unzip -q "$BUILT" 'assets/rime/build/*.schema.yaml' -d "$RIME_TMP"
@@ -145,11 +153,19 @@ fresh_against() {
     [[ "$artifact" -nt "$source" ]] || { echo "native library is older than source: $artifact <= $source" >&2; exit 2; }
   done
 }
+if [[ -n "${RELEASE_PREBUILT_APK:-}" ]]; then
+  # Prove the packaged native artifacts are the accepted local inputs. Their
+  # historical mtimes cannot establish provenance for a restored release.
+  while IFS= read -r library; do
+    cmp -s "$library" "$JNI_DIR/$(basename "$library")" || { echo "prebuilt native artifact differs: $(basename "$library")" >&2; exit 2; }
+  done < <(find "$NATIVE_TMP/lib/arm64-v8a" -name '*.so' -type f)
+else
 fresh_against "$JNI_DIR/libchewing_jni.so" "$ROOT/app/src/phone/cpp/chewing_jni.c"
 while IFS= read -r source; do fresh_against "$JNI_DIR/libchewing.so" "$source"; done < <(find "$ROOT/third_party/libchewing/src" "$ROOT/third_party/libchewing/capi/src" "$ROOT/third_party/libchewing/capi/include" -type f \( -name '*.rs' -o -name '*.c' -o -name '*.h' \))
 fresh_against "$JNI_DIR/librime_jni.so" "$ROOT/app/src/phone/cpp/rime_jni.cpp" "$ROOT/evidence/rime_spike/android-prefix/lib/librime.so"
 fresh_against "$JNI_DIR/librime.so" "$ROOT/evidence/rime_spike/android-prefix/lib/librime.so"
 while IFS= read -r source; do fresh_against "$JNI_DIR/libapkpatch.so" "$source"; done < <(find "$ROOT/third_party/ApkDiffPatch/builds/android_ndk_jni_mk" -type f \( -name '*.c' -o -name '*.cpp' -o -name '*.h' -o -name 'Android.mk' -o -name 'Application.mk' \))
+fi
 RAW="$WORK/gradle-signed.apk"
 NORMALIZED="$WORK/normalized.apk"
 FINAL="$DEST/simon-voice-ime-phone-$VERSION.apk"
@@ -199,6 +215,9 @@ EXPECTED_CERT="9f6ee9da00cba648fe8c0f231df31b55f895d1ee6ede2968ef91f9b7e381d9de"
 
 FULL_SHA="$(sha256sum "$FINAL" | cut -d' ' -f1)"
 FULL_SIZE="$(stat -c %s "$FINAL")"
+if [[ -n "${RELEASE_PREBUILT_APK:-}" && "$FULL_SHA" != "$RELEASE_EXPECTED_SHA256" ]]; then
+  echo "accepted APK fingerprint changed; refusing release artifacts" >&2; exit 2
+fi
 PATCH_RECORDS=()
 for old_version in "${PREVIOUS_TAGS[@]}"; do
   OLD_DIR="$WORK/v$old_version"

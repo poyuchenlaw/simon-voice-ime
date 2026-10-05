@@ -390,6 +390,14 @@ extern "C" JNIEXPORT void JNICALL Java_com_simon_voiceime_RimeZhuyinNative_nativ
     for(int i=0;i<n;i++){if(k[i]<0||k[i]>127||!std::isfinite(p[i])||p[i]<0||p[i]>1)continue;sample.probability[k[i]]=p[i];if(a[i])sample.neighbours.insert(k[i]);}
     s->regroup.touches[position]=std::move(sample);s->regroup.cache.clear();
 }
+// Effective decoded-preview spans, including regrouped repair candidates.
+extern "C" JNIEXPORT jobjectArray JNICALL Java_com_simon_voiceime_RimeZhuyinNative_nativeOptionRanges(JNIEnv* env,jclass,jlong h) {
+    auto* s=state(h);jclass cls=env->FindClass("[I");int n=s?s->regroup.options.size():0;
+    auto out=env->NewObjectArray(n,cls,nullptr);
+    for(int i=0;i<n;i++){const auto& option=s->regroup.options[i];jint values[2]={option.repaired_grouping?option.grouping_start:option.start,option.repaired_grouping?option.grouping_end:option.end};
+        auto range=env->NewIntArray(2);env->SetIntArrayRegion(range,0,2,values);env->SetObjectArrayElement(out,i,range);env->DeleteLocalRef(range);}
+    return out;
+}
 extern "C" JNIEXPORT jobjectArray JNICALL Java_com_simon_voiceime_RimeZhuyinNative_nativeRegroupReadings(JNIEnv* env,jclass,jlong h) {
     auto* s=state(h);jclass cls=env->FindClass("[B");int n=s?s->regroup.options.size():0;
     auto result=env->NewObjectArray(n,cls,nullptr);
@@ -622,6 +630,12 @@ extern "C" JNIEXPORT jboolean JNICALL Java_com_simon_voiceime_RimeZhuyinNative_n
     Session* s=state(h);if(!s||target<0)return JNI_FALSE;
     if(focus_character(s->regroup,s->id,target))return JNI_TRUE;
     return Java_com_simon_voiceime_RimeZhuyinNative_nativeMoveCursorToPreviewCharacter(env,cls,h,target);
+}
+
+// Text layout already obtains words from nativeRegroup; avoid resolving the
+// entire lexical word again while constructing its independent character row.
+extern "C" JNIEXPORT jboolean JNICALL Java_com_simon_voiceime_RimeZhuyinNative_nativeFocusCharacterOnly(JNIEnv*,jclass,jlong h,jint target) {
+    Session* s=state(h);return s&&target>=0&&focus_character(s->regroup,s->id,target,true)?JNI_TRUE:JNI_FALSE;
 }
 
 extern "C" JNIEXPORT jintArray JNICALL Java_com_simon_voiceime_RimeZhuyinNative_nativeEditRange(JNIEnv* env,jclass,jlong h) {

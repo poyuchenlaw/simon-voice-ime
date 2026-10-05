@@ -11,14 +11,14 @@ final class AiSentence {
     private boolean eligible;
     private String lastLiteral="",trigger="pause";
     String trigger(){return trigger;}
-    boolean charsDue(String preview){return "suggestions".equals(mode)&&preview!=null
+    boolean charsDue(String preview){return ("suggestions".equals(mode)||"live".equals(mode))&&preview!=null
         &&preview.codePointCount(0,preview.length())-lastLiteral.codePointCount(0,lastLiteral.length())>=3;}
     private String mode="shadow";
     JSONObject pending,result;
     private String recordedId,recordedDigest;
     private long recordedGeneration;
     AiSentence(JSONObject schema){this.schema=schema;}
-    void mode(String value){mode="off".equals(value)||"suggestions".equals(value)?value:"shadow";}
+    void mode(String value){mode="off".equals(value)||"suggestions".equals(value)||"live".equals(value)?value:"shadow";}
     String mode(){return mode;}
     void edit(long now,boolean editorChange,boolean allowed){
         if(editorChange){editorGeneration++;lastLiteral="";}compositionGeneration++;lastEdit=now;eligible=allowed;pending=null;result=null;
@@ -50,7 +50,7 @@ final class AiSentence {
     }
     List<JSONObject> visible(JSONObject req,long now,boolean chip){
         try {
-        if(!"suggestions".equals(mode)||!fresh(req,now)||result==null||!"suggestions".equals(result.getString("mode")))return Collections.emptyList();
+        if(!("suggestions".equals(mode)||"live".equals(mode))||!fresh(req,now)||result==null||!"suggestions".equals(result.getString("mode")))return Collections.emptyList();
         JSONObject d=result.getJSONObject("decision");String display=d.getString("display");
         if("none".equals(display)||(chip&&!"chip".equals(display)))return Collections.emptyList();
         JSONArray a=result.getJSONArray("candidates");List<JSONObject> out=new ArrayList<>();

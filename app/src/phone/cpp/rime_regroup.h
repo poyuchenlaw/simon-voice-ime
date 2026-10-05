@@ -488,10 +488,14 @@ static std::vector<RegroupOption> sandhi_words(RegroupState& r,int target) {
     r.sandhi_cache[target]=result;return result;
 }
 
-static bool focus_character(RegroupState& r,RimeSessionId id,int target) {
+static bool focus_character(RegroupState& r,RimeSessionId id,int target,bool character_only=false) {
     r.boundary=-1;r.focus_start=r.focus_end=-1;r.options.clear();
     if(!capture(r,id)||target<0||static_cast<size_t>(target+1)>=r.stops.size())return false;
     auto* ctx=context(id);int a=0,b=cp_count(r.original),position=0;
+    bool explicit_word=false;
+    std::vector<RegroupOption> sandhi;
+    if(character_only){a=target;b=target+1;}
+    else {
     bool found=false,context_word=false;
     for(auto& seg:ctx->composition()){
         auto candidate=seg.GetSelectedCandidate();if(!candidate)continue;
@@ -504,7 +508,6 @@ static bool focus_character(RegroupState& r,RimeSessionId id,int target) {
     }
     // Explicit teaching and installed vocabulary have recorded origins. Ordinary
     // commits keep their conversion weights but do not acquire a word boundary.
-    bool explicit_word=false;
     int explicit_length=0;
     for(const auto& file:{"installed_vocab.tsv","taught_vocab.tsv"}) {
         std::ifstream source(r.user_path+"/"+file);std::string line;
@@ -551,13 +554,14 @@ static bool focus_character(RegroupState& r,RimeSessionId id,int target) {
             if(best==-1e300&&fallback>-1e300){a=fallback_a;b=fallback_b;}
         }
     }
-    auto sandhi=sandhi_words(r,target);
+    sandhi=sandhi_words(r,target);
     // Recover a lexical span when the surface tone split it into characters.
     // A matching existing preview is preferred; otherwise use native lookup order.
     if(!explicit_word&&!sandhi.empty()&&b-a==1) {
         auto chosen=std::find_if(sandhi.begin(),sandhi.end(),[&](const auto& x){return x.label==cp_slice(r.original,x.start,x.end);});
         const auto& word=chosen==sandhi.end()?sandhi.front():*chosen;a=word.start;b=word.end;
     }
+    } // Word-span resolution is unnecessary for the separate character row.
     r.glyph_stops.clear();
     // Focus is a view operation. Moving the live Rime caret through pinned
     // spans would silently retranslate the untouched suffix.
@@ -619,6 +623,12 @@ static bool focus_character(RegroupState& r,RimeSessionId id,int target) {
     for(const auto& option:repairs)if(option.start<=target&&option.end>target&&slips++<20)r.options.push_back(option);
     std::set<std::string> seen;
     r.options.erase(std::remove_if(r.options.begin(),r.options.end(),[&](const RegroupOption& option){return !seen.insert(option.label).second;}),r.options.end());
+    if(character_only){
+        // A character-row choice replaces exactly one character. Word and
+        // multi-syllable repair choices come from the separate boundary menu.
+        r.options.erase(std::remove_if(r.options.begin(),r.options.end(),[&](const RegroupOption& option){return option.start!=target||option.end!=target+1;}),r.options.end());
+        for(auto& option:r.options)option.character=true;
+    }
     r.boundary=-1;
     r.focus_start=a;r.focus_end=b;return true;
 }

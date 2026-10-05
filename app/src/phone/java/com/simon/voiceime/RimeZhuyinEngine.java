@@ -19,6 +19,8 @@ final class RimeZhuyinEngine implements ZhuyinInputController.Engine, AutoClosea
     private final List<Part> parts=new ArrayList<>();
     private int active=0,caret=-1;
     private String pending="";
+    private boolean textLayout;
+    @Override public void setTextLayout(boolean enabled){textLayout=enabled;}
     private final String shared,user;
     private final List<int[]> choices=new ArrayList<>();
     RimeZhuyinEngine(String shared,String user){this(new SingleRimeZhuyinEngine(shared,user));}
@@ -30,6 +32,21 @@ final class RimeZhuyinEngine implements ZhuyinInputController.Engine, AutoClosea
     private int keyOffset(){int n=0;for(int i=0;i<active;i++)n+=count(parts.get(i).keys());return n;}
     private int textOffset(){int n=0;for(int i=0;i<active;i++)n+=count(parts.get(i).text());return n;}
     private String join(boolean keys){StringBuilder b=new StringBuilder();for(Part p:parts)b.append(keys?p.keys():p.text());return b.toString();}
+    @Override public ZhuyinInputController.Engine copyForTextEdit(){
+        if(parts.isEmpty())return null;RimeZhuyinEngine copy=new RimeZhuyinEngine(shared,user);boolean valid=false;
+        try{
+            copy.current().close();copy.parts.clear();
+            for(Part p:parts){
+                if(p.engine==null){copy.parts.add(new Part(p.literal));continue;}
+                List<String> reading=p.engine.phoneticSyllables();String text=p.text();
+                if(reading.size()!=count(text)||!String.join("",reading).replace("ˉ"," ").equals(p.keys().replace("ˉ"," ")))return null;
+                SingleRimeZhuyinEngine mapped=copy.fresh();copy.parts.add(new Part(mapped));mapped.nativeEngine.restore(reading,text);
+                if(!mapped.previewText().equals(text)||!mapped.sentenceKeys().equals(p.keys().replace("ˉ"," ")))return null;
+                mapped.nativeEngine.copyTouches(p.engine.nativeEngine,0,p.keys().length());
+            }
+            copy.active=active;copy.caret=-1;copy.textLayout=textLayout;valid=true;return copy;
+        }finally{if(!valid)copy.close();}
+    }
     @Override public int rowWordLimit(){if(parts.isEmpty()){return 1;}return current().rowWordLimit();}
     @Override public String[] localRepair(){if(parts.isEmpty()){return new String[0];}
         String[] fix=current().nativeEngine.localRepair();if(fix.length!=2)return fix;
@@ -64,7 +81,7 @@ final class RimeZhuyinEngine implements ZhuyinInputController.Engine, AutoClosea
     @Override public boolean focusAfterKeyEdit(int at){if(parts.isEmpty()){return false;}return current().focusAfterKeyEdit(at-keyOffset());}
     @Override public void moveCursorToEnd(){if(parts.isEmpty()){return;}for(Part p:parts)if(p.engine!=null)p.engine.moveCursorToEnd();active=parts.size()-1;caret=-1;}
     @Override public void moveCursor(String direction){if(parts.isEmpty()){return;}int at=caret<0?cursorPosition():caret;keyCaret(Math.max(0,Math.min(count(sentenceKeys()),at+("left".equals(direction)?-1:1))));}
-    @Override public void key(String symbol){if(parts.isEmpty()){return;}current().key(symbol);if(caret>=0)caret=cursorPosition();}
+    @Override public void key(String symbol){if(parts.isEmpty()){return;}if(textLayout&&caret<0)textKey(symbol);else current().key(symbol);if(caret>=0)caret=cursorPosition();}
     @Override public void recordTouch(int[] k,double[] p,boolean[] a){if(parts.isEmpty()){return;}current().recordTouch(k,p,a);}
     @Override public void backspace(){if(parts.isEmpty()){return;}
         if(current().cursorPosition()==0&&active>0&&parts.get(active-1).engine==null){
@@ -72,7 +89,50 @@ final class RimeZhuyinEngine implements ZhuyinInputController.Engine, AutoClosea
         }
         current().backspace();if(caret>=0)caret=cursorPosition();
     }
-    @Override public void space(){if(parts.isEmpty()){return;}current().space();}
+    @Override public void space(){if(parts.isEmpty()){return;}if(textLayout&&caret<0)textKey(" ");else current().space();}
+    private static boolean phonetic(int cp){return cp>=0x3105&&cp<=0x312f||cp>=0x31a0&&cp<=0x31bf||"ˊˇˋ˙ˉ".indexOf(cp)>=0;}
+    /** Native invalid-input fallback latches raw keys and commits the prefix.
+     * Keep that prefix in the composition and resume decoding after this syllable,
+     * at this shared key boundary (never at a display width or candidate limit). */
+    private void textKey(String symbol){
+        SingleRimeZhuyinEngine input=current();
+        // Repeated tone keys revise one failed syllable, rather than creating
+        // a new placeholder (the native engine has the same tone-edit rule).
+        if("ˊˇˋ˙".contains(symbol)&&input.sentenceKeys().isEmpty()&&active>0&&parts.get(active-1).engine!=null&&"□".equals(parts.get(active-1).text())){
+            SingleRimeZhuyinEngine previous=parts.get(active-1).engine;String reading=previous.sentenceKeys();
+            if(!reading.isEmpty()&&" ˊˇˋ˙".indexOf(reading.charAt(reading.length()-1))>=0){
+                previous.clear();previous.nativeEngine.restore(java.util.Collections.singletonList(reading.substring(0,reading.length()-1)+symbol),"□");return;
+            }
+        }
+        List<String> beforeReading=new ArrayList<>(input.phoneticSyllables());String beforeKeys=input.sentenceKeys();
+        if(" ".equals(symbol))input.space();else input.key(symbol);
+        String committed=input.takeCommit(),unfinishedPrefix="";
+        if(!committed.isEmpty()){
+            if(committed.codePoints().anyMatch(RimeZhuyinEngine::phonetic)){
+                // Only a failed, unfinished native suffix takes this path.
+                String reading=beforeKeys+symbol;input.clear();input.nativeEngine.restore(java.util.Collections.singletonList(reading),"□");
+                parts.add(++active,new Part(fresh()));return;
+            }
+            int length=count(committed);if(length>beforeReading.size())throw new IllegalStateException("native prefix lost its reading map");
+            if(length==beforeReading.size()&&!beforeKeys.isEmpty()&&" ˊˇˋ˙".indexOf(beforeKeys.charAt(beforeKeys.length()-1))<0&&input.sentenceKeys().equals(symbol)){
+                unfinishedPrefix=beforeReading.get(length-1).replace('ˉ',' ');length--;
+                committed=committed.substring(0,committed.offsetByCodePoints(committed.length(),-1));
+            }
+            if(!committed.isEmpty()){
+                SingleRimeZhuyinEngine prefix=fresh();prefix.nativeEngine.restore(beforeReading.subList(0,length),committed);
+                parts.add(active,new Part(prefix));active++;
+            }
+        }
+        String raw=input.previewText();
+        if(" ˊˇˋ˙".contains(symbol)&&raw.codePoints().anyMatch(RimeZhuyinEngine::phonetic)){
+            // No dictionary candidate: show one neutral character, with its full
+            // reading, then use a new native session for the next syllable.
+            String reading=unfinishedPrefix+input.sentenceKeys();String likely="□";
+            for(String candidate:input.candidates())if(!candidate.isEmpty()&&!candidate.codePoints().anyMatch(RimeZhuyinEngine::phonetic)){likely=candidate.substring(0,Character.charCount(candidate.codePointAt(0)));break;}
+            input.clear();input.nativeEngine.restore(java.util.Collections.singletonList(reading),likely);
+            parts.add(++active,new Part(fresh()));
+        }
+    }
     @Override public void enter(){if(parts.isEmpty()){return;}
         // The visible conversion is the authoritative Enter payload, including
         // pinned local choices and literal boundaries. No second translation.
@@ -108,6 +168,8 @@ final class RimeZhuyinEngine implements ZhuyinInputController.Engine, AutoClosea
         }return s;
     }
     @Override public List<String> optionKinds(){if(parts.isEmpty()){return java.util.Collections.emptyList();}return current().optionKinds();}
+    @Override public List<int[]> optionRanges(){List<int[]> out=new ArrayList<>();if(!parts.isEmpty())for(int[] range:current().optionRanges())out.add(offset(range));return out;}
+    @Override public boolean moveCursorToPreviewWord(int target){boolean prior=textLayout;textLayout=false;try{return moveCursorToPreviewCharacter(target);}finally{textLayout=prior;}}
     @Override public List<String> optionGroups(){if(parts.isEmpty()){return java.util.Collections.emptyList();}return current().optionGroups();}
     @Override public List<String> regroupLabels(){if(parts.isEmpty()){return java.util.Collections.emptyList();}return current().regroupLabels();}
     String[] regroupReadings(){if(parts.isEmpty())return new String[0];return current().regroupReadings();}
@@ -119,7 +181,7 @@ final class RimeZhuyinEngine implements ZhuyinInputController.Engine, AutoClosea
         int offset=0;for(int i=0;i<parts.size();i++){Part p=parts.get(i);int n=count(p.text());
             if(target>=offset&&target<offset+n){
                 if(p.engine==null)return keyCaret(keyLengthBefore(i)+count(p.literal));
-                active=i;caret=-1;return p.engine.moveCursorToPreviewCharacter(target-offset);
+                active=i;caret=-1;return p.engine.moveCursorToPreviewCharacter(target-offset,textLayout);
             }offset+=n;
         }return false;
     }
@@ -138,9 +200,10 @@ final class RimeZhuyinEngine implements ZhuyinInputController.Engine, AutoClosea
     // Validate only the changed span, then reuse the existing native restore path.
     // Build off to the side so a refused edit preserves the old sentence/caret.
     private Boolean prepareLongTextEdit(String keys,String text){
-        if(parts.size()!=1||count(text)>64)return null;
+        if(parts.size()!=1)return null;
         String previous=previewText();int oldCount=count(previous),newCount=count(text);
-        if(oldCount<=32)return null;
+        // Preserve validated unchanged text/readings for short edits too.
+        // A full decoder rebuild can reject even a 20-character deletion.
         List<String> oldReading=phoneticSyllables();
         if(oldReading.size()!=oldCount)return null;
         List<String> normalized=new ArrayList<>();
@@ -177,8 +240,33 @@ final class RimeZhuyinEngine implements ZhuyinInputController.Engine, AutoClosea
             return true;
         }finally{if(!installed)mapped.close();}
     }
+    // JNI validates at most 64 glyphs / 256 physical keys per call. Validate
+    // complete syllable chunks independently, then restore the verified mapping
+    // into one native session. This limit must not disable long-text candidates.
+    private boolean prepareBoundedSentence(String keys,String text){
+        List<String> syllables=new ArrayList<>();int start=0;
+        for(int i=0;i<keys.length();i++)if(" ˉˊˇˋ˙".indexOf(keys.charAt(i))>=0){syllables.add(keys.substring(start,i+1).replace("ˉ"," "));start=i+1;}
+        if(start!=keys.length()||syllables.size()!=count(text))return false;
+        SingleRimeZhuyinEngine mapped=fresh();boolean installed=false;
+        try{
+            List<String> verified=new ArrayList<>();
+            for(int from=0;from<syllables.size();){
+                int to=from,keyCount=0;while(to<syllables.size()&&to-from<32&&keyCount+syllables.get(to).length()<=128)keyCount+=syllables.get(to++).length();
+                if(to==from)return false;
+                String k=String.join("",syllables.subList(from,to)),t=text.substring(text.offsetByCodePoints(0,from),text.offsetByCodePoints(0,to));
+                if(!mapped.prepareSentence(k,t)||!mapped.previewText().equals(t))return false;
+                List<String> readings=mapped.phoneticSyllables();if(readings.size()!=to-from)return false;
+                for(String r:readings)verified.add(r.replace("ˉ"," "));from=to;
+            }
+            if(!String.join("",verified).equals(keys.replace("ˉ"," ")))return false;
+            mapped.nativeEngine.restore(verified,text);
+            if(!mapped.previewText().equals(text)||!mapped.sentenceKeys().equals(keys.replace("ˉ"," ")))return false;
+            for(Part p:parts)if(p.engine!=null)p.engine.close();parts.clear();parts.add(new Part(mapped));active=0;caret=-1;installed=true;return true;
+        }finally{if(!installed)mapped.close();}
+    }
     @Override public boolean prepareSentence(String keys,String text){if(parts.isEmpty()){return false;}
         Boolean edited=prepareLongTextEdit(keys,text);if(edited!=null)return edited;
+        if(count(text)>64||keys.length()>256)return prepareBoundedSentence(keys,text);
         List<Part> mapped=new ArrayList<>();int keyStart=0,textStart=0;
         try{
             for(int i=0;i<keys.length();i++)if(keys.charAt(i)!=' '&&ZhuyinKeyMap.physicalKey(keys.substring(i,i+1))<0){
@@ -260,6 +348,7 @@ final class SingleRimeZhuyinEngine implements ZhuyinInputController.Engine, Auto
     String[] regroupReadings(){return nativeEngine.regroupReadings();}
     @Override public boolean regroup(int boundary) { return nativeEngine.regroup(boundary); }
     @Override public boolean chooseRegroup(int index) { return nativeEngine.chooseRegroup(index); }
+    @Override public List<int[]> optionRanges(){return java.util.Arrays.asList(nativeEngine.optionRanges());}
     @Override public List<String> optionGroups(){return java.util.Arrays.asList(nativeEngine.optionGroups());}
     @Override public List<String> optionKinds(){return java.util.Arrays.asList(nativeEngine.optionKinds());}
     @Override public List<String> regroupLabels() { return java.util.Arrays.asList(nativeEngine.regroupLabels()); }
@@ -287,7 +376,10 @@ final class SingleRimeZhuyinEngine implements ZhuyinInputController.Engine, Auto
         else if ("right".equals(direction)) nativeEngine.moveCursor(true);
     }
     @Override public boolean moveCursorToPreviewCharacter(int codePointIndex) {
-        return nativeEngine.focusCharacter(codePointIndex);
+        return moveCursorToPreviewCharacter(codePointIndex,false);
+    }
+    boolean moveCursorToPreviewCharacter(int codePointIndex,boolean characterOnly) {
+        return characterOnly?nativeEngine.focusCharacterOnly(codePointIndex):nativeEngine.focusCharacter(codePointIndex);
     }
     @Override public void moveCursorToEnd() { nativeEngine.moveCursorToEnd(); }
     @Override public int[] previewSelectionRange() { return nativeEngine.previewSelectionRange(); }

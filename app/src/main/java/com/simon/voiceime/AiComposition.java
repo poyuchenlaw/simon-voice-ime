@@ -41,6 +41,7 @@ final class AiComposition {
         int prefix=0,suffix=0;while(prefix<old.length()&&prefix<text.length()&&old.charAt(prefix)==text.charAt(prefix))prefix++;
         while(suffix<old.length()-prefix&&suffix<text.length()-prefix&&old.charAt(old.length()-1-suffix)==text.charAt(text.length()-1-suffix))suffix++;
         String changed=old.substring(prefix,old.length()-suffix)+text.substring(prefix,text.length()-suffix);
+        if(changed.codePoints().anyMatch(cp->cp<128&&!Character.isWhitespace(cp)||Character.getType(cp)==Character.OTHER_PUNCTUATION||Character.getType(cp)==Character.DASH_PUNCTUATION||Character.getType(cp)==Character.CONNECTOR_PUNCTUATION))return true;
         if(changed.matches("(?s).*[0-9零〇一二三四五六七八九十百千萬億兆兩壹貳參肆伍陸柒捌玖拾佰仟元圓塊角分年月日時點秒條項款目號度字第不無未非否免勿毋沒別得應須可能會].*"))return true;
         for(String value:new String[]{old,text}){
             java.util.regex.Matcher date=java.util.regex.Pattern.compile("今天|明天|昨天|上午|下午|早上|晚上|週[一二三四五六日]|星期[一二三四五六日]").matcher(value);

@@ -8,16 +8,20 @@ import java.util.List;
 final class ZhuyinInputController {
     interface Engine {
         default int rowWordLimit(){return 1;}
+        default void setTextLayout(boolean enabled){}
         default String[] localRepair(){return new String[0];}
         default boolean previewLiteral(int index){return false;}
         default boolean punctuation(String text){return false;}
         default List<String> optionGroups(){return Collections.emptyList();}
+        default List<int[]> optionRanges(){return Collections.emptyList();}
+        default boolean moveCursorToPreviewWord(int index){return moveCursorToPreviewCharacter(index);}
         default boolean keyCaret(int at){return false;}
         default boolean focusAfterKeyEdit(int at){return focusAtKey(at);}
         default boolean focusAtKey(int at){return false;}
         default int keyPreviewCaret(){return -1;}
         default String sentenceKeys() { return ""; }
         default boolean prepareSentence(String keys,String text) { return false; }
+        default Engine copyForTextEdit(){return null;}
         default void recordTouch(int[] keys,double[] probabilities,boolean[] adjacent) { }
         default boolean regroup(int boundary) { return false; }
         default boolean chooseRegroup(int index) { return false; }
@@ -161,7 +165,104 @@ final class ZhuyinInputController {
         return after;
     }
 
-    private final Engine engine;
+    private boolean textLayout;
+    void setTextLayout(boolean enabled){textLayout=enabled;engine.setTextLayout(enabled);}
+    boolean textLayout(){return textLayout;}
+    private State deleteWholeLastCharacter(){
+        if(retype!=null)return retypeState(retype.press("backspace"));
+        String text=engine.previewText();List<String> readings=new ArrayList<>(engine.phoneticSyllables());
+        if(text.isEmpty())return snapshot(true,false);
+        if(readings.isEmpty())return snapshot(false,false);
+        // A native unparsed suffix represents one unfinished syllable, even
+        // when it renders several internal glyphs. Remove the entire suffix.
+        int to=text.length();
+        while(to>0&&isPhoneticGlyph(text.codePointBefore(to)))to-=Character.charCount(text.codePointBefore(to));
+        if(to==text.length())to=text.offsetByCodePoints(text.length(),-1);
+        String remaining=text.substring(0,to);readings.remove(readings.size()-1);
+        if(!engine.prepareSentence(String.join("",readings).replace('ˉ',' '),remaining))return snapshot(false,false);
+        rawZhuyinKeys.setLength(0);abbreviationKeys.setLength(0);mixedChoices=Collections.emptyList();abbreviationEntries=Collections.emptyList();associationCandidates=Collections.emptyList();
+        previewFocused=false;previewBoundary=-1;keyCaret=-1;return snapshot(true,false);
+    }
+    private static boolean isPhoneticGlyph(int cp){return cp>=0x3105&&cp<=0x312f||cp>=0x31a0&&cp<=0x31bf||"ˊˇˋ˙ˉ│".indexOf(cp)>=0;}
+    String textPreview(){
+        String raw=previewText();StringBuilder shown=new StringBuilder();boolean unfinished=false;
+        int position=0;
+        for(int cp:raw.codePoints().toArray()){
+            boolean literal=engine.previewLiteral(position++);
+            if(isPhoneticGlyph(cp)&&!literal){if(!unfinished){String likely="";for(String candidate:state().candidates)if(!candidate.isEmpty()&&!isPhoneticGlyph(candidate.codePointAt(0))){likely=candidate.substring(0,Character.charCount(candidate.codePointAt(0)));break;}shown.append(likely.isEmpty()?"□":likely);unfinished=true;}}
+            else{shown.appendCodePoint(cp);unfinished=false;}
+        }
+        return shown.toString();
+    }
+    int provisionalCharacter(){String raw=previewText();int count=0;for(int cp:raw.codePoints().toArray()){if(isPhoneticGlyph(cp))return count;count++;}String keys=sentenceKeys();if(!keys.isEmpty()&&" ˉˊˇˋ˙，。！？；：、".indexOf(keys.charAt(keys.length()-1))<0)return Math.max(0,count-1);return -1;}
+    static final class TextChoice {
+        final String label,kind,witness,keys;final int boundary,index;final boolean characterFocus,wordFocus;final int start,end;
+        TextChoice(String label,String kind,String witness,String keys,int boundary,int index){this(label,kind,witness,keys,boundary,index,true);}
+        TextChoice(String label,String kind,String witness,String keys,int boundary,int index,boolean characterFocus){this(label,kind,witness,keys,boundary,index,characterFocus,false,-1,-1);}
+        TextChoice(String label,String kind,String witness,String keys,int boundary,int index,boolean characterFocus,boolean wordFocus,int start,int end){this.label=label;this.kind=kind;this.witness=witness;this.keys=keys;this.boundary=boundary;this.index=index;this.characterFocus=characterFocus;this.wordFocus=wordFocus;this.start=start;this.end=end;}
+    }
+    private String textChoiceWitness="";
+    private int textChoiceBoundary=-2;
+    private boolean textChoiceWordFocus;
+    private List<TextChoice> textChoiceCache=Collections.emptyList();
+    private String candidateKeys(String keys){return provisionalCharacter()>=0&&!keys.isEmpty()&&" ˉˊˇˋ˙".indexOf(keys.charAt(keys.length()-1))<0?keys+" ":keys;}
+    List<TextChoice> textChoices(){
+        String text=previewText(),keys=sentenceKeys();int count=text.codePointCount(0,text.length());
+        int boundary=previewBoundary>=0?Math.max(1,previewBoundary):count;
+        boolean wordFocus=previewBoundary>=0;
+        String witness=keys+"\n"+text;
+        if(witness.equals(textChoiceWitness)&&boundary==textChoiceBoundary&&wordFocus==textChoiceWordFocus)return textChoiceCache;
+        textChoiceWitness=witness;textChoiceBoundary=boundary;textChoiceWordFocus=wordFocus;textChoiceCache=Collections.emptyList();
+        if(text.isEmpty()||retypeEngineFactory==null)return textChoiceCache;
+        Engine probe=engine.copyForTextEdit();boolean cloned=probe!=null;if(probe==null)probe=retypeEngineFactory.get();if(probe==null)return textChoiceCache;
+        try{
+            if(!cloned&&!probe.prepareSentence(candidateKeys(keys),text)||!(wordFocus?probe.moveCursorToPreviewWord(boundary-1):probe.moveCursorToPreviewCharacter(boundary-1)))return textChoiceCache;
+            List<String> labels=probe.regroupLabels(),groups=probe.optionGroups();List<TextChoice> choices=new ArrayList<>();
+            List<int[]> ranges=probe.optionRanges();
+            int[] focus=probe.previewEditRange();boolean oneCharacterFocus=focus!=null&&focus[1]-focus[0]==1;
+            for(int n=0;n<labels.size();n++)if(!labels.get(n).isEmpty()&&!labels.get(n).codePoints().anyMatch(ZhuyinInputController::isPhoneticGlyph)){
+                String kind=n<groups.size()?groups.get(n):"word";
+                int[] range=n<ranges.size()?ranges.get(n):null;
+                if(wordFocus&&(range==null||focus==null||("word".equals(kind)?range[0]!=focus[0]||range[1]!=focus[1]:range[0]!=boundary-1||range[1]!=boundary)))continue;
+                choices.add(new TextChoice(labels.get(n),kind,text,keys,boundary,n,true,wordFocus,range==null?-1:range[0],range==null?-1:range[1]));
+                // An exact one-character word operation also belongs in the
+                // character row. Verify the native focus range before sharing it.
+                if(oneCharacterFocus&&!"char".equals(kind)&&labels.get(n).codePointCount(0,labels.get(n).length())==1)
+                    choices.add(new TextChoice(labels.get(n),"char",text,keys,boundary,n,true,wordFocus,range==null?-1:range[0],range==null?-1:range[1]));
+            }
+            if(probe.regroup(boundary)){
+                // Preserve the boundary word menu's native order. Focus-word
+                // alternatives supplement it; putting them first crowds out
+                // the words that were reachable in the previous layout.
+                List<String> wordLabels=probe.regroupLabels();List<int[]> wordRanges=probe.optionRanges();List<TextChoice> ordered=new ArrayList<>();
+                java.util.Set<String> seen=new java.util.HashSet<>();
+                for(int n=0;n<wordLabels.size();n++){String label=wordLabels.get(n);int[] range=n<wordRanges.size()?wordRanges.get(n):null;if(wordFocus&&(range==null||focus==null||range[0]!=focus[0]||range[1]!=focus[1]))continue;if(!label.isEmpty()&&!label.contains("｜")&&!label.codePoints().anyMatch(ZhuyinInputController::isPhoneticGlyph)){ordered.add(new TextChoice(label,"word",text,keys,boundary,n,false,false,range==null?-1:range[0],range==null?-1:range[1]));seen.add(label);}}
+                for(TextChoice c:choices)if(!"word".equals(c.kind)||seen.add(c.label))ordered.add(c);
+                choices=ordered;
+            }
+            textChoiceCache=Collections.unmodifiableList(choices);return textChoiceCache;
+        }finally{if(probe instanceof AutoCloseable)try{((AutoCloseable)probe).close();}catch(Exception error){throw new IllegalStateException("candidate probe close",error);}}
+    }
+    State chooseTextCandidate(TextChoice choice){
+        if(choice==null||!textChoiceCache.contains(choice)||!choice.witness.equals(previewText())||!choice.keys.equals(sentenceKeys())||retypeEngineFactory==null)return snapshot(false,false);
+        Engine probe=engine.copyForTextEdit();boolean cloned=probe!=null;if(probe==null)probe=retypeEngineFactory.get();if(probe==null)return snapshot(false,false);
+        try{
+            if(!cloned&&!probe.prepareSentence(candidateKeys(choice.keys),choice.witness)||!(choice.characterFocus?(choice.wordFocus?probe.moveCursorToPreviewWord(choice.boundary-1):probe.moveCursorToPreviewCharacter(choice.boundary-1)):probe.regroup(choice.boundary)))return snapshot(false,false);
+            List<String> labels=probe.regroupLabels();
+            List<int[]> ranges=probe.optionRanges();
+            if(choice.start>=0&&(choice.index>=ranges.size()||ranges.get(choice.index)[0]!=choice.start||ranges.get(choice.index)[1]!=choice.end))return snapshot(false,false);
+            if(choice.index>=labels.size()||!choice.label.equals(labels.get(choice.index))||!probe.chooseRegroup(choice.index))return snapshot(false,false);
+            String next=probe.previewText(),keys=probe.sentenceKeys();
+            if(probe.phoneticSyllables().size()!=next.codePointCount(0,next.length())||!String.join("",probe.phoneticSyllables()).replace("ˉ"," ").equals(keys.replace("ˉ"," ")))return snapshot(false,false);
+            // Adopt the already validated candidate session atomically. A second
+            // decoder rebuild can reject a genuine rare-character menu choice.
+            Engine old=engine;engine=probe;
+            if(old instanceof AutoCloseable)try{((AutoCloseable)old).close();}catch(Exception error){throw new IllegalStateException("candidate old session close",error);}
+            rawZhuyinKeys.setLength(0);abbreviationKeys.setLength(0);mixedChoices=Collections.emptyList();abbreviationEntries=Collections.emptyList();associationCandidates=Collections.emptyList();
+            previewFocused=false;previewBoundary=-1;keyCaret=-1;textChoiceWitness="";textChoiceCache=Collections.emptyList();return snapshot(true,false);
+         }finally{if(probe!=engine&&probe instanceof AutoCloseable)try{((AutoCloseable)probe).close();}catch(Exception error){throw new IllegalStateException("candidate probe close",error);}}
+    }
+    private Engine engine;
     private final ZhuyinWordIndex abbreviationIndex;
     private final StringBuilder abbreviationKeys = new StringBuilder();
     // The engine may reject a syntactically bad stream.  Keep the user's glyphs
@@ -214,7 +315,7 @@ final class ZhuyinInputController {
         if(retypeEngineFactory==null)return null;
         Engine separate=retypeEngineFactory.get();if(separate==null)return null;
         ZhuyinInputController draft=new ZhuyinInputController(separate,abbreviationIndex);
-        draft.setLearningEnabled(learningEnabled);draft.setRetypeEngineFactory(retypeEngineFactory);
+        draft.setLearningEnabled(learningEnabled);draft.setRetypeEngineFactory(retypeEngineFactory);draft.setTextLayout(textLayout);
         if(!separate.prepareSentence(keys,text)){draft.close();return null;}
         return draft;
     }
@@ -255,6 +356,7 @@ final class ZhuyinInputController {
             previewBoundary=boundary;previewFocused=boundary>0;return snapshot(true,false);
         }
         String preview=previewText();if(boundary<0||boundary>preview.codePointCount(0,preview.length()))return snapshot(false,false);
+        if(textLayout){previewBoundary=boundary;previewFocused=boundary>0;previewTargetStart=Math.max(0,boundary-1);previewTargetEnd=Math.max(1,boundary);tappedCharacter=Math.max(0,boundary-1);return snapshot(true,false);}
         if(!engine.regroup(boundary))return snapshot(false,false);
         previewBoundary=boundary;previewFocused=boundary>0;focusedOptionKinds=new ArrayList<>(engine.optionKinds());
         mixedChoices=Collections.emptyList();associationCandidates=Collections.emptyList();
@@ -336,6 +438,13 @@ final class ZhuyinInputController {
     }
     private State pressInternal(String key) {
         breakPickRun();
+        // Enter owns exactly the presentation, including a provisional glyph.
+        // Native raw/unparsed suffixes remain internal and cannot escape here.
+        if(textLayout&&"enter".equals(key)&&!textPreview().isEmpty()){
+            String value=textPreview();clear();
+            return new State("",Collections.emptyList(),value,true,0,"engine",Collections.emptyList(),0,0,true);
+        }
+        if(textLayout&&"backspace".equals(key)&&previewBoundary<0&&!previewFocused&&keyCaret<0)return deleteWholeLastCharacter();
         if(previewBoundary>=0&&retype==null){
             if("backspace".equals(key))return deleteAtTextCaret();
             if(isZhuyin(key)&&!beginTextInsertion())return snapshot(false,false);

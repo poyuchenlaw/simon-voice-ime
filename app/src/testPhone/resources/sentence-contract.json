@@ -850,6 +850,9 @@
         "server_times"
       ],
       "properties": {
+        "name_protection_ready": {
+          "type": "boolean"
+        },
         "kind": {
           "const": "response"
         },

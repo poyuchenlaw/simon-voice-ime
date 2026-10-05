@@ -39,6 +39,7 @@ public class SettingsActivity extends Activity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        if("phone".equals(BuildConfig.FLAVOR))AiSentencePhone.migrateAutoApply(this);
         setContentView(R.layout.activity_settings);
 
         editServerUrl = findViewById(R.id.editServerUrl);
@@ -96,7 +97,7 @@ public class SettingsActivity extends Activity {
         }
 
         CheckBox autoCorrection=findViewById(R.id.checkAutoCorrection);
-        if(autoCorrection!=null){autoCorrection.setChecked(prefs.getBoolean("auto_correction",false));autoCorrection.setOnCheckedChangeListener((button,checked)->prefs.edit().putBoolean("auto_correction",checked).apply());}
+        if(autoCorrection!=null){autoCorrection.setChecked(prefs.getBoolean("ai_sentence_auto_apply",false));autoCorrection.setOnCheckedChangeListener((button,checked)->prefs.edit().putBoolean("ai_sentence_auto_apply",checked).apply());}
         Button resetWords=findViewById(R.id.btnResetZhuyinLearning);
         if(resetWords!=null)resetWords.setOnClickListener(v->new AlertDialog.Builder(this).setTitle("重置注音選字學習")
             .setMessage("清除已學習的選字與連續選字詞；已安裝的個人詞彙保留。")
@@ -106,7 +107,7 @@ public class SettingsActivity extends Activity {
             }).show());
         android.widget.Spinner sentenceMode=findViewById(R.id.aiSentenceMode);
         if(sentenceMode!=null){
-            String[] modes={"off","shadow","suggestions"};String[] labels={"關閉","背景比對","顯示選項（預設）"};
+            String[] modes={"off","shadow","suggestions","live"};String[] labels={"關閉","背景比對","顯示選項（預設）","預覽即時校正"};
             sentenceMode.setAdapter(new android.widget.ArrayAdapter<>(this,android.R.layout.simple_spinner_dropdown_item,labels));
             String saved=prefs.getString("ai_sentence_mode","suggestions");int selected=2;for(int i=0;i<modes.length;i++)if(modes[i].equals(saved))selected=i;
             sentenceMode.setSelection(selected);sentenceMode.setOnItemSelectedListener(new android.widget.AdapterView.OnItemSelectedListener(){
@@ -114,6 +115,8 @@ public class SettingsActivity extends Activity {
                 public void onItemSelected(android.widget.AdapterView<?> parent,android.view.View view,int position,long id){prefs.edit().putString("ai_sentence_mode",modes[position]).apply();}
             });
         }
+        android.widget.Spinner layoutMode=findViewById(R.id.textLayoutMode);
+        if(layoutMode!=null){String[] modes={"text_word_char","legacy_zhuyin"};layoutMode.setAdapter(new android.widget.ArrayAdapter<>(this,android.R.layout.simple_spinner_dropdown_item,new String[]{"文字／詞候選／字候選","舊注音列"}));layoutMode.setSelection("legacy_zhuyin".equals(prefs.getString("layout_mode","text_word_char"))?1:0);layoutMode.setOnItemSelectedListener(new android.widget.AdapterView.OnItemSelectedListener(){public void onNothingSelected(android.widget.AdapterView<?> p){}public void onItemSelected(android.widget.AdapterView<?> p,android.view.View v,int at,long id){prefs.edit().putString("layout_mode",modes[at]).apply();}});}
         CheckBox checkImeAutoUpload = findViewById(R.id.checkImeAutoUpload);
         ImeTelemetry telemetry=ImeTelemetry.install(this);
         TextView uploadStatus=findViewById(R.id.tvImeUploadStatus);

@@ -367,10 +367,12 @@
         <View android:layout_width="match_parent" android:layout_height="1dp" android:background="#333333" android:layout_marginBottom="16dp" />
         <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="注音九宮格" android:textSize="18sp" android:textColor="#e0e0e0" android:layout_marginBottom="6dp" />
         <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:text="AI 注音選項" android:textColor="#cccccc" />
-        <CheckBox android:id="@+id/checkAutoCorrection" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="自動校正"/>
+        <CheckBox android:id="@+id/checkAutoCorrection" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="AI 自動套用（需伺服器姓名保護；預設關閉）"/>
         <Button android:id="@+id/btnResetZhuyinLearning" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="重置注音選字學習"/>
+        <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:text="輸入預覽版面" />
+        <Spinner android:id="@+id/textLayoutMode" android:layout_width="match_parent" android:layout_height="48dp" />
         <Spinner android:id="@+id/aiSentenceMode" android:layout_width="match_parent" android:layout_height="48dp" />
-        <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:text="背景比對只接收結果；顯示選項須點選才套用，可立即復原。" android:textColor="#888888" android:textSize="12sp" />
+        <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:text="AI 預設顯示建議，點選才套用，不自動改字。自動校正預設關閉；選擇即時校正並開啟自動校正後，伺服器通過姓名保護檢查才會套用，可立即復原。" android:textColor="#888888" android:textSize="12sp" />
         <CheckBox android:id="@+id/checkImeAutoUpload" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="自動回傳測試紀錄（預設開啟）" android:textColor="#cccccc" />
         <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:text="上傳頻率" android:textColor="#cccccc" />
         <Spinner android:id="@+id/imeUploadFrequency" android:layout_width="match_parent" android:layout_height="48dp" />

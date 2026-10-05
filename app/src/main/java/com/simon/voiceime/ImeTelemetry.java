@@ -69,12 +69,19 @@ final class ImeTelemetry {
         if("key".equals(type)||"key_outcome".equals(type)||"candidate".equals(type)||"commit".equals(type)||"correction".equals(type)||"key_outcome".equals(type))noteInput();
         if(!context.getSharedPreferences("simon_ime_prefs",Context.MODE_PRIVATE).getBoolean("ime_auto_upload",true))return;
         try {
+            if("bopomofo".equals(page)&&!"error".equals(type)&&!"legacy_zhuyin".equals(context.getSharedPreferences("simon_ime_prefs",Context.MODE_PRIVATE).getString("layout_mode","text_word_char")))fields=textOnlyMetadata(fields);
             JSONObject event=makeEvent(System.currentTimeMillis(),session,appVersion,type,page,fields,protectedField);
             Handler target=handler;if(target!=null)target.post(()->enqueue(event));
         }catch(Exception e){Log.w("ImeTelemetry","event dropped",e);}
     }
     private void recordUrgent(String type,String page,JSONObject fields){
         try{JSONObject event=makeEvent(System.currentTimeMillis(),session,appVersion,type,page,fields,false);enqueue(event);}catch(Exception e){Log.w("ImeTelemetry","urgent event could not be stored",e);}
+    }
+    static JSONObject textOnlyMetadata(JSONObject fields)throws org.json.JSONException {
+        if(fields==null)return null;JSONObject copy=new JSONObject(fields.toString());
+        for(String key:new String[]{"text","engine_top1","ai_suggestion","from","to","literal","preview","reading"})if(copy.has(key))copy.put(key,"");
+        if(copy.has("shown"))copy.put("shown",new org.json.JSONArray());
+        return copy;
     }
     static JSONObject makeEvent(long ts,String session,String version,String type,String page,JSONObject fields,boolean protectedField)throws Exception {
         if(protectedField && ("key".equals(type)||"key_outcome".equals(type)||"candidate".equals(type)||"commit".equals(type)||"correction".equals(type))) {

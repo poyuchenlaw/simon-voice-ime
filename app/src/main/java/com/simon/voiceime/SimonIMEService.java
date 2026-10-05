@@ -122,6 +122,8 @@ public class SimonIMEService extends InputMethodService {
     private ByteArrayOutputStream pcmBuffer;
     private OkHttpClient httpClient;
     private Handler mainHandler;
+    private Runnable pendingTextCandidates;
+    private long lastTextKeyUptime=-1;
 
     private static final long CORRECTION_CAPTURE_WINDOW_MS = 15_000;
     private static final long CORRECTION_CAPTURE_DEBOUNCE_MS = 1_500;
@@ -169,12 +171,47 @@ public class SimonIMEService extends InputMethodService {
 
     private ZhuyinInputController zhuyinInput;
     private InputConnection zhuyinComposingConnection;
+    private String retainedTextField="",retainedTextBefore="",retainedText="";
+    private int retainedTextEnd=-1;
+    private String textFieldIdentity(EditorInfo info){return info==null?"":info.packageName+":"+info.fieldId+":"+info.inputType+":"+info.fieldName;}
+    private void rememberTextComposition(InputConnection ic,String value){
+        if(!textLayoutSelected()||protectedInputField||ic==null||ic!=zhuyinComposingConnection||value.isEmpty())return;
+        if(textKeyRender){
+            EditorInfo info=getCurrentInputEditorInfo();String field=textFieldIdentity(info);
+            int start=retainedTextEnd>=0&&field.equals(retainedTextField)?retainedTextEnd-retainedText.length():
+                info!=null&&info.initialSelStart>=0&&info.initialSelEnd>=0?Math.min(info.initialSelStart,info.initialSelEnd):-1;
+            if(start<0)return;
+            String prefix=field.equals(retainedTextField)&&retainedTextBefore.endsWith(retainedText)?retainedTextBefore.substring(0,retainedTextBefore.length()-retainedText.length()):"";
+            retainedTextEnd=start+value.length();retainedTextField=field;retainedTextBefore=prefix+value;retainedText=value;
+            return; // editor queries are lifecycle-only; per-key ownership is cached.
+        }
+        android.view.inputmethod.ExtractedTextRequest request=new android.view.inputmethod.ExtractedTextRequest();
+        android.view.inputmethod.ExtractedText extracted=ic.getExtractedText(request,0);
+        CharSequence before=ic.getTextBeforeCursor(value.length()+64,0);
+        if(extracted==null||extracted.selectionStart!=extracted.selectionEnd||before==null||!before.toString().endsWith(value))return;
+        retainedTextEnd=extracted.startOffset+extracted.selectionEnd;
+        retainedTextField=textFieldIdentity(getCurrentInputEditorInfo());retainedTextBefore=before.toString();retainedText=value;
+    }
+    private void reclaimTextComposition(EditorInfo info){
+        InputConnection ic=getCurrentInputConnection();
+        if(ic==null||protectedInputField||retainedTextEnd<0||!retainedTextField.equals(textFieldIdentity(info))||zhuyinInput==null||!retainedText.equals(zhuyinInput.textPreview()))return;
+        android.view.inputmethod.ExtractedTextRequest request=new android.view.inputmethod.ExtractedTextRequest();
+        android.view.inputmethod.ExtractedText extracted=ic.getExtractedText(request,0);
+        CharSequence before=ic.getTextBeforeCursor(retainedTextBefore.length(),0);
+        // Recover only the exact former owned range in the exact same field.
+        // A new editor, changed text or changed selection cannot be reclaimed.
+        if(extracted!=null&&extracted.selectionStart==extracted.selectionEnd&&extracted.startOffset+extracted.selectionEnd==retainedTextEnd&&before!=null&&retainedTextBefore.contentEquals(before)&&ic.setComposingRegion(retainedTextEnd-retainedText.length(),retainedTextEnd))zhuyinComposingConnection=ic;
+    }
+
     private ZhuyinWordIndex zhuyinWordIndex;
     private ZhuyinAssociationHistory zhuyinAssociationHistory;
     private String lastCommittedZhuyinWord;
     private String renderedZhuyinCandidateKind = "engine";
     private HorizontalScrollView boCandidateScroll;
     private LinearLayout boCandidateItems;
+    private LinearLayout boWordCandidateItems;
+    private HorizontalScrollView boWordCandidateScroll;
+    private int textCandidateTaps;
     private TextView boStreamPreview;
     private TextView boCandidateRightHint;
     private String zhuyinCommitVia="other";
@@ -554,6 +591,7 @@ public class SimonIMEService extends InputMethodService {
     @Override
     public void onCreate() {
         super.onCreate();
+        if(!isWatchService())AiSentencePhone.migrateAutoApply(this);
         httpClient = new OkHttpClient.Builder()
                 .connectTimeout(10, TimeUnit.SECONDS)
                 .readTimeout(30, TimeUnit.SECONDS)
@@ -610,6 +648,7 @@ public class SimonIMEService extends InputMethodService {
         zhuyinAssociationHistory = new ZhuyinAssociationHistory(new java.io.File(getFilesDir(), "zhuyin_associations.tsv"));
         zhuyinInput = new ZhuyinInputController(createZhuyinEngine(), zhuyinWordIndex);
         zhuyinInput.setRetypeEngineFactory(this::createZhuyinEngine);
+        zhuyinInput.setTextLayout(textLayoutSelected());
         touchLearning = new TouchLearningStore(this);
         touchShadow = new TouchShadowLearning(this, mainHandler);
         try { sentencePhone=new AiSentencePhone(this,mainHandler,new AiSentencePhone.Host(){
@@ -849,6 +888,9 @@ public class SimonIMEService extends InputMethodService {
 
         boCandidateScroll = rootView.findViewById(R.id.boCandidateScroll);
         boCandidateItems = rootView.findViewById(R.id.boCandidateItems);
+        boWordCandidateItems=rootView.findViewById(R.id.boWordCandidateItems);
+        boWordCandidateScroll=rootView.findViewById(R.id.boWordCandidateScroll);
+        configureTextRows();
         if(layoutDiagnostics!=null)layoutDiagnostics.close();
         layoutDiagnostics=new LayoutDiagnostics(this,rootView,imeTelemetry);
         boStreamPreview = rootView.findViewById(R.id.boStreamPreview);
@@ -868,6 +910,8 @@ public class SimonIMEService extends InputMethodService {
             }
         });
 
+        switchKeyboard(currentKeyboardMode);
+        if(textLayoutSelected())reclaimTextComposition(getCurrentInputEditorInfo());
         applyZhuyinState(zhuyinInput.state());
         updateCompleteTypingHint(false);
         updateModeUI();
@@ -3792,7 +3836,7 @@ public class SimonIMEService extends InputMethodService {
             imeTelemetry.record("candidate",page,new JSONObject().put("shown",shown).put("chosen_index",chosen).put("candidate_kind","bopomofo".equals(page)?renderedZhuyinCandidateKind:"engine").put("chosen_kind",chosen>=0&&zhuyinInput!=null&&"bopomofo".equals(page)?("association".equals(renderedZhuyinCandidateKind)?"association":zhuyinInput.candidateOrigin(chosen)):""),protectedInputField);
         }catch(Exception error){Log.w(TAG,"candidate telemetry unavailable",error);}
     }
-    private void recordCommitEvent(String page,String text,String first,String ai,boolean corrected,boolean aiTaken){if(imeTelemetry==null)return;try{imeTelemetry.record("commit",page,new JSONObject().put("text",text).put("engine_top1",first==null?"":first).put("ai_suggestion",ai==null?"":ai).put("corrected",corrected).put("ai_taken",aiTaken).put("via","bopomofo".equals(page)?zhuyinCommitVia:"other").put("committed_codepoints",text.codePointCount(0,text.length())),protectedInputField);}catch(Exception ignored){}}
+    private void recordCommitEvent(String page,String text,String first,String ai,boolean corrected,boolean aiTaken){if(imeTelemetry==null)return;try{imeTelemetry.record("commit",page,new JSONObject().put("text",text).put("engine_top1",first==null?"":first).put("ai_suggestion",ai==null?"":ai).put("corrected",corrected).put("ai_taken",aiTaken).put("via","bopomofo".equals(page)?zhuyinCommitVia:"other").put("committed_codepoints",text.codePointCount(0,text.length())).put("ai_shown",sentencePhone!=null&&sentencePhone.correctionShown()).put("reverted_spans",sentencePhone==null?0:sentencePhone.revertedSpans()).put("candidate_taps",textCandidateTaps),protectedInputField);}catch(Exception ignored){}}
     private void recordCorrectionEvent(String page,String segment,String from,String to,String via){if(imeTelemetry==null)return;try{imeTelemetry.record("correction",page,new JSONObject().put("segment",segment).put("from",from).put("to",to).put("via",via),protectedInputField);}catch(Exception ignored){}}
 
     private void switchKeyboard(KeyboardMode mode) {
@@ -3843,6 +3887,10 @@ public class SimonIMEService extends InputMethodService {
     private void updateCompleteTypingHint(boolean firstKey){
         if(bopomofoKeyboard==null)return;
         View hint=bopomofoKeyboard.findViewById(R.id.boCompleteTypingHint);if(hint==null)return;
+        // The legacy tutorial disappears on the first phonetic key. In the
+        // text-only layout, remove it before opening the input window instead
+        // of relocating that window during the user's next touch.
+        if(textLayoutSelected()){hint.setVisibility(View.GONE);return;}
         android.content.SharedPreferences prefs=getSharedPreferences("zhuyin_hint",MODE_PRIVATE);
         if(firstKey&&hint.getVisibility()==View.VISIBLE)prefs.edit().putBoolean("v650_complete_seen",true).apply();
         hint.setVisibility(!firstKey&&currentKeyboardMode==KeyboardMode.BOPOMOFO&&!prefs.getBoolean("v650_complete_seen",false)?View.VISIBLE:View.GONE);
@@ -3890,6 +3938,7 @@ public class SimonIMEService extends InputMethodService {
         int keyCountBefore=keysBefore.length(),beforeCaret=zhuyinInput.keyCaret();
         if(editing){cursorEditSlot="backspace".equals(key)?beforeCaret-1:beforeCaret;cursorFromKey="backspace".equals(key)&&beforeCaret>0?keysBefore.substring(beforeCaret-1,beforeCaret).replace(" ","ˉ"):"";cursorToKey="space".equals(key)?"ˉ":isBopomofoSymbol(key)?key:"";
             int offset=0;cursorEditSyllable=-1;for(String syllable:zhuyinInput.phoneticSyllables()){cursorEditSyllable++;offset+=syllable.length();if(cursorEditSlot<offset)break;}}
+        if(sentencePhone!=null&&textLayoutSelected())sentencePhone.userTouched();
         if(sentencePhone!=null&&sentencePhone.beforeKey(key)){cursorEditSlot=cursorEditSyllable=-1;cursorFromKey=cursorToKey="";return zhuyinInput.state();}
         ZhuyinInputController.State state=zhuyinInput.press(key);
         if(editing){int after=zhuyinInput.sentenceKeys().length();recordCursorEvent("key_caret","edit","",-1,Math.max(0,keyCountBefore-after),(isBopomofoSymbol(key)||"space".equals(key))?1:0);cursorEditSlot=-1;cursorEditSyllable=-1;cursorFromKey=cursorToKey="";}
@@ -3914,7 +3963,7 @@ public class SimonIMEService extends InputMethodService {
                     clearEnWordBuffer();
                 } else if (currentKeyboardMode == KeyboardMode.BOPOMOFO) {
                     long started = SystemClock.elapsedRealtime();
-                    applyZhuyinState(pressZhuyinWithTouch("space"));
+                    applyPhysicalTextKey("space");
                     recordBopomofoKeyOutcome("space", SystemClock.elapsedRealtime() - started);
                     return;
                 }
@@ -3949,7 +3998,7 @@ public class SimonIMEService extends InputMethodService {
             default:
                 if (currentKeyboardMode == KeyboardMode.BOPOMOFO && isBopomofoSymbol(key)) {
                     long started = SystemClock.elapsedRealtime();
-                    applyZhuyinState(pressZhuyinWithTouch(key));
+                    applyPhysicalTextKey(key);
                     recordBopomofoKeyOutcome(key, SystemClock.elapsedRealtime() - started);
                     break;
                 }
@@ -4257,17 +4306,48 @@ public class SimonIMEService extends InputMethodService {
     private boolean commitZhuyinText(InputConnection ic,ZhuyinInputController.State state){
         if(!commitTextProgrammatically(ic,state.commitText))return false;
         recordCommitEvent("bopomofo",state.commitText,state.engineTop1,state.aiSuggestion,state.corrected,state.aiTaken);
+        if(textLayoutSelected()){textCandidateTaps=0;if(sentencePhone!=null)sentencePhone.resetFeedback();}
         return true;
     }
 
+    private boolean textLayoutSelected(){return !isWatchService()&&!"legacy_zhuyin".equals(getSharedPreferences("simon_ime_prefs",MODE_PRIVATE).getString("layout_mode","text_word_char"));}
+    private void configureTextRows(){
+        boolean text=textLayoutSelected();if(zhuyinInput!=null)zhuyinInput.setTextLayout(text);
+        configurePreviewViewport(text);
+        View reading=rootView==null?null:rootView.findViewById(R.id.boPhoneticPreviewScroll);
+        if(reading!=null)reading.setVisibility(text?View.GONE:View.VISIBLE);
+        if(boWordCandidateScroll!=null)boWordCandidateScroll.setVisibility(text?View.VISIBLE:View.GONE);
+    }
+    private void configurePreviewViewport(boolean wrap){
+        if(rootView==null)return;TextView preview=rootView.findViewById(R.id.boStreamPreview);if(preview==null)return;
+        ViewGroup old=(ViewGroup)preview.getParent();
+        preview.setSingleLine(!wrap);preview.setHorizontallyScrolling(!wrap);
+        preview.setGravity(wrap?Gravity.TOP:Gravity.CENTER_VERTICAL);
+        if(wrap&&old instanceof PreviewScrollView||!wrap&&old instanceof HorizontalScrollView)return;
+        ViewGroup container=(ViewGroup)old.getParent();int index=container.indexOfChild(old);ViewGroup.LayoutParams outer=old.getLayoutParams();
+        old.removeView(preview);container.removeViewAt(index);
+        ViewGroup replacement=wrap?new PreviewScrollView(this,null):new HorizontalScrollView(this);
+        replacement.setId(R.id.boStreamPreviewScroll);outer.height=wrap?ViewGroup.LayoutParams.WRAP_CONTENT:dp(50);
+        replacement.setMinimumHeight(dp(50));replacement.setLayoutParams(outer);
+        preview.setLayoutParams(new android.widget.FrameLayout.LayoutParams(wrap?ViewGroup.LayoutParams.MATCH_PARENT:ViewGroup.LayoutParams.WRAP_CONTENT,wrap?ViewGroup.LayoutParams.WRAP_CONTENT:ViewGroup.LayoutParams.MATCH_PARENT));
+        replacement.addView(preview);container.addView(replacement,index);
+    }
+    private CharSequence shownTextPreview(){
+        String shown=textLayoutSelected()?zhuyinInput.textPreview():zhuyinInput.previewText();
+        android.text.SpannableString marked=sentencePhone==null?new android.text.SpannableString(shown):sentencePhone.mark(shown);
+        int provisional=textLayoutSelected()?zhuyinInput.provisionalCharacter():-1;
+        if(provisional>=0&&provisional<shown.codePointCount(0,shown.length())){int from=shown.offsetByCodePoints(0,provisional),to=shown.offsetByCodePoints(from,1);marked.setSpan(new android.text.style.ForegroundColorSpan(0xff999999),from,to,android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);}
+        return marked;
+    }
     private void applyZhuyinState(ZhuyinInputController.State state) {
         if (state == null) return;
         if(sentencePhone!=null)sentencePhone.changed(false);
-        renderZhuyinStreamPreview(zhuyinInput.previewText());
-        if(sentencePhone!=null&&boStreamPreview!=null)boStreamPreview.setText(sentencePhone.mark(zhuyinInput.previewText()));
+        renderZhuyinStreamPreview(textLayoutSelected()?zhuyinInput.textPreview():zhuyinInput.previewText());
+        if(boStreamPreview!=null)boStreamPreview.setText(shownTextPreview());
         if(boStreamPreview instanceof PreviewCursorView)((PreviewCursorView)boStreamPreview).setBoundary(zhuyinInput.keyCaret()>=0?zhuyinInput.keyPreviewCaret():zhuyinInput.previewBoundary()>=0?zhuyinInput.previewBoundary():zhuyinInput.wordFocused()?zhuyinInput.tappedCharacter():-1);
         TextView reading=bopomofoKeyboard==null?null:bopomofoKeyboard.findViewById(R.id.boPhoneticPreview);
-        if(reading!=null){
+        if(reading!=null&&textLayoutSelected()){reading.setText("");reading.setContentDescription("");}
+        if(reading!=null&&!textLayoutSelected()){
             String phonetic=zhuyinInput.phoneticText();
             android.text.SpannableString spaced=new android.text.SpannableString(phonetic);
             for(int i=0;i<phonetic.length();i++)spaced.setSpan(new android.text.style.ReplacementSpan(){
@@ -4309,14 +4389,18 @@ public class SimonIMEService extends InputMethodService {
                 zhuyinComposingConnection = null;
             }
             else {
-                android.text.SpannableString composing=highlightZhuyinTarget(state.composingText,state.targetStart,state.targetEnd);
+                android.text.SpannableString composing=highlightZhuyinTarget(textLayoutSelected()?zhuyinInput.textPreview():state.composingText,state.targetStart,state.targetEnd);
                 if (ic.setComposingText(composing, 1)) {
                     zhuyinComposingConnection = ic; // cursor stays after the full composition
                     if (sentencePhone != null) sentencePhone.written();
                 }
             }
         }
+        if(state.composingText.isEmpty()){cancelPendingTextCandidates();lastTextKeyUptime=-1;retainedTextEnd=-1;retainedTextField=retainedTextBefore=retainedText="";}
+        else if(textLayoutSelected())rememberTextComposition(ic,zhuyinInput.textPreview());
+
         if(zhuyinInput.showIdleShortcuts()) renderZhuyinShortcuts();
+        else if(textLayoutSelected()){renderTextCandidateRows();}
         else { renderZhuyinCandidates(state.candidates, state.candidateKind); renderSentenceOptions(); }
     }
 
@@ -4353,7 +4437,12 @@ public class SimonIMEService extends InputMethodService {
         @Override public void onViewDetachedFromWindow(View view){cancel();}
         @Override public boolean onPreDraw(){
             cancel();
-            if(!reading.isAttachedToWindow()||zhuyinInput==null||reading.getLayout()==null||!(reading.getParent() instanceof HorizontalScrollView))return true;
+            if(!reading.isAttachedToWindow()||zhuyinInput==null||reading.getLayout()==null)return true;
+            if(!phonetic&&reading.getParent() instanceof PreviewScrollView){
+                int cp=zhuyinInput.keyCaret()>=0?zhuyinInput.keyPreviewCaret():zhuyinInput.previewBoundary()>=0?zhuyinInput.previewBoundary():zhuyinInput.wordFocused()?zhuyinInput.tappedCharacter():reading.getText().toString().codePointCount(0,reading.getText().length());
+                ((PreviewScrollView)reading.getParent()).revealBoundary(cp);return true;
+            }
+            if(!(reading.getParent() instanceof HorizontalScrollView))return true;
             int at;boolean centered;
             if(phonetic){
                 at=zhuyinInput.keyCaret();centered=at>=0;
@@ -4426,28 +4515,35 @@ public class SimonIMEService extends InputMethodService {
                 }
                 if(action==MotionEvent.ACTION_CANCEL){if(v instanceof PreviewCursorView)((PreviewCursorView)v).setDragging(false);v.getParent().requestDisallowInterceptTouchEvent(false);return true;}
                 if(action!=MotionEvent.ACTION_MOVE&&action!=MotionEvent.ACTION_UP)return true;
+                if(action==MotionEvent.ACTION_MOVE&&v.getParent() instanceof PreviewScrollView&&Math.abs(event.getY()-downY)>dp(8)&&Math.abs(event.getY()-downY)>Math.abs(event.getX()-downX)){
+                    v.getParent().requestDisallowInterceptTouchEvent(false);return false;
+                }
                 if(Math.abs(event.getX()-downX)>dp(4)||Math.abs(event.getY()-downY)>dp(4))dragging=true;
                 if(v instanceof PreviewCursorView)((PreviewCursorView)v).setDragging(dragging&&action!=MotionEvent.ACTION_UP);
                 String shown=boStreamPreview.getText().toString();int count=shown.codePointCount(0,shown.length());
+                int touchedLine=layout.getLineForVertical(Math.round(event.getY()-boStreamPreview.getTotalPaddingTop()+boStreamPreview.getScrollY()));
                 int nearest=0;float distance=Float.MAX_VALUE;
                 for(int cp=0;cp<=count;cp++){
-                    float at=layout.getPrimaryHorizontal(shown.offsetByCodePoints(0,cp));
+                    int offset=shown.offsetByCodePoints(0,cp);if(layout.getLineForOffset(offset)!=touchedLine)continue;
+                    float at=layout.getPrimaryHorizontal(offset);
                     float d=Math.abs(x-at);if(d<distance){nearest=cp;distance=d;}
                 }
                 if(action==MotionEvent.ACTION_UP&&!dragging&&sentencePhone!=null){
-                    int touched=layout.getOffsetForHorizontal(0,x);if(touched>0&&layout.getPrimaryHorizontal(touched)>x)touched--;
+                    int touched=layout.getOffsetForHorizontal(touchedLine,x);if(touched>0&&layout.getPrimaryHorizontal(touched)>x)touched--;
                     if(sentencePhone.tapRevert(touched)){v.getParent().requestDisallowInterceptTouchEvent(false);return true;}
                 }
                 boolean boundary=dragging||distance<=dp(4);
                 if(action==MotionEvent.ACTION_UP&&!boundary){
-                    int utf=layout.getOffsetForHorizontal(0,x);int cp=shown.codePointCount(0,Math.min(utf,shown.length()));
+                    int utf=layout.getOffsetForHorizontal(touchedLine,x);int cp=shown.codePointCount(0,Math.min(utf,shown.length()));
                     if(cp>0&&layout.getPrimaryHorizontal(utf)>x)cp--;
                     if(touchShadow!=null)touchShadow.invalidate();
+                    if(sentencePhone!=null)sentencePhone.userTouched();
                     cursorInteractionKind="char_tap";cursorInteractionVia="text_caret";
                     applyZhuyinState(zhuyinInput.moveCursorToPreviewBoundary(nearest));
                     recordCursorEvent("char_tap",zhuyinInput.wordFocused()?"open":"cancel","",-1,0,0);
                 }else if(boundary&&nearest!=lastBoundary){
                     lastBoundary=nearest;if(touchShadow!=null)touchShadow.invalidate();
+                    if(sentencePhone!=null)sentencePhone.userTouched();
                     cursorInteractionKind=dragging?"drag":"boundary";cursorInteractionVia="text_caret";
                     applyZhuyinState(zhuyinInput.moveCursorToPreviewBoundary(nearest));
                     recordCursorEvent(cursorInteractionKind,"open","",-1,0,0);
@@ -4521,14 +4617,72 @@ public class SimonIMEService extends InputMethodService {
         item.setTextColor(getColor(R.color.key_text));item.setTextSize(16);item.setGravity(Gravity.CENTER);item.setPadding(dp(12),0,dp(12),0);
         item.getViewTreeObserver().addOnDrawListener(new android.view.ViewTreeObserver.OnDrawListener(){
             boolean done;
-            public void onDraw(){if(done||!item.isShown())return;done=true;sentencePhone.rendered(candidate,boCandidateItems.indexOfChild(item)+1);item.post(()->{if(item.getViewTreeObserver().isAlive())item.getViewTreeObserver().removeOnDrawListener(this);});}
+            public void onDraw(){if(done||!item.isShown())return;done=true;sentencePhone.rendered(candidate,((ViewGroup)item.getParent()).indexOfChild(item)+1);item.post(()->{if(item.getViewTreeObserver().isAlive())item.getViewTreeObserver().removeOnDrawListener(this);});}
         });
         item.setOnClickListener(v->{
-            int rank=boCandidateItems.indexOfChild(item)+1;
+            int rank=((ViewGroup)item.getParent()).indexOfChild(item)+1;
             recordCursorEvent(cursorInteractionKind,"choose","ai",rank,0,0);sentencePhone.apply(candidate);
         });return item;
     }
+    private void applyPhysicalTextKey(String key){
+        lastTextKeyUptime=SystemClock.uptimeMillis();textKeyRender=true;
+        try{applyZhuyinState(pressZhuyinWithTouch(key));}finally{textKeyRender=false;}
+    }
+    private void cancelPendingTextCandidates(){
+        if(pendingTextCandidates!=null&&mainHandler!=null)mainHandler.removeCallbacks(pendingTextCandidates);
+        pendingTextCandidates=null;
+    }
+    private boolean textCandidateRefreshRunning,textKeyRender;
+    private final List<TextView> textWordViewPool=new ArrayList<>(),textCharViewPool=new ArrayList<>();
+    private void deferTextCandidateRows(){
+        // Keep the first deadline: subsequent keys must not postpone a pending refresh.
+        if(pendingTextCandidates!=null)return;
+        final ZhuyinInputController owner=zhuyinInput;final long field=fieldGeneration;
+        for(LinearLayout row:new LinearLayout[]{boWordCandidateItems,boCandidateItems})
+            for(int n=0;n<row.getChildCount();n++)row.getChildAt(n).setEnabled(false);
+        pendingTextCandidates=()->{
+            pendingTextCandidates=null;
+            if(zhuyinInput!=owner||fieldGeneration!=field||currentKeyboardMode!=KeyboardMode.BOPOMOFO||!isInputViewShown())return;
+            long started=SystemClock.elapsedRealtime();textCandidateRefreshRunning=true;
+            try{renderTextCandidateRows();}finally{textCandidateRefreshRunning=false;}
+            if(imeTelemetry!=null)try{imeTelemetry.record("key_outcome","bopomofo",new JSONObject().put("key","").put("key_to_candidate_ms",JSONObject.NULL).put("step","text_candidates_refresh").put("ms",SystemClock.elapsedRealtime()-started).put("ok",true).put("debounce_ms",100),false);}catch(Exception ignored){}
+        };
+        mainHandler.postDelayed(pendingTextCandidates,100);
+    }
+    private TextView pooledTextChoice(List<TextView> pool,int index,ZhuyinInputController.TextChoice choice){
+        if(index==pool.size()){
+            TextView item=new TextView(this);item.setTextSize(18);item.setGravity(Gravity.CENTER);item.setPadding(dp(12),0,dp(12),0);
+            item.setOnClickListener(v->{ZhuyinInputController.TextChoice selected=(ZhuyinInputController.TextChoice)v.getTag();textCandidateTaps++;if(sentencePhone!=null)sentencePhone.userTouched();applyZhuyinState(zhuyinInput.chooseTextCandidate(selected));});pool.add(item);
+        }
+        TextView item=pool.get(index);if(!choice.label.contentEquals(item.getText()))item.setText(choice.label);
+        item.setTag(choice);item.setEnabled(true);item.setTextColor(boStreamPreview.getCurrentTextColor());return item;
+    }
+    private void reconcileTextRow(LinearLayout row,List<View> desired){
+        for(int n=0;n<desired.size();n++){
+            View view=desired.get(n);if(n<row.getChildCount()&&row.getChildAt(n)==view)continue;
+            if(view.getParent() instanceof ViewGroup)((ViewGroup)view.getParent()).removeView(view);
+            row.addView(view,n,new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT,ViewGroup.LayoutParams.MATCH_PARENT));
+        }
+        while(row.getChildCount()>desired.size())row.removeViewAt(row.getChildCount()-1);
+    }
+    private void renderTextCandidateRows(){
+        if(boWordCandidateItems==null||boCandidateItems==null||zhuyinInput==null)return;
+        boolean focused=zhuyinInput.wordFocused()||zhuyinInput.previewBoundary()>=0||zhuyinInput.keyCaret()>=0;
+        if(mainHandler!=null&&!focused&&!textCandidateRefreshRunning&&textKeyRender){deferTextCandidateRows();return;}
+        cancelPendingTextCandidates();
+        int wordScroll=boWordCandidateScroll.getScrollX(),charScroll=boCandidateScroll.getScrollX();
+        List<View> words=new ArrayList<>(),characters=new ArrayList<>();
+        if(sentencePhone!=null){sentencePhone.beginDisplay();for(JSONObject option:sentencePhone.rowOptions()){TextView item=sentenceOption(option);item.setText("AI · "+sentencePhone.optionText(option));words.add(item);sentencePhone.displayed(option,words.size());}}
+        int wi=0,ci=0;
+        for(ZhuyinInputController.TextChoice choice:zhuyinInput.textChoices()){
+            if("char".equals(choice.kind))characters.add(pooledTextChoice(textCharViewPool,ci++,choice));
+            else words.add(pooledTextChoice(textWordViewPool,wi++,choice));
+        }
+        reconcileTextRow(boWordCandidateItems,words);reconcileTextRow(boCandidateItems,characters);
+        boWordCandidateScroll.scrollTo(wordScroll,0);boCandidateScroll.scrollTo(charScroll,0);updateCandidateRightHint();
+    }
     private void renderSentenceOptions(){
+        if(textLayoutSelected()){renderTextCandidateRows();return;}
         if(boCandidateItems==null||zhuyinInput==null)return;
         if(zhuyinInput.showIdleShortcuts()){renderZhuyinShortcuts();return;}
         // Assemble from the live focus on EVERY render, including delayed AI delivery.
@@ -4580,6 +4734,7 @@ public class SimonIMEService extends InputMethodService {
     }
 
     private void renderZhuyinShortcuts() {
+        if(textLayoutSelected()&&boWordCandidateItems!=null)boWordCandidateItems.removeAllViews();
         if(boCandidateItems==null || ("shortcuts".equals(renderedZhuyinCandidateKind)&&boCandidateItems.getChildCount()==2))return;
         boCandidateItems.removeAllViews();rowEngineViews.clear();
         renderedZhuyinCandidates=java.util.Collections.emptyList();renderedZhuyinCandidateCount=0;
@@ -5530,6 +5685,13 @@ public class SimonIMEService extends InputMethodService {
     @Override
     public void onUpdateSelection(int oldSelStart, int oldSelEnd, int newSelStart, int newSelEnd,
                                   int candidatesStart, int candidatesEnd) {
+        if(textLayoutSelected()&&!protectedInputField&&zhuyinInput!=null&&zhuyinComposingConnection!=null&&zhuyinComposingConnection==getCurrentInputConnection()){
+            String value=zhuyinInput.textPreview();
+            if(newSelStart==newSelEnd&&newSelEnd==candidatesEnd&&candidatesStart>=0&&candidatesEnd-candidatesStart==value.length()){
+                retainedTextEnd=candidatesEnd;retainedTextField=textFieldIdentity(getCurrentInputEditorInfo());
+                if(!value.equals(retainedText))retainedTextBefore=value;retainedText=value;
+            }
+        }
         if(sentencePhone!=null)sentencePhone.selection(oldSelStart,oldSelEnd,newSelStart,newSelEnd,candidatesStart,candidatesEnd);
         if (touchShadow != null && newSelStart < oldSelStart) touchShadow.invalidate();
         try {
@@ -5553,6 +5715,8 @@ public class SimonIMEService extends InputMethodService {
     public void onStartInputView(EditorInfo info, boolean restarting) {
         super.onStartInputView(info, restarting);
         if (isWatchService()) return;
+        configureTextRows();
+        if(textLayoutSelected()&&zhuyinInput!=null&&!protectedInputField&&!zhuyinInput.previewText().isEmpty()){reclaimTextComposition(info);applyZhuyinState(zhuyinInput.state());}
         warmUpConnection();
         if (mainHandler != null) {
             mainHandler.removeCallbacks(connectionWarmUpRunnable);
@@ -5584,7 +5748,9 @@ public class SimonIMEService extends InputMethodService {
     public void onFinishInputView(boolean finishingInput) {
         flushPendingVoiceAudio(false);
         dismissSymbolPopup();
-        if (!isWatchService() && zhuyinInput != null) clearBopomofoBuffer();
+        if(textLayoutSelected()&&zhuyinInput!=null)rememberTextComposition(getCurrentInputConnection(),zhuyinInput.textPreview());
+        cancelPendingTextCandidates();lastTextKeyUptime=-1;
+        if (!isWatchService() && zhuyinInput != null && !textLayoutSelected()) clearBopomofoBuffer();
         if (mainHandler != null) {
             mainHandler.removeCallbacks(connectionWarmUpRunnable);
             clearServerWaitBudgetCallbacks();
@@ -5599,6 +5765,7 @@ public class SimonIMEService extends InputMethodService {
     public void onDestroy() {
         flushPendingVoiceAudio(true);
         dismissSymbolPopup();
+        cancelPendingTextCandidates();lastTextKeyUptime=-1;
         if(layoutDiagnostics!=null){layoutDiagnostics.close();layoutDiagnostics=null;}
         if (sentencePhone != null) { sentencePhone.close(); sentencePhone = null; }
         if (zhuyinInput != null) { zhuyinInput.close(); zhuyinInput = null; }

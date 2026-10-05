@@ -6,9 +6,12 @@ public class TextRows669AndroidTest extends Layout668AndroidTest {
  void ready()throws Exception{
   inst=InstrumentationRegistry.getInstrumentation();ui=inst.getUiAutomation();AccessibilityServiceInfo f=ui.getServiceInfo();f.flags|=AccessibilityServiceInfo.FLAG_RETRIEVE_INTERACTIVE_WINDOWS|AccessibilityServiceInfo.FLAG_REPORT_VIEW_IDS;ui.setServiceInfo(f);
   assertEquals("emulator only","1",shell("getprop ro.kernel.qemu").trim());
-  inst.getTargetContext().getSharedPreferences("simon_ime_prefs",0).edit().putString("server_url","http://127.0.0.1:8181").putString("auth_password","sandbox").putString("ai_sentence_mode","shadow").putBoolean("auto_correction",false).putBoolean("ime_auto_upload",false).putString("layout_mode","text_word_char").commit();
+  preparePreferences();
   shell("ime enable com.simon.voiceime/.SimonIMEService");shell("ime set com.simon.voiceime/.SimonIMEService");shell("am force-stop com.ime.sandbox.testpad");shell("am start -W -n com.ime.sandbox.testpad/.MainActivity");tap("test_input");
-  long end=SystemClock.uptimeMillis()+30000;while(SystemClock.uptimeMillis()<end){if(node("ㄗ")!=null)break;if(node("注")!=null)tap("注");else tap("test_input");Thread.sleep(300);}await("ㄗ");
+  long end=SystemClock.uptimeMillis()+30000;while(SystemClock.uptimeMillis()<end){if(node("ㄗ")!=null)break;android.view.accessibility.AccessibilityNodeInfo switcher=node("注");if(switcher!=null)switcher.performAction(android.view.accessibility.AccessibilityNodeInfo.ACTION_CLICK);else {android.view.accessibility.AccessibilityNodeInfo input=node("test_input");if(input!=null){input.performAction(android.view.accessibility.AccessibilityNodeInfo.ACTION_FOCUS);input.performAction(android.view.accessibility.AccessibilityNodeInfo.ACTION_CLICK);}}Thread.sleep(300);}await("ㄗ");
+ }
+ void preparePreferences(){
+  inst.getTargetContext().getSharedPreferences("simon_ime_prefs",0).edit().putString("server_url","http://127.0.0.1:8181").putString("auth_password","sandbox").putString("ai_sentence_mode","shadow").putBoolean("auto_correction",false).putBoolean("ime_auto_upload",false).putString("layout_mode","text_word_char").commit();
  }
  public void testNoPhoneticRow()throws Exception{
   ready();for(String k:new String[]{"ㄐ","ㄧ","ㄣ","空白","ㄊ"})tap(k);

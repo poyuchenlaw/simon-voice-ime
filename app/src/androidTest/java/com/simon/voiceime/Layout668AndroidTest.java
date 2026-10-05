@@ -22,7 +22,7 @@ import java.util.*;
 public class Layout668AndroidTest extends TestCase {
     Instrumentation inst; UiAutomation ui; File out;
     View root; TextView row1,row2; View row3,keyboard;
-    final List<JSONObject> frames=new ArrayList<>();
+    final List<JSONObject> frames=new java.util.concurrent.CopyOnWriteArrayList<>();
     volatile int keyIndex=-1; volatile boolean stop; volatile Throwable error;
     ServerSocket endpoint; Thread server; long compositionStartedAt;
     ViewTreeObserver.OnDrawListener observer;

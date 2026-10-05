@@ -10,12 +10,15 @@
 
     <TextView android:id="@+id/boCompleteTypingHint" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="@string/zhuyin_complete_typing_hint" android:textSize="13sp" android:textColor="@color/key_text" android:padding="6dp" android:visibility="gone"/>
 
-    <HorizontalScrollView android:id="@+id/boStreamPreviewScroll" android:layout_width="match_parent" android:layout_height="50dp" android:layout_marginBottom="2dp" android:fillViewport="true" android:scrollbars="none">
-        <com.simon.voiceime.PreviewCursorView android:id="@+id/boStreamPreview" android:layout_width="wrap_content" android:layout_height="match_parent" android:gravity="center_vertical" android:paddingStart="12dp" android:paddingEnd="12dp" android:textSize="21sp" android:textColor="@color/key_text" android:background="@color/key_bg" android:singleLine="true" android:ellipsize="none"/>
-    </HorizontalScrollView>
+    <com.simon.voiceime.PreviewScrollView android:id="@+id/boStreamPreviewScroll" android:layout_width="match_parent" android:layout_height="wrap_content" android:minHeight="50dp" android:layout_marginBottom="2dp" android:scrollbars="vertical">
+        <com.simon.voiceime.PreviewCursorView android:id="@+id/boStreamPreview" android:layout_width="match_parent" android:layout_height="wrap_content" android:minHeight="50dp" android:gravity="top" android:paddingStart="12dp" android:paddingEnd="12dp" android:paddingTop="6dp" android:paddingBottom="10dp" android:textSize="21sp" android:textColor="@color/key_text" android:background="@color/key_bg" android:singleLine="false" android:breakStrategy="simple" android:hyphenationFrequency="none"/>
+    </com.simon.voiceime.PreviewScrollView>
 
-    <HorizontalScrollView android:layout_width="match_parent" android:layout_height="44dp" android:scrollbars="none">
+    <HorizontalScrollView android:id="@+id/boPhoneticPreviewScroll" android:layout_width="match_parent" android:layout_height="44dp" android:scrollbars="none">
         <com.simon.voiceime.PreviewCursorView android:id="@+id/boPhoneticPreview" android:layout_width="wrap_content" android:layout_height="match_parent" android:gravity="center_vertical" android:paddingStart="12dp" android:paddingEnd="12dp" android:textSize="15sp" android:textColor="@color/key_text" android:singleLine="true"/>
+    </HorizontalScrollView>
+    <HorizontalScrollView android:id="@+id/boWordCandidateScroll" android:layout_width="match_parent" android:layout_height="44dp" android:scrollbars="none" android:visibility="gone">
+        <LinearLayout android:id="@+id/boWordCandidateItems" android:layout_width="wrap_content" android:layout_height="match_parent" android:orientation="horizontal"/>
     </HorizontalScrollView>
     <FrameLayout android:id="@+id/boCandidateBar" android:layout_width="match_parent" android:layout_height="38dp" android:layout_marginBottom="2dp">
         <HorizontalScrollView android:id="@+id/boCandidateScroll" android:layout_width="match_parent" android:layout_height="match_parent" android:fillViewport="false" android:scrollbars="none">

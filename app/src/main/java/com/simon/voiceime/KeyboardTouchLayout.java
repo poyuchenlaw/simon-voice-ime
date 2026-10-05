@@ -24,6 +24,7 @@ public class KeyboardTouchLayout extends LinearLayout {
     }
     private final Map<Integer, KeyTarget> touchKeys = new HashMap<>();
     private boolean routingKeys;
+    private final int[] currentOrigin = new int[2];
 
     public KeyboardTouchLayout(Context context, AttributeSet attrs) {
         super(context, attrs);
@@ -65,9 +66,11 @@ public class KeyboardTouchLayout extends LinearLayout {
     }
 
     private void dispatchKey(KeyTarget target, MotionEvent event, int pointer, int action) {
-        float x = event.getX(pointer), y = event.getY(pointer);
-        float screenX = x + event.getRawX() - event.getX();
-        float screenY = y + event.getRawY() - event.getY();
+        float deliveredX = event.getX(pointer), deliveredY = event.getY(pointer);
+        float x = deliveredX + event.getRawX() - event.getX() - currentOrigin[0];
+        float y = deliveredY + event.getRawY() - event.getY() - currentOrigin[1];
+        float screenX = x + currentOrigin[0];
+        float screenY = y + currentOrigin[1];
         // A separate single-pointer stream lets Android's existing click/long-press
         // listeners handle each thumb, including when the primary pointer lifts first.
         MotionEvent local = MotionEvent.obtain(target.downTime, event.getEventTime(),
@@ -78,24 +81,41 @@ public class KeyboardTouchLayout extends LinearLayout {
         // Offset only the local frame; raw screen coordinates remain physical touches.
         local.offsetLocation(keyX - screenX, keyY - screenY);
         try {
-            target.key.dispatchTouchEvent(local);
+            boolean consumed = target.key.dispatchTouchEvent(local);
+            long delay = Math.max(0L, android.os.SystemClock.uptimeMillis()-event.getEventTime());
+            if (!consumed) touchEvent("touch_not_consumed", delay, false);
+            else if (action == MotionEvent.ACTION_UP && delay >= 197) touchEvent("touch_delay", delay, true);
+            else if (action == MotionEvent.ACTION_CANCEL) touchEvent("touch_cancelled", delay, false);
         } finally {
             local.recycle();
         }
     }
 
+    private void touchEvent(String step, long ms, boolean ok) {
+        ImeTelemetry telemetry=ImeTelemetry.get();
+        if (telemetry==null) return;
+        try { telemetry.record("key_outcome", "bopomofo", new org.json.JSONObject().put("key","").put("key_to_candidate_ms",org.json.JSONObject.NULL).put("step",step).put("ms",ms).put("ok",ok),false); } catch (org.json.JSONException ignored) {}
+    }
+
     @Override public boolean dispatchTouchEvent(MotionEvent event) {
+        // A moving IME window can leave MotionEvent local coordinates one origin
+        // behind. Rebase physical screen coordinates at delivery, then lock DOWN.
+        getLocationOnScreen(currentOrigin);
+        float currentX=event.getRawX()-currentOrigin[0], currentY=event.getRawY()-currentOrigin[1];
         int action = event.getActionMasked();
         int index = event.getActionIndex();
         if (action == MotionEvent.ACTION_DOWN) {
             touchKeys.clear();
-            KeyTarget target = nearestKey(event.getX(), event.getY(), event.getDownTime());
+            KeyTarget target = nearestKey(currentX, currentY, event.getDownTime());
             routingKeys = target != null;
-            if (target != null) touchKeys.put(event.getPointerId(0), target);
+            if (target != null) {
+                touchKeys.put(event.getPointerId(0), target);
+                if (Math.abs(currentX-event.getX())>1 || Math.abs(currentY-event.getY())>1) touchEvent("touch_origin_rebased",0,true);
+            }
         }
         if (!routingKeys) return super.dispatchTouchEvent(event);
         if (action == MotionEvent.ACTION_POINTER_DOWN) {
-            KeyTarget target = nearestKey(event.getX(index), event.getY(index), event.getEventTime());
+            KeyTarget target = nearestKey(currentX+event.getX(index)-event.getX(), currentY+event.getY(index)-event.getY(), event.getEventTime());
             if (target != null) touchKeys.put(event.getPointerId(index), target);
         }
         if (action == MotionEvent.ACTION_MOVE || action == MotionEvent.ACTION_CANCEL) {

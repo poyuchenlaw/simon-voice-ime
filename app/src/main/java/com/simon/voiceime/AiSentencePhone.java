@@ -44,6 +44,13 @@ final class AiSentencePhone {
     private String touchKeys="";
     private long debounceEnd=-1,receive=-1,validation=-1,wouldRender=-1,phoneRender=-1;
     private int failureCount;
+    private boolean correctionShown;
+    private int revertedSpans;
+    boolean correctionShown(){return correctionShown;}
+    int revertedSpans(){return revertedSpans;}
+    void resetFeedback(){correctionShown=false;revertedSpans=0;}
+    void userTouched(){invalidatePending();}
+    private String sentenceMode(){return prefs().getString("ai_sentence_mode","suggestions");}
     private int expectedCommitEnd=-1;
     private final Map<JSONObject,Integer> displayedRanks=new IdentityHashMap<>();
     private int localRank=-1;
@@ -67,17 +74,33 @@ final class AiSentencePhone {
             try{sentence=new AiSentence(new JSONObject(bytes.toString("UTF-8")));}catch(Exception invalid){throw new IOException("sentence contract",invalid);}
         }
     }
+    // The same text that setComposingText writes must anchor the editor witness.
+    // Native preedit may still be phonetic while the text-only editor shows glyphs.
+    private String composingText(ZhuyinInputController controller){return controller.textLayout()?controller.textPreview():controller.state().composingText;}
     private long now(){return SystemClock.elapsedRealtime();}
+    // Persist both switches and the marker atomically before any input can mutate.
+    static synchronized void migrateAutoApply(Context context){
+        SharedPreferences p=context.getSharedPreferences("simon_ime_prefs",Context.MODE_PRIVATE);
+        if(p.getInt("ai_auto_apply_migration_version",0)>=671)return;
+        SharedPreferences.Editor edit=p.edit().putBoolean("auto_correction",false)
+            .putBoolean("ai_sentence_auto_apply",false).putInt("ai_auto_apply_migration_version",671);
+        if("shadow".equals(p.getString("ai_sentence_mode","suggestions")))edit.putString("ai_sentence_mode","suggestions");
+        if(!edit.commit())throw new IllegalStateException("AI safety migration not persisted");
+        try{ImeTelemetry.install(context).record("ai_sentence","bopomofo",new JSONObject()
+            .put("outcome","mode_migrated").put("client_mode",p.getString("ai_sentence_mode","suggestions"))
+            .put("migration_version",671).put("client_auto",false),false);}
+        catch(Exception failure){android.util.Log.w("AiSentencePhone","Mode migration telemetry failed",failure);}
+    }
     private SharedPreferences prefs(){return context.getSharedPreferences("simon_ime_prefs",Context.MODE_PRIVATE);}
     void changed(boolean editorChange){
         if(applying)return;
         if(editorChange&&host.controller()!=null)host.controller().resetCommitTelemetry();
         if(editorChange)revertedSpan=null;else if(revertedSpan!=null&&host.controller()!=null)revertedSpan.edited(host.controller().sentenceKeys());
-        if(transaction!=null&&!editorChange&&host.controller()!=null&&host.controller().sentenceKeys().equals(keyWitness)&&host.controller().state().composingText.equals(ownedText))return;
+        if(transaction!=null&&!editorChange&&host.controller()!=null&&host.controller().sentenceKeys().equals(keyWitness)&&composingText(host.controller()).equals(ownedText))return;
         if(call!=null){call.cancel();call=null;event("cancelled");}
         if(pause!=null)handler.removeCallbacks(pause);
         if(transaction!=null){transaction.discard();transaction=null;underlineStart=underlineEnd=-1;}
-        sentence.mode(prefs().getString("ai_sentence_mode","suggestions"));
+        sentence.mode(sentenceMode());
         sentence.edit(now(),editorChange,host.allowed());request=null;
         if(host.controller()!=null&&host.controller().previewText().isEmpty())sentence.begin(now(),"",false,()->null);
         debounceEnd=receive=validation=wouldRender=phoneRender=-1;
@@ -95,27 +118,24 @@ final class AiSentencePhone {
     }
     /** Called only after the IME has written this composition to its owned editor. */
     void written(){
-        if(!host.allowed()||host.controller()==null||host.ownedConnection()==null)return;
-        if(!sentence.charsDue(host.controller().previewText())||!host.controller().sentenceBoundary())return;
-        String text=host.controller().state().composingText;
-        ExtractedTextRequest bounds=new ExtractedTextRequest();bounds.hintMaxChars=1;bounds.hintMaxLines=1;
-        ExtractedText value=host.ownedConnection().getExtractedText(bounds,0);
-        if(value==null||value.selectionStart!=value.selectionEnd)return;
-        int end=value.startOffset+value.selectionEnd,start=end-text.length();
-        CharSequence before=host.ownedConnection().getTextBeforeCursor(text.length(),0);
-        if(start<0||(compositionStart>=0&&compositionStart!=start)||before==null||!text.contentEquals(before))return;
-        compositionStart=start;compositionEnd=end;send(true);
+        // Composition bounds arrive through onUpdateSelection; no synchronous editor
+        // queries in the physical key callback. snapshot()/apply still verify the editor.
     }
     void selection(int oldStart,int oldEnd,int start,int end,int candidatesStart,int candidatesEnd){
         if(applying)return;
         // Delayed editor callbacks may describe the composition before written().
         // The live same-field witness distinguishes those from a real cursor move.
         if(candidatesStart>=0&&request!=null&&witness())return;
-        ZhuyinInputController c=host.controller();String owned=c==null?"":c.state().composingText;
+        ZhuyinInputController c=host.controller();String owned=c==null?"":composingText(c);
         boolean own=host.allowed()&&host.ownedConnection()!=null&&start==end&&start==candidatesEnd&&candidatesStart>=0
             &&candidatesEnd-candidatesStart==owned.length();
         if(expectedApplySelection&&own&&candidatesStart==compositionStart&&ownedText.equals(owned)) {
             compositionEnd=candidatesEnd;expectedApplySelection=false;return;
+        }
+        if(own&&(compositionStart<0||candidatesStart==compositionStart)){
+            compositionStart=candidatesStart;compositionEnd=candidatesEnd;
+            if(sentence.charsDue(c.previewText())&&c.sentenceBoundary())send(true);
+            return;
         }
         if(own&&candidatesStart==compositionStart&&candidatesEnd==compositionEnd)return;
         if(oldStart==start&&oldEnd==end&&candidatesStart==compositionStart&&candidatesEnd==compositionEnd)return;
@@ -157,7 +177,7 @@ final class AiSentencePhone {
     private boolean witness(){
         if(!host.allowed()||host.ownedConnection()==null||compositionStart<0||compositionEnd<compositionStart)return false;
         if(!editorSelectionMatches())return false;
-        if(host.controller()==null||!host.controller().state().composingText.equals(ownedText)||!host.controller().sentenceKeys().equals(keyWitness))return false;
+        if(host.controller()==null||!composingText(host.controller()).equals(ownedText)||!host.controller().sentenceKeys().equals(keyWitness))return false;
         CharSequence value=host.ownedConnection().getTextBeforeCursor(ownedText.length()+leftWitness.length(),0);
         return value!=null&&value.toString().equals(leftWitness+ownedText);
     }
@@ -171,7 +191,7 @@ final class AiSentencePhone {
     private JSONObject snapshot(){
         try {
         if(!host.allowed()||host.ownedConnection()==null||compositionStart<0)return null;
-        ZhuyinInputController c=host.controller();ownedText=c.state().composingText;keyWitness=c.sentenceKeys();
+        ZhuyinInputController c=host.controller();ownedText=composingText(c);keyWitness=c.sentenceKeys();
         if(ownedText.isEmpty()||keyWitness.isEmpty()||compositionEnd-compositionStart!=ownedText.length()||!editorSelectionMatches())return null;
         CharSequence before=host.ownedConnection().getTextBeforeCursor(ownedText.length()+64,0);
         if(before==null||!before.toString().endsWith(ownedText))return null;
@@ -195,7 +215,7 @@ final class AiSentencePhone {
         if(clauseKeys.isEmpty()||literal.substring(split).isEmpty())return null;
         if(!clausePrefix.isEmpty()){spans=new JSONArray();alternatives=new JSONArray();}
         JSONObject req=AiSentence.request(sentence.schema,UUID.randomUUID().toString(),sentence.editorGeneration,sentence.compositionGeneration,clauseKeys,literal.substring(split),left+clausePrefix,spans,alternatives);
-        leftWitness=left;req.put("client_auto",autoEnabled());return req;
+        leftWitness=left;req.put("client_auto",prefs().getBoolean("ai_sentence_auto_apply",false));return req;
 
         } catch(Exception invalid){throw new IllegalArgumentException("sentence snapshot",invalid);}
     }
@@ -203,7 +223,7 @@ final class AiSentencePhone {
     private void send(boolean eager){
         if(!host.allowed()||transaction!=null&&transaction.automatic())return;
         try {
-            sentence.mode(prefs().getString("ai_sentence_mode","suggestions"));
+            sentence.mode(sentenceMode());
             ZhuyinInputController controller=host.controller();String preview=controller==null?"":controller.previewText();
             boolean boundary=eager&&sentence.charsDue(preview)&&controller!=null&&controller.sentenceBoundary();
             JSONObject req=sentence.begin(now(),preview,boundary,this::snapshot);if(req==null){if(!eager)event("ineligible");return;}
@@ -330,7 +350,8 @@ final class AiSentencePhone {
         try {return sentence.result!=null&&!"ok".equals(sentence.result.getJSONObject("decision").getString("jev_status"));
         } catch(Exception invalid){return false;}
     }
-    boolean autoEnabled(){return prefs().getBoolean("auto_correction",false);}
+    boolean autoEnabled(){return "live".equals(sentenceMode())&&prefs().getBoolean("ai_sentence_auto_apply",false)
+        &&sentence.result!=null&&Boolean.TRUE.equals(sentence.result.opt("name_protection_ready"));}
     JSONObject localOption(){return host.controller()!=null&&!focused()&&localOption!=null&&!localOption.optString("text").equals(host.controller().previewText())?localOption:null;}
     String optionText(JSONObject candidate){return candidate.optString("text");}
     private boolean protectedChange(String text){
@@ -357,7 +378,7 @@ final class AiSentencePhone {
         String keys=automatic?clauseKeyPrefix+AiSentence.repairedKeys(request.getJSONArray("key_slots"),candidate.getJSONArray("repairs")):candidate.getString("keys");
         String text=automatic?clausePrefix+candidate.getString("text"):AiSentence.replaceSpan(host.controller().previewText(),candidate);
         if(!automatic&&!host.controller().previewText().equals(candidate.getString("preview"))){event("tap_stale");return;}
-        if(automatic&&(focused()||!autoEnabled()||candidate.optBoolean("protected",true)||protectedChange(text)||revertedSpan!=null&&revertedSpan.blocks(host.controller().sentenceKeys())))return;
+        if(automatic&&(now()-sentence.lastEdit>2500||focused()||!autoEnabled()||candidate.optBoolean("protected",true)||protectedChange(text)||revertedSpan!=null&&revertedSpan.blocks(host.controller().sentenceKeys())))return;
         AiComposition tx=new AiComposition(host.controller());ZhuyinInputController after=automatic?tx.applyAuto(keys,text,now(),true,false):tx.apply(keys,text);
         if(after==null){event("tap_unmapped");return;}
         if(!local&&(!sentence.fresh(request,now())||!witness())){after.close();event("tap_stale");return;}
@@ -382,8 +403,8 @@ final class AiSentencePhone {
             underlineStart=Math.min(underlineStart,text.offsetByCodePoints(text.length(),-1));
             underlineEnd=text.offsetByCodePoints(underlineStart,1);
         }
-        applying=true;try{ownedText=after.state().composingText;keyWitness=after.sentenceKeys();compositionEnd=compositionStart+ownedText.length();expectedApplySelection=true;sentence.result=null;localOption=null;host.replace(after);host.render();}finally{applying=false;}
-        if(automatic)correctionEvent("auto_applied",autoSource,"");
+        applying=true;try{ownedText=composingText(after);keyWitness=after.sentenceKeys();compositionEnd=compositionStart+ownedText.length();expectedApplySelection=true;sentence.result=null;localOption=null;host.replace(after);host.render();}finally{applying=false;}
+        if(automatic){correctionShown=true;correctionEvent("auto_applied",autoSource,"");}
     }
     private void commitSuggestion(){
         invalidatePending();applying=true;try{host.commitSuggestion();}finally{applying=false;}
@@ -391,14 +412,14 @@ final class AiSentencePhone {
     }
     android.text.SpannableString mark(String value){
         android.text.SpannableString marked=new android.text.SpannableString(value);
-        if(canUndo()&&underlineStart>=0&&underlineEnd>underlineStart&&underlineEnd<=value.length())marked.setSpan(new android.text.style.UnderlineSpan(),underlineStart,underlineEnd,android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+        if(canUndo()&&underlineStart>=0&&underlineEnd>underlineStart&&underlineEnd<=value.length()){marked.setSpan(new android.text.style.UnderlineSpan(),underlineStart,underlineEnd,android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);if(host.controller()!=null&&host.controller().textLayout())marked.setSpan(new android.text.style.BackgroundColorSpan(0x5577bbff),underlineStart,underlineEnd,android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);}
         return marked;
     }
     boolean tapRevert(int utf){if(canUndo()&&transaction.automatic()&&utf>=underlineStart&&utf<underlineEnd){undo("tap");return true;}return false;}
     boolean beforeKey(String key){
-        if("backspace".equals(key)&&host.controller().keyCaret()<0&&canUndo()&&transaction.automatic()){undo("backspace");return true;}
+        if(!host.controller().textLayout()&&"backspace".equals(key)&&host.controller().keyCaret()<0&&canUndo()&&transaction.automatic()){undo("backspace");return true;}
         if("enter".equals(key)){
-            if(canUndo()&&transaction.automatic()&&transaction.tooRecent(now()))undo("enter_dwell");
+            if(!host.controller().textLayout()&&canUndo()&&transaction.automatic()&&transaction.tooRecent(now()))undo("enter_dwell");
             invalidatePending();
         }
         return false;
@@ -409,8 +430,8 @@ final class AiSentencePhone {
     private void undo(String how){
         if(!canUndo()){event("undo_stale");return;}
         ZhuyinInputController before=transaction.undo(host.controller());if(before==null)return;transaction=null;revertedSpan=new AiComposition.RevertedSpan(before.sentenceKeys(),revertKeyStart,revertKeyEnd);underlineStart=underlineEnd=-1;
-        applying=true;try{host.replace(before);ownedText=before.state().composingText;keyWitness=before.sentenceKeys();compositionEnd=compositionStart+ownedText.length();expectedApplySelection=true;host.render();}finally{applying=false;}
-        correctionEvent("auto_reverted",autoSource,how);event("undone");
+        applying=true;try{host.replace(before);ownedText=composingText(before);keyWitness=before.sentenceKeys();compositionEnd=compositionStart+ownedText.length();expectedApplySelection=true;host.render();}finally{applying=false;}
+        revertedSpans++;correctionEvent("auto_reverted",autoSource,how);event("undone");
     }
     void suggestionEvent(String outcome,String source,int rank,int spanChars){
         ImeTelemetry telemetry=ImeTelemetry.get();if(telemetry==null||!host.allowed())return;
