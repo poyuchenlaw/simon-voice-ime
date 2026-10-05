@@ -1,5 +1,5 @@
 diff --git a/src/rime/algo/syllabifier.cc b/src/rime/algo/syllabifier.cc
-index b7ed6b7..6b2150f 100644
+index b7ed6b7..88f798b 100644
 --- a/src/rime/algo/syllabifier.cc
 +++ b/src/rime/algo/syllabifier.cc
 @@ -7,6 +7,8 @@
@@ -11,7 +11,15 @@ index b7ed6b7..6b2150f 100644
  #include <boost/range/adaptor/reversed.hpp>
  #include <rime/algo/syllabifier.h>
  #include <rime/dict/corrector.h>
-@@ -249,6 +251,92 @@ int Syllabifier::BuildSyllableGraph(const string& input,
+@@ -32,6 +34,7 @@ int Syllabifier::BuildSyllableGraph(const string& input,
+                                     SyllableGraph* graph) {
+   if (input.empty())
+     return 0;
++  graph->prefer_complete_syllables = prefer_complete_syllables_;
+ 
+   size_t farthest = 0;
+   VertexQueue queue;
+@@ -249,6 +252,92 @@ int Syllabifier::BuildSyllableGraph(const string& input,
    DLOG(INFO) << "input length: " << graph->input_length;
    DLOG(INFO) << "syllabified length: " << graph->interpreted_length;
  
@@ -105,7 +113,7 @@ index b7ed6b7..6b2150f 100644
  
    return farthest;
 diff --git a/src/rime/algo/syllabifier.h b/src/rime/algo/syllabifier.h
-index 1167e29..ba4c329 100644
+index 1167e29..1b9c15a 100644
 --- a/src/rime/algo/syllabifier.h
 +++ b/src/rime/algo/syllabifier.h
 @@ -20,9 +20,12 @@ class Corrector;
@@ -121,7 +129,15 @@ index 1167e29..ba4c329 100644
    // 切分歧義編碼段的起始位置
    set<size_t> ambiguous_source_positions;
  };
-@@ -58,12 +61,14 @@ class Syllabifier {
+@@ -39,6 +42,7 @@ using SpellingIndices = map<size_t, SpellingIndex>;
+ struct SyllableGraph {
+   size_t input_length = 0;
+   size_t interpreted_length = 0;
++  bool prefer_complete_syllables = false;
+   VertexMap vertices;
+   EdgeMap edges;
+   SpellingIndices indices;
+@@ -58,12 +62,14 @@ class Syllabifier {
                                    Prism& prism,
                                    SyllableGraph* graph);
    RIME_DLL void EnableCorrection(Corrector* corrector);
@@ -137,7 +153,7 @@ index 1167e29..ba4c329 100644
    bool strict_spelling_ = false;
    Corrector* corrector_ = nullptr;
 diff --git a/src/rime/dict/dictionary.cc b/src/rime/dict/dictionary.cc
-index 58f21a3..62746bc 100644
+index 58f21a3..e3addd3 100644
 --- a/src/rime/dict/dictionary.cc
 +++ b/src/rime/dict/dictionary.cc
 @@ -87,6 +87,7 @@ struct CodeMatch {
@@ -148,7 +164,7 @@ index 58f21a3..62746bc 100644
  };
  
  CodeMatch match_extra_code(const table::Code* extra_code,
-@@ -111,12 +112,19 @@ CodeMatch match_extra_code(const table::Code* extra_code,
+@@ -111,13 +112,26 @@ CodeMatch match_extra_code(const table::Code* extra_code,
    if (spellings == index->second.end())
      return kFailed;
    CodeMatch best_match = kFailed;
@@ -159,18 +175,26 @@ index 58f21a3..62746bc 100644
      if (!match.success)
        continue;
 -    if (match.end_pos > best_match.end_pos)
+-      best_match = match;
 +    // Indexed syllables already carry graph credibility. Tail syllables
 +    // must also retain D1's complete-syllable conflict cost; otherwise long
 +    // dictionary phrases bypass the same cost charged to short phrases.
-+    if (props->complete_syllable_conflict)
-+      match.complete_syllable_penalty -= kCompleteSyllablePenalty;
-+    if (match.end_pos > best_match.end_pos ||
-+        (match.end_pos == best_match.end_pos &&
-+         match.complete_syllable_penalty > best_match.complete_syllable_penalty))
-       best_match = match;
++    if (!syll_graph.prefer_complete_syllables) {
++      // Preserve the original longest-match-only path when disabled.
++      if (match.end_pos > best_match.end_pos)
++        best_match = match;
++    } else {
++      if (props->complete_syllable_conflict)
++        match.complete_syllable_penalty -= kCompleteSyllablePenalty;
++      if (match.end_pos > best_match.end_pos ||
++          (match.end_pos == best_match.end_pos &&
++           match.complete_syllable_penalty > best_match.complete_syllable_penalty))
++        best_match = match;
++    }
    }
    return best_match;
-@@ -259,7 +267,7 @@ static void lookup_table(Table* table,
+ }
+@@ -259,7 +273,7 @@ static void lookup_table(Table* table,
              continue;
            size_t matching_code_size = a.index_code().size() + match.depth;
            (*collector)[match.end_pos].AddChunk(

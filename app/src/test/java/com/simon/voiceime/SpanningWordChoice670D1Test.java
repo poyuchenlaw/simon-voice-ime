@@ -10,7 +10,7 @@ public class SpanningWordChoice670D1Test {
   public String composingText(){return text;}
   public List<String> phoneticSyllables(){return Arrays.asList("ㄊㄞˊ","ㄍㄨㄤ","ㄉㄧㄢˋ");}
   public boolean prepareSentence(String k,String t){text=t;return true;}
-  public boolean moveCursorToPreviewCharacter(int i){menu=false;return true;}
+  public boolean moveCursorToPreviewCharacter(int i){if(i<0)throw new AssertionError("negative preview character");menu=false;return true;}
   public int[] previewEditRange(){return new int[]{0,1};}
   public boolean regroup(int boundary){menu=true;return true;}
   public List<String> regroupLabels(){return menu?Arrays.asList("臺光","光電"):Arrays.asList("臺");}
@@ -21,6 +21,11 @@ public class SpanningWordChoice670D1Test {
   public int cursorPosition(){return 0;}public List<String> candidates(){return Collections.emptyList();}public String takeCommit(){return "";}
  }
  private ZhuyinInputController controller(int boundary){ZhuyinInputController c=new ZhuyinInputController(new NativeMenu());c.setRetypeEngineFactory(NativeMenu::new);c.moveCursorToPreviewBoundary(boundary);return c;}
+ @Test public void startBoundaryNeverProbesNegativeCharacter(){
+  ZhuyinInputController c=controller(0);
+  assertFalse(c.textChoices().isEmpty());
+  for(var x:c.textChoices())assertEquals(1,x.boundary);
+ }
  @Test public void middleBoundaryOffersWholeWordAndKeepsFullKeys(){
   ZhuyinInputController c=controller(1);ZhuyinInputController.TextChoice selected=null;
   for(var x:c.textChoices())if(x.label.equals("臺光"))selected=x;

@@ -42,6 +42,7 @@ using SpellingIndices = map<size_t, SpellingIndex>;
 struct SyllableGraph {
   size_t input_length = 0;
   size_t interpreted_length = 0;
+  bool prefer_complete_syllables = false;
   VertexMap vertices;
   EdgeMap edges;
   SpellingIndices indices;
