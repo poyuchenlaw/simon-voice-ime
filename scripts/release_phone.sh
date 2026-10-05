@@ -157,7 +157,14 @@ if [[ -n "${RELEASE_PREBUILT_APK:-}" ]]; then
   # Prove the packaged native artifacts are the accepted local inputs. Their
   # historical mtimes cannot establish provenance for a restored release.
   while IFS= read -r library; do
-    cmp -s "$library" "$JNI_DIR/$(basename "$library")" || { echo "prebuilt native artifact differs: $(basename "$library")" >&2; exit 2; }
+    source_library="$JNI_DIR/$(basename "$library")"
+    if ! cmp -s "$library" "$source_library"; then
+      # AGP strips debug symbols while packaging. Reproduce that transform
+      # independently; compare exact bytes rather than accepting exports alone.
+      stripped_library="$NATIVE_TMP/stripped-$(basename "$library")"
+      "${LLVM_READelf%llvm-readelf}llvm-strip" --strip-unneeded -o "$stripped_library" "$source_library"
+      cmp -s "$library" "$stripped_library" || { echo "prebuilt native artifact differs: $(basename "$library")" >&2; exit 2; }
+    fi
   done < <(find "$NATIVE_TMP/lib/arm64-v8a" -name '*.so' -type f)
 else
 fresh_against "$JNI_DIR/libchewing_jni.so" "$ROOT/app/src/phone/cpp/chewing_jni.c"

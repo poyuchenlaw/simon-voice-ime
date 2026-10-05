@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
-cd /home/simon/simon-voice-ime-wt670-d1
+cd /home/simon/simon-voice-ime-wt670-int
 export JAVA_HOME=/home/simon/.local/jdk/jdk-17.0.2
 export GRADLE_USER_HOME="/home/simon/simon-voice-ime-wt671/out/gradle-home"
 export TMPDIR="$PWD/out/tmp"
