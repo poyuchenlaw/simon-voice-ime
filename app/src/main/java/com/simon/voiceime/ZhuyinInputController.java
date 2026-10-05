@@ -216,7 +216,11 @@ final class ZhuyinInputController {
         if(text.isEmpty()||retypeEngineFactory==null)return textChoiceCache;
         Engine probe=engine.copyForTextEdit();boolean cloned=probe!=null;if(probe==null)probe=retypeEngineFactory.get();if(probe==null)return textChoiceCache;
         try{
-            if(!cloned&&!probe.prepareSentence(candidateKeys(keys),text)||!(wordFocus?probe.moveCursorToPreviewWord(boundary-1):probe.moveCursorToPreviewCharacter(boundary-1)))return textChoiceCache;
+            // Character alternatives address only the tapped syllable. The
+            // boundary menu supplies words ending there without repeating
+            // lexical focus resolution across the unchanged long prefix.
+            probe.setTextLayout(textLayout);
+            if(!cloned&&!probe.prepareSentence(candidateKeys(keys),text)||!probe.moveCursorToPreviewCharacter(boundary-1))return textChoiceCache;
             List<String> labels=probe.regroupLabels(),groups=probe.optionGroups();List<TextChoice> choices=new ArrayList<>();
             List<int[]> ranges=probe.optionRanges();
             int[] focus=probe.previewEditRange();boolean oneCharacterFocus=focus!=null&&focus[1]-focus[0]==1;
@@ -224,11 +228,11 @@ final class ZhuyinInputController {
                 String kind=n<groups.size()?groups.get(n):"word";
                 int[] range=n<ranges.size()?ranges.get(n):null;
                 if(wordFocus&&(range==null||focus==null||("word".equals(kind)?range[0]!=focus[0]||range[1]!=focus[1]:range[0]!=boundary-1||range[1]!=boundary)))continue;
-                choices.add(new TextChoice(labels.get(n),kind,text,keys,boundary,n,true,wordFocus,range==null?-1:range[0],range==null?-1:range[1]));
+                choices.add(new TextChoice(labels.get(n),kind,text,keys,boundary,n,true,false,range==null?-1:range[0],range==null?-1:range[1]));
                 // An exact one-character word operation also belongs in the
                 // character row. Verify the native focus range before sharing it.
                 if(oneCharacterFocus&&!"char".equals(kind)&&labels.get(n).codePointCount(0,labels.get(n).length())==1)
-                    choices.add(new TextChoice(labels.get(n),"char",text,keys,boundary,n,true,wordFocus,range==null?-1:range[0],range==null?-1:range[1]));
+                    choices.add(new TextChoice(labels.get(n),"char",text,keys,boundary,n,true,false,range==null?-1:range[0],range==null?-1:range[1]));
             }
             if(probe.regroup(boundary)){
                 // Preserve the boundary word menu's native order. Focus-word
@@ -236,7 +240,9 @@ final class ZhuyinInputController {
                 // the words that were reachable in the previous layout.
                 List<String> wordLabels=probe.regroupLabels();List<int[]> wordRanges=probe.optionRanges();List<TextChoice> ordered=new ArrayList<>();
                 java.util.Set<String> seen=new java.util.HashSet<>();
-                for(int n=0;n<wordLabels.size();n++){String label=wordLabels.get(n);int[] range=n<wordRanges.size()?wordRanges.get(n):null;if(wordFocus&&(range==null||focus==null||range[0]!=focus[0]||range[1]!=focus[1]))continue;if(!label.isEmpty()&&!label.contains("｜")&&!label.codePoints().anyMatch(ZhuyinInputController::isPhoneticGlyph)){ordered.add(new TextChoice(label,"word",text,keys,boundary,n,false,false,range==null?-1:range[0],range==null?-1:range[1]));seen.add(label);}}
+                // A tapped boundary also offers words ending there, even when
+                // the lexical focus extends into the following character.
+                for(int n=0;n<wordLabels.size();n++){String label=wordLabels.get(n);int[] range=n<wordRanges.size()?wordRanges.get(n):null;if(wordFocus&&(range==null||range[0]>=boundary||range[1]!=boundary))continue;if(!label.isEmpty()&&!label.contains("｜")&&!label.codePoints().anyMatch(ZhuyinInputController::isPhoneticGlyph)){ordered.add(new TextChoice(label,"word",text,keys,boundary,n,false,false,range==null?-1:range[0],range==null?-1:range[1]));seen.add(label);}}
                 for(TextChoice c:choices)if(!"word".equals(c.kind)||seen.add(c.label))ordered.add(c);
                 choices=ordered;
             }
