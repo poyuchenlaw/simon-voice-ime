@@ -18,14 +18,13 @@ final class VoicePendingQueue {
     static final class UploadFailure extends IOException {
         final int status; final String code;
         UploadFailure(int status,String body) {
-            super("HTTP "+status+(body!=null&&body.contains("correction_rejected")?" audio_correction_rejected":""));
+            super("HTTP "+status+(body!=null&&body.contains("audio_correction_")?" audio_correction_rejected":""));
             this.status=status;this.code=body!=null&&body.contains("correction_rejected")?"audio_correction_rejected":"http_"+status;
         }
     }
     static final class NeedsAttentionException extends IOException {
         NeedsAttentionException(){super("audio_correction_rejected needs_attention retryable=false");}
     }
-    static final int MAX_AUTO_ATTEMPTS=8, MAX_CORRECTION_REJECTIONS=3;
     boolean needsAttention(String id) {Snapshot s=snapshots.get(id);return s!=null&&"needs_attention".equals(s.state);}
     List<String> needsAttentionSessions() {
         List<String> ids=new ArrayList<>();
@@ -34,7 +33,16 @@ final class VoicePendingQueue {
     }
     void retryForUser(String id) {runIO(() -> {JSONObject m=metadata.get(id);if(m!=null&&!discarded.contains(id)){m.put("attempts",0).put("correction_rejections",0);update(id,"pending","manual_retry",0);}return null;});}
 
-    interface Uploader { String transcribe(File pcm, String sessionId, int sampleRate) throws Exception; }
+    interface Uploader {
+        String transcribe(File pcm,String sessionId,int sampleRate)throws Exception;
+        default String archiveChunk(File pcm,String sessionId,int sampleRate)throws Exception {return transcribe(pcm,sessionId,sampleRate);}
+        default String archiveParent(JSONObject identity,org.json.JSONArray children,int sampleRate)throws Exception {
+            throw new IOException("parent custody-only finalization unavailable");
+        }
+        default String finalizeParent(JSONObject identity,org.json.JSONArray children,int sampleRate)throws Exception {
+            throw new IOException("whole utterance archive finalization unavailable");
+        }
+    }
     interface Delivery {
         void deliver(String text, String startedAt);
         default void archiveToHistory(String text,String startedAt)throws Exception {throw new IOException("archive history sink unavailable");}
@@ -111,7 +119,7 @@ final class VoicePendingQueue {
     static String parseSuccessfulResponse(String raw)throws IOException {
         try {
             JSONObject j=new JSONObject(raw==null?"":raw);
-            if("needs_attention".equals(j.optString("correction_status")) && !j.optBoolean("retryable",true))throw new NeedsAttentionException();
+            if("needs_attention".equals(j.optString("correction_status")))throw new NeedsAttentionException();
             if(j.has("error")&&!j.isNull("error"))throw new IOException("transcription error payload");
             if(!j.has("text")||!(j.get("text") instanceof String))throw new IOException("malformed transcription response");
             return j.getString("text");
@@ -183,10 +191,17 @@ final class VoicePendingQueue {
     void sealStreamedBytes(String id) {
         runIO(() -> {JSONObject m=metadata.get(id);if(m!=null){m.put("streamed_bytes_final",true);writeMeta(id,m);}return null;});
     }
+    private static boolean durableOriginalPcmReceipt(JSONObject receipt) {
+        return receipt!=null&&(!receipt.has("durable")||Boolean.TRUE.equals(receipt.opt("durable")))
+                &&!"audio_ack".equals(receipt.optString("type"))
+                &&!"opus".equalsIgnoreCase(receipt.optString("audio_format"))
+                &&!receipt.has("wire_sha256")&&!receipt.has("wire_byte_count")
+                &&!receipt.has("decoded_pcm")&&!receipt.has("decoded_pcm_sha256")&&!receipt.has("decoded_pcm_byte_count");
+    }
     boolean acceptServerCopyAfterWriteFailure(String id,JSONObject receipt) {
         return runIO(() -> {
             JSONObject m=metadata.get(id);
-            if(m==null||capturing.contains(id)||discarded.contains(id)||!backupFailures.contains(id)||receipt==null
+            if(m==null||capturing.contains(id)||discarded.contains(id)||!backupFailures.contains(id)||!durableOriginalPcmReceipt(receipt)
                     ||!id.equals(receipt.optString("client_session_id"))||m.optLong("streamed_bytes")<=0||!m.optBoolean("streamed_bytes_final")
                     ||receipt.optLong("byte_count",-1)<m.optLong("streamed_bytes")
                     ||!receipt.optString("sha256").matches("[a-f0-9]{64}"))return false;
@@ -239,9 +254,16 @@ final class VoicePendingQueue {
             finally {if(completion!=null)completion.run();}
         });
     }
-    void markPending(String id,String error) {runIO(() -> {if(needsAttention(id))return null;if(!capturing.contains(id))flushFile(id);update(id,"pending",error,0);return null;});}
+    void markPending(String id,String error) {runIO(() -> {
+        if(needsAttention(id))return null;
+        JSONObject m=metadata.get(id);boolean online="network_available".equals(error);
+        if(online&&m!=null&&m.optString("last_error").contains("correction_rejected"))return null;
+        if(!capturing.contains(id))flushFile(id);
+        Snapshot prior=snapshots.get(id);
+        update(id,"pending",error,!online&&prior!=null&&"pending".equals(prior.state)?prior.next:0);return null;
+    });}
     void markPendingAsync(String id,String error,Runnable completion) {
-        execute(() -> {try {if(!needsAttention(id)){if(!capturing.contains(id))flushFile(id);update(id,"pending",error,0);}}catch(IOException e){throw new IllegalStateException(e);}if(completion!=null)completion.run();});
+        execute(() -> {if(!needsAttention(id))markPending(id,error);if(completion!=null)completion.run();});
     }
     void discard(String id) {
         if(id==null)return;discarded.add(id);
@@ -270,6 +292,10 @@ final class VoicePendingQueue {
         }catch(org.json.JSONException e){throw new IOException(e);}
     }
     void discardAsync(String id) {if(id==null)return;discarded.add(id);execute(() -> discard(id));}
+    void markOpusFinalCorrected(String id) {runIO(() -> {
+        JSONObject m=metadata.get(id);if(m==null||discarded.contains(id))return null;
+        m.put("opus_final_corrected",true);writeMeta(id,m);return null;
+    });}
     void persistResult(String id,String text) {persistResult(id,text,true,true);}
     void persistResult(String id,String text,boolean fullAudioTranscribed) {persistResult(id,text,fullAudioTranscribed,true);}
     void persistResult(String id,String text,boolean fullAudioTranscribed,boolean append) {
@@ -292,7 +318,7 @@ final class VoicePendingQueue {
     }
     boolean acceptReceipt(String id,JSONObject receipt) {
         return runIO(() -> {
-            if(id==null||discarded.contains(id)||receipt==null)return false;
+            if(id==null||discarded.contains(id)||!durableOriginalPcmReceipt(receipt))return false;
             JSONObject m=metadata.get(id);if(m==null)return false;
             if(!id.equals(receipt.optString("client_session_id")))return false;
             if(m.optBoolean("audio_archived")&&m.optJSONObject("audio_receipt")!=null
@@ -363,8 +389,8 @@ final class VoicePendingQueue {
                 return new JSONObject(m.toString());
             });
             if(claim==null)return;
-            boolean archived=claim.optBoolean("audio_archived") && claim.has("chunk_receipts")
-                    || claim.has("audio_receipt")&&acceptReceipt(id,claim.getJSONObject("audio_receipt"));
+            boolean parentCorrectionOwed=claim.has("chunk_receipts")&&!claim.optBoolean("chunk_parent_corrected");
+            boolean archived=!parentCorrectionOwed&&claim.has("audio_receipt")&&acceptReceipt(id,claim.getJSONObject("audio_receipt"));
             String text=claim.has("result_text")?claim.getString("result_text"):null;
             boolean missingText=!claim.optBoolean("delivered")&&!claim.optBoolean("clipboard_written")
                     &&(text==null||VoiceResultText.clean(text).isEmpty()) && !claim.has("chunk_transcript");
@@ -374,7 +400,11 @@ final class VoicePendingQueue {
                 String raw;
                 if (chunked) raw = uploadChunks(id, uploader, observer, CHUNK_BYTES);
                 else {
-                    try { raw = uploader.transcribe(pcm(id),id,sampleRate); }
+                    try {
+                        if(claim.optBoolean("opus_final_corrected") && text!=null && !VoiceResultText.clean(text).isEmpty())
+                            raw=new JSONObject(uploader.archiveChunk(pcm(id),id,sampleRate)).put("text",text).put("ai_corrected",true).toString();
+                        else raw = uploader.transcribe(pcm(id),id,sampleRate);
+                    }
                     catch (PayloadTooLargeException tooLarge) {
                         chunked = true;
                         long smaller = Math.max(2, Math.min(CHUNK_BYTES, pcm(id).length() / 2) & ~1L);
@@ -411,32 +441,32 @@ final class VoicePendingQueue {
         } catch(Exception e) {
             String reason=e.getClass().getSimpleName()+": "+String.valueOf(e.getMessage());
             boolean rejected=reason.contains("correction_rejected");
-            boolean permanent=e instanceof UploadFailure&&((UploadFailure)e).status>=400
-                    &&((UploadFailure)e).status<500&&((UploadFailure)e).status!=429;
             long backoff=Math.min(MAX_BACKOFF_MS,MIN_BACKOFF_MS*(1L<<Math.min(16,Math.max(0,attempts(id)-1))));
             runIO(() -> {
                 JSONObject m=metadata.get(id);if(m==null||discarded.contains(id))return null;
                 int rejections=m.optInt("correction_rejections")+(rejected?1:0);
                 m.put("correction_rejections",rejections);
-                boolean stop=e instanceof NeedsAttentionException||permanent||attempts(id)>=MAX_AUTO_ATTEMPTS||rejections>=MAX_CORRECTION_REJECTIONS;
-                update(id,stop?"needs_attention":"pending",reason,stop?Long.MAX_VALUE:System.currentTimeMillis()+backoff);
+                update(id,"pending",reason,System.currentTimeMillis()+backoff);
                 return null;
             });
             if(observer!=null)observer.event("pending_failed",id,audioMs(id),audioMs(id)*sampleRate*2/1000,attempts(id),reason);
         }
     }
-    /** Parent PCM is retained until every ordered range has a durable, matching receipt. */
+    /** Child custody never deletes parent: only whole correction plus exact parent custody can. */
     private String uploadChunks(String id, Uploader uploader, Observer observer, long initialLimit) throws Exception {
-        long length = pcm(id).length();
         JSONObject state = runIO(() -> new JSONObject(metadata.get(id).toString()));
+        long length=state.getLong("byte_count");
+        JSONObject parentIdentity=new JSONObject().put("client_session_id",id).put("byte_count",length).put("sha256",state.getString("sha256"));
         org.json.JSONArray chunks = state.optJSONArray("chunk_receipts");
         if (chunks == null) chunks = new org.json.JSONArray();
         long offset = 0;
-        StringBuilder transcript = new StringBuilder();
+
         for (int i = 0; i < chunks.length(); i++) {
             JSONObject c = chunks.getJSONObject(i);
             if (c.getLong("offset") != offset) throw new IOException("unordered chunk custody");
-            offset += c.getLong("bytes"); transcript.append(c.getString("text"));
+            long bytes=c.getLong("bytes");JSONObject receipt=c.optJSONObject("receipt");
+            if(bytes<=0||(bytes&1)!=0||!durableOriginalPcmReceipt(receipt)||receipt.optLong("byte_count",-1)!=bytes)throw new IOException("invalid persisted chunk custody");
+            offset += bytes;
         }
         long limit = Math.min(initialLimit, state.optLong("chunk_limit", initialLimit));
         final long durableLimit = limit;
@@ -461,7 +491,7 @@ final class VoicePendingQueue {
                 return null;
             });
             String raw;
-            try { raw = uploader.transcribe(scratch, childId, sampleRate); }
+            try { raw = uploader.archiveChunk(scratch, childId, sampleRate); }
             catch (PayloadTooLargeException tooLarge) {
                 if (size <= 2) throw tooLarge; // Still keep source if server rejects a single sample.
                 limit = Math.max(2, (size / 2) & ~1L);
@@ -472,32 +502,36 @@ final class VoicePendingQueue {
                 continue;
             }
             JSONObject response = new JSONObject(raw), receipt = response.optJSONObject("receipt");
-            String text = parseSuccessfulResponse(raw);
+            if(response.has("error")&&!response.isNull("error"))throw new IOException("chunk custody error");
             String sha = runIO(() -> hash(scratch));
-            if (receipt == null || !childId.equals(receipt.optString("client_session_id"))
+            if (!durableOriginalPcmReceipt(receipt) || !childId.equals(receipt.optString("client_session_id"))
                     || receipt.optLong("byte_count", -1) != size || !sha.equals(receipt.optString("sha256")))
                 throw new IOException("chunk receipt missing or mismatched");
             if (discarded.contains(id)) throw new IOException("recording discarded");
-            chunks.put(new JSONObject().put("offset", offset).put("bytes", size).put("text", text).put("receipt", receipt));
+            chunks.put(new JSONObject().put("offset", offset).put("bytes", size).put("receipt", receipt));
             final org.json.JSONArray durableChunks = chunks;
             runIO(() -> {JSONObject m = metadata.get(id); m.put("chunk_receipts", durableChunks); writeMeta(id,m); return null;});
             if (observer != null) observer.event("pending_chunk_receipt", childId, size * 1000 / (sampleRate * 2L), size, attempts(id), "");
             // Redundant upload copy; parent PCM remains until ALL receipts are stored.
             if (!scratch.delete()) throw new IOException("upload copy deletion failed");
-            offset += size; transcript.append(text);
+            offset += size;
         }
-        final String fullText = transcript.toString();
-        runIO(() -> {
-            JSONObject m = metadata.get(id);
-            m.put("chunk_transcript", fullText).put("audio_archived",true).put("archived_at",System.currentTimeMillis());
-            // Save reassembled text before deleting source: restart must recover the delivery outbox.
-            if (!m.optBoolean("delivered") && !m.optBoolean("clipboard_written")) m.put("result_text", fullText);
-            writeMeta(id,m);
-            if (pcm(id).exists() && !pcm(id).delete()) throw new IOException("receipted parent deletion failed");
-            cachedTotalBytes = Math.max(0, cachedTotalBytes - sizes.getOrDefault(id,0L)); sizes.remove(id); publish(id);
-            return null;
-        });
-        return new JSONObject().put("text",fullText).toString();
+        boolean correctedOpus=state.optBoolean("opus_final_corrected") && !VoiceResultText.clean(state.optString("result_text")).isEmpty();
+        String parentResponse=correctedOpus?uploader.archiveParent(parentIdentity,chunks,sampleRate):uploader.finalizeParent(parentIdentity,chunks,sampleRate);
+        JSONObject response=new JSONObject(parentResponse);
+        if(correctedOpus) {response.put("text",state.getString("result_text")).put("ai_corrected",true);parentResponse=response.toString();}
+        String fullText=parseSuccessfulResponse(parentResponse);
+        if(!response.optBoolean("ai_corrected",false))throw new IOException("parent audio_correction_rejected");
+        JSONObject receipt=response.optJSONObject("receipt");
+        if(!durableOriginalPcmReceipt(receipt)||!id.equals(receipt.optString("client_session_id"))
+                ||receipt.optLong("byte_count",-1)!=length||!parentIdentity.getString("sha256").equals(receipt.optString("sha256")))
+            throw new IOException("parent receipt missing or mismatched");
+        // Save the whole corrected-text outbox before its matching parent custody removes source.
+        if(discarded.contains(id))throw new IOException("recording discarded");
+        persistResult(id,fullText);
+        runIO(() -> {JSONObject m=metadata.get(id);if(m!=null&&!discarded.contains(id)){m.put("chunk_parent_corrected",true);m.remove("chunk_transcript");writeMeta(id,m);}return null;});
+        if(!acceptReceipt(id,receipt))throw new IOException("parent audio receipt rejected");
+        return parentResponse;
     }
     private void migratePreCapOversize() {
         File marker = new File(dir, ".v656-migrated");
@@ -566,6 +600,12 @@ final class VoicePendingQueue {
                             m.remove("result_text");m.put("ignore_legacy_result",true);
                         }
                         m.put("schema_version",6);writeMeta(id,m);
+                    }
+                    if("needs_attention".equals(m.optString("state"))) {
+                        m.put("state","pending").put("next_attempt_at",0).put("last_error","automatic_recovery_migration");writeMeta(id,m);
+                    }
+                    if(m.has("chunk_receipts")&&!m.optBoolean("chunk_parent_corrected")) {
+                        m.put("state","pending").put("server_transcript_pending",true);writeMeta(id,m);
                     }
                     metadata.put(id,m);if(m.optBoolean("local_write_failed"))backupFailures.add(id);
                 }catch(Exception e){throw new IllegalStateException("legacy delivery migration failed",e);}

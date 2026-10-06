@@ -20,37 +20,172 @@ public class VoicePendingQueueTest {
         return new JSONObject().put("client_session_id",id).put("byte_count",pcm.length()).put("sha256",hex.toString());
     }
     private String response(File pcm,String id,String text)throws Exception {return new JSONObject().put("receipt",receipt(pcm,id)).put("text",text).toString();}
-    @Test public void transient503HasBoundedAutomaticRetriesAndManualRecovery()throws Exception {
+    @Test public void nonDurableAndDecodedReceiptsCannotDeleteOriginalAudio()throws Exception {
+        VoicePendingQueue q=queue();String id=session(q,8);JSONObject original=receipt(q.pcmFile(id),id);
+        for(JSONObject unsafe:new JSONObject[]{new JSONObject(original.toString()).put("durable",false),new JSONObject(original.toString()).put("audio_format","opus"),new JSONObject(original.toString()).put("type","audio_ack"),new JSONObject(original.toString()).put("wire_sha256",original.getString("sha256"))}) {
+            assertFalse("non-durable/decoded identity cannot own original PCM",q.acceptReceipt(id,unsafe));
+            assertTrue(q.pcmFile(id).exists());assertFalse(q.receiptConfirmed(id));
+        }
+        assertTrue("legacy original PCM receipt remains compatible",q.acceptReceipt(id,original));assertFalse(q.pcmFile(id).exists());
+    }
+    @Test public void failedWriteRescueRejectsNonDurableDecodedCustody()throws Exception {
+        VoicePendingQueue q=queue();String id=session(q,8);JSONObject r=receipt(q.pcmFile(id),id);
+        File file=new File(temp.getRoot(),"voice_pending/"+id+".json");JSONObject m=new JSONObject(new String(Files.readAllBytes(file.toPath()),java.nio.charset.StandardCharsets.UTF_8));
+        m.put("local_write_failed",true).put("streamed_bytes",8).put("streamed_bytes_final",true);
+        Files.write(file.toPath(),m.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8));q=queue();
+        assertFalse(q.acceptServerCopyAfterWriteFailure(id,new JSONObject(r.toString()).put("durable",false)));
+        assertFalse(q.acceptServerCopyAfterWriteFailure(id,new JSONObject(r.toString()).put("audio_format","opus")));
+        assertTrue(q.pcmFile(id).exists());assertFalse(q.receiptConfirmed(id));
+        assertTrue("legacy durable PCM rescue remains compatible",q.acceptServerCopyAfterWriteFailure(id,r));
+    }
+    @Test public void childReceiptsAndCorrectedTextCannotFinalizeParent()throws Exception {
+        VoicePendingQueue q=queue();String id=session(q,(int)VoicePendingQueue.CHUNK_BYTES+8);List<String> delivered=new ArrayList<>();
+        q.uploadOne(id,(pcm,sid,rate)->response(pcm,sid,"各段已校正文字"),(t,start)->delivered.add(t),null);
+        assertTrue("parent must survive until whole-utterance correction and receipt",q.pcmFile(id).exists());
+        assertTrue("child corrected text is never a final utterance",delivered.isEmpty());assertFalse(q.receiptConfirmed(id));
+    }
+    @Test public void parentCorrectionFailureRetainsAllSourceAndResumesAfterRestart()throws Exception {
+        VoicePendingQueue q=queue();String id=session(q,(int)VoicePendingQueue.CHUNK_BYTES+8);JSONObject original=receipt(q.pcmFile(id),id);
+        AtomicInteger childrenSent=new AtomicInteger(),parents=new AtomicInteger();List<String> delivered=new ArrayList<>();
+        VoicePendingQueue.Uploader uploader=new VoicePendingQueue.Uploader() {
+            public String transcribe(File pcm,String sid,int rate)throws Exception {childrenSent.incrementAndGet();return new JSONObject().put("receipt",receipt(pcm,sid)).toString();}
+            public String finalizeParent(JSONObject identity,org.json.JSONArray children,int rate)throws Exception {
+                assertEquals(2,children.length());assertEquals(0,children.getJSONObject(0).getLong("offset"));assertEquals(3_840_000L,children.getJSONObject(1).getLong("offset"));
+                assertEquals(original.getString("sha256"),identity.getString("sha256"));
+                if(parents.incrementAndGet()==1)throw new VoicePendingQueue.UploadFailure(503,"audio_correction_rejected");
+                return new JSONObject().put("text","整句重新整理的結果").put("ai_corrected",true).put("receipt",original).toString();
+            }
+        };
+        q.uploadOne(id,uploader,(t,start)->delivered.add(t),null);
+        assertEquals(2,childrenSent.get());assertTrue(q.pcmFile(id).exists());assertFalse(q.receiptConfirmed(id));assertTrue(delivered.isEmpty());
+        q=queue();q.uploadOne(id,uploader,(t,start)->delivered.add(t),null);
+        assertEquals("stored children are never uploaded again",2,childrenSent.get());assertEquals(2,parents.get());
+        assertEquals(Arrays.asList("整句重新整理的結果"),delivered);assertTrue(q.receiptConfirmed(id));assertFalse(q.pcmFile(id).exists());
+        q.uploadOne(id,uploader,(t,start)->fail("duplicate final"),null);assertEquals(2,parents.get());
+    }
+    @Test public void http413AdaptsCustodyRangesBeforeWholeParentCorrection()throws Exception {
+        VoicePendingQueue q=queue();String id=session(q,32);JSONObject original=receipt(q.pcmFile(id),id);List<Long> sizes=new ArrayList<>();List<String> delivered=new ArrayList<>();
+        q.uploadOne(id,new VoicePendingQueue.Uploader() {
+            public String transcribe(File pcm,String sid,int rate)throws Exception {throw new VoicePendingQueue.PayloadTooLargeException();}
+            public String archiveChunk(File pcm,String sid,int rate)throws Exception {
+                sizes.add(pcm.length());if(pcm.length()>8)throw new VoicePendingQueue.PayloadTooLargeException();return new JSONObject().put("receipt",receipt(pcm,sid)).toString();
+            }
+            public String finalizeParent(JSONObject identity,org.json.JSONArray children,int rate)throws Exception {
+                assertEquals(4,children.length());assertEquals(32,identity.getLong("byte_count"));
+                for(int n=0;n<4;n++){assertEquals(n*8L,children.getJSONObject(n).getLong("offset"));assertEquals(8,children.getJSONObject(n).getLong("bytes"));}
+                return new JSONObject().put("text","全文完成").put("ai_corrected",true).put("receipt",original).toString();
+            }
+        },(t,start)->delivered.add(t),null);
+        assertEquals(Arrays.asList(16L,8L,8L,8L,8L),sizes);assertEquals(Arrays.asList("全文完成"),delivered);assertFalse(q.pcmFile(id).exists());
+    }
+    @Test public void uncorrectedOrMismatchedParentNeverDeletesSourceOrDelivers()throws Exception {
+        for(boolean corrected:new boolean[]{false,true}) {
+            VoicePendingQueue q=queue();String id=session(q,(int)VoicePendingQueue.CHUNK_BYTES+8);JSONObject original=receipt(q.pcmFile(id),id);
+            q.uploadOne(id,new VoicePendingQueue.Uploader() {
+                public String transcribe(File pcm,String sid,int rate)throws Exception {return new JSONObject().put("receipt",receipt(pcm,sid)).toString();}
+                public String finalizeParent(JSONObject identity,org.json.JSONArray children,int rate)throws Exception {
+                    if(corrected)original.put("client_session_id","wrong-parent");
+                    return new JSONObject().put("text","不能交付的結果").put("ai_corrected",corrected).put("receipt",original).toString();
+                }
+            },(t,start)->fail("uncorrected/wrong parent cannot be delivered"),null);
+            assertTrue(q.pcmFile(id).exists());assertFalse(q.receiptConfirmed(id));assertFalse(q.delivered(id));
+        }
+    }
+    @Test public void nonDurableChildReceiptCannotArchiveParent()throws Exception {
+        VoicePendingQueue q=queue();String id=session(q,(int)VoicePendingQueue.CHUNK_BYTES+8);
+        q.uploadOne(id,(pcm,sid,rate)->new JSONObject().put("receipt",receipt(pcm,sid).put("durable",false)).toString(),(t,start)->fail("non-durable child cannot deliver"),null);
+        assertTrue(q.pcmFile(id).exists());assertFalse(q.receiptConfirmed(id));assertFalse(q.delivered(id));
+    }
+    @Test public void legacyChildJoinWithParentReceiptStillRequiresWholeCorrection()throws Exception {
+        VoicePendingQueue q=queue();String id=session(q,8);JSONObject original=receipt(q.pcmFile(id),id);
+        File file=new File(temp.getRoot(),"voice_pending/"+id+".json");JSONObject m=new JSONObject(new String(Files.readAllBytes(file.toPath()),java.nio.charset.StandardCharsets.UTF_8));
+        m.put("state","pending").put("audio_archived",true).put("audio_receipt",original).put("chunk_transcript","舊子段串接").put("result_text","舊子段串接")
+                .put("chunk_receipts",new org.json.JSONArray().put(new JSONObject().put("offset",0).put("bytes",8).put("text","舊子段串接").put("receipt",original)));
+        Files.write(file.toPath(),m.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8));q=queue();
+        q.uploadOne(id,(pcm,sid,rate)->{fail("children already stored");return null;},(t,start)->fail("legacy child join is not whole corrected text"),null);
+        assertTrue("full original survives parent finalization failure",q.pcmFile(id).exists());
+    }
+    @Test public void legacyDeletedParentUsesStoredRangesAndNeverOldJoinedText()throws Exception {
+        VoicePendingQueue q=queue();String id=session(q,8);JSONObject original=receipt(q.pcmFile(id),id);
+        File file=new File(temp.getRoot(),"voice_pending/"+id+".json");JSONObject m=new JSONObject(new String(Files.readAllBytes(file.toPath()),java.nio.charset.StandardCharsets.UTF_8));
+        JSONObject child=new JSONObject(original.toString()).put("client_session_id",id+"-part-0-8");
+        m.put("state","archived").put("audio_archived",true).put("chunk_transcript","舊子段串接").put("result_text","舊子段串接")
+                .put("chunk_receipts",new org.json.JSONArray().put(new JSONObject().put("offset",0).put("bytes",8).put("text","舊子段串接").put("receipt",child)));
+        Files.write(file.toPath(),m.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8));assertTrue(q.pcmFile(id).delete());q=queue();List<String> delivered=new ArrayList<>();
+        q.uploadOne(id,new VoicePendingQueue.Uploader() {
+            public String transcribe(File pcm,String sid,int rate)throws Exception {fail("all child audio already stored");return null;}
+            public String finalizeParent(JSONObject identity,org.json.JSONArray children,int rate)throws Exception {
+                assertEquals(8,identity.getLong("byte_count"));assertEquals(1,children.length());
+                return new JSONObject().put("text","完整原句重新校正").put("ai_corrected",true).put("receipt",original).toString();
+            }
+        },(t,start)->delivered.add(t),null);
+        assertEquals(Arrays.asList("完整原句重新校正"),delivered);assertTrue(q.receiptConfirmed(id));
+        m=new JSONObject(new String(Files.readAllBytes(file.toPath()),java.nio.charset.StandardCharsets.UTF_8));assertTrue(m.optBoolean("chunk_parent_corrected"));
+    }
+    @Test public void partialChildCustodyResumesWithoutPartialDeliveryOrDuplicateUpload()throws Exception {
+        VoicePendingQueue q=queue();String id=session(q,(int)VoicePendingQueue.CHUNK_BYTES+8);JSONObject original=receipt(q.pcmFile(id),id);
+        AtomicInteger first=new AtomicInteger(),tail=new AtomicInteger(),parents=new AtomicInteger();List<String> delivered=new ArrayList<>();
+        VoicePendingQueue.Uploader uploader=new VoicePendingQueue.Uploader() {
+            public String transcribe(File pcm,String sid,int rate)throws Exception {
+                if(sid.endsWith("-part-0-3840000"))first.incrementAndGet();else if(tail.incrementAndGet()==1)throw new IOException("network down before tail custody");
+                return new JSONObject().put("receipt",receipt(pcm,sid)).toString();
+            }
+            public String finalizeParent(JSONObject identity,org.json.JSONArray children,int rate)throws Exception {
+                parents.incrementAndGet();assertEquals(2,children.length());
+                return new JSONObject().put("text","原句全部保留").put("ai_corrected",true).put("receipt",original).toString();
+            }
+        };
+        q.uploadOne(id,uploader,(t,start)->delivered.add(t),null);assertTrue(q.pcmFile(id).exists());assertTrue(delivered.isEmpty());assertEquals(0,parents.get());
+        q=queue();q.uploadOne(id,uploader,(t,start)->delivered.add(t),null);
+        assertEquals(1,first.get());assertEquals(2,tail.get());assertEquals(1,parents.get());assertEquals(Arrays.asList("原句全部保留"),delivered);assertFalse(q.pcmFile(id).exists());
+    }
+    @Test public void transientFailureRemainsAutomaticAfterManyAttempts()throws Exception {
         VoicePendingQueue q=queue();String id=session(q,32000);
         for(int n=0;n<12;n++)q.uploadOne(id,(pcm,sid,rate)->{throw new VoicePendingQueue.UploadFailure(503,"busy");},(t,start)->fail(),null);
-        assertEquals(8,q.attempts(id));assertTrue(q.needsAttention(id));assertTrue(q.pcmFile(id).exists());
-        q=queue();assertTrue(q.needsAttention(id));q.retryForUser(id);
-        assertFalse(q.needsAttention(id));assertEquals(0,q.attempts(id));assertTrue(q.due(id,System.currentTimeMillis()));
+        assertEquals(12,q.attempts(id));assertFalse(q.needsAttention(id));
+        assertTrue(q.pendingOldestFirst().contains(id));assertFalse(q.due(id,System.currentTimeMillis()));
+        q=queue();assertTrue(q.pendingOldestFirst().contains(id));assertTrue(q.retryDelayMs(id)>0);
         List<String> delivered=new ArrayList<>();
-        q.uploadOne(id,(pcm,sid,rate)->response(pcm,sid,"手動恢復"),(t,start)->delivered.add(t),null);
-        assertEquals(Arrays.asList("手動恢復"),delivered);
+        q.uploadOne(id,(pcm,sid,rate)->response(pcm,sid,"自動恢復"),(t,start)->delivered.add(t),null);
+        assertEquals(Arrays.asList("自動恢復"),delivered);
+        q.uploadOne(id,(pcm,sid,rate)->{fail("no second upload");return null;},(t,start)->fail("duplicate"),null);
     }
-    @Test public void repeatedCorrectionRejectionStopsAndKeepsAudio()throws Exception {
+    @Test public void correctionRejectionRetainsAudioAndAutomaticBackoff()throws Exception {
         VoicePendingQueue q=queue();String id=session(q,32000);
-        for(int n=0;n<5;n++)q.uploadOne(id,(pcm,sid,rate)->{throw new IOException("HTTP 503 audio_correction_rejected");},(t,start)->fail(),null);
-        assertEquals("permanent correction rejection is bounded",3,q.attempts(id));
-        assertFalse(q.pendingOldestFirst().contains(id));
-        assertTrue(q.pcmFile(id).exists());
-        assertFalse(queue().pendingOldestFirst().contains(id));
+        for(int n=0;n<12;n++)q.uploadOne(id,(pcm,sid,rate)->new JSONObject(response(pcm,sid,"未經校正原文")).put("ai_corrected",false).put("correction_status","needs_attention").put("retryable",false).toString(),(t,start)->fail("rejected text must never be delivered"),null);
+        assertEquals(12,q.attempts(id));assertFalse(q.needsAttention(id));assertFalse(q.delivered(id));
+        assertEquals(32000,q.pcmFile(id).length());assertTrue(q.pendingOldestFirst().contains(id));
+        assertTrue(queue().retryDelayMs(id)>0);
+    }
+    @Test public void lateSocketCallbackCannotBypassAutomaticBackoff()throws Exception {
+        VoicePendingQueue q=queue();String id=session(q,32000);
+        q.uploadOne(id,(pcm,sid,rate)->{throw new VoicePendingQueue.UploadFailure(503,"busy");},(t,start)->fail(),null);
+        assertTrue(q.retryDelayMs(id)>4000);
         q.markPendingAsync(id,"late_socket_close",null);q.runIO(()->null);
-        assertTrue("late callbacks cannot restart rejected audio",q.needsAttention(id));
+        assertTrue("late callbacks must retain retry deadline",q.retryDelayMs(id)>4000);
     }
-    @Test public void official503ContractStopsAndRetainsPcm()throws Exception {
-        VoicePendingQueue q=queue();String id=session(q,32000);AtomicInteger calls=new AtomicInteger();
-        for(int n=0;n<12;n++)q.uploadOne(id,(pcm,sid,rate)->{calls.incrementAndGet();throw new VoicePendingQueue.UploadFailure(503,"{\"detail\":\"audio_correction_rejected\"}");},(t,start)->fail(),null);
-        assertEquals(3,calls.get());assertTrue(q.needsAttention(id));assertEquals(32000,q.pcmFile(id).length());
-        assertFalse(q.pendingOldestFirst().contains(id));assertTrue(queue().needsAttention(id));
+    @Test public void networkReturnMakesConnectionFailureImmediatelyDue()throws Exception {
+        VoicePendingQueue q=queue();String id=session(q,32000);
+        q.uploadOne(id,(pcm,sid,rate)->{throw new IOException("offline");},(t,start)->fail(),null);
+        assertFalse(q.due(id,System.currentTimeMillis()));
+        q.markPending(id,"network_available");assertTrue(q.due(id,System.currentTimeMillis()));
     }
-    @Test public void official200NeedsAttentionContractStopsWithoutDeliveryOrDeletion()throws Exception {
-        VoicePendingQueue q=queue();String id=session(q,32000);AtomicInteger calls=new AtomicInteger();
-        for(int n=0;n<12;n++)q.uploadOne(id,(pcm,sid,rate)->{calls.incrementAndGet();return new JSONObject(response(pcm,sid,"未經校正原文")).put("ai_corrected",false).put("correction_status","needs_attention").put("correction_reason","audio_correction_rejected").put("retryable",false).toString();},(t,start)->fail("needs_attention text cannot be delivered"),null);
-        assertEquals(1,calls.get());assertTrue(q.needsAttention(id));assertFalse(q.delivered(id));assertEquals(32000,q.pcmFile(id).length());
-        assertFalse(q.pendingOldestFirst().contains(id));assertTrue(queue().needsAttention(id));
+    @Test public void networkRestorationKeepsCorrectionFailureBackoff()throws Exception {
+        for(String reason:new String[]{"audio_correction_unavailable","audio_correction_wrong_model","audio_correction_rejected"}) {
+            VoicePendingQueue q=queue();String id=session(q,32000);
+            q.uploadOne(id,(pcm,sid,rate)->{throw new VoicePendingQueue.UploadFailure(503,reason);},(t,start)->fail(),null);
+            long before=q.retryDelayMs(id);assertTrue(before>4000);
+            q.markPending(id,"network_available");
+            assertFalse(q.due(id,System.currentTimeMillis()));assertTrue(q.retryDelayMs(id)>4000);
+        }
+    }
+    @Test public void legacyManualQueueMigratesToAutomaticRecovery()throws Exception {
+        VoicePendingQueue q=queue();String id=session(q,32000);
+        File m=new File(temp.getRoot(),"voice_pending/"+id+".json");
+        JSONObject old=new JSONObject(new String(Files.readAllBytes(m.toPath()),java.nio.charset.StandardCharsets.UTF_8));
+        old.put("state","needs_attention").put("next_attempt_at",Long.MAX_VALUE);
+        Files.write(m.toPath(),old.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        q=queue();assertFalse(q.needsAttention(id));assertTrue(q.pendingOldestFirst().contains(id));assertTrue(q.due(id,System.currentTimeMillis()));
     }
     @Test public void manualRetryCannotResurrectDiscardedAttentionSession()throws Exception {
         VoicePendingQueue q=queue();String id=session(q,32000);
@@ -80,8 +215,9 @@ public class VoicePendingQueueTest {
     @Test public void discardBackoffDoublesToOneHourAndSurvivesRecovery()throws Exception {
         VoicePendingQueue q=queue();String id=session(q,4);q.discard(id);
         long[] expected={5000,10000,20000,40000,80000,160000,320000,640000,1280000,2560000,3600000,3600000};
-        for(long delay:expected){q.serverDiscardFailed(id);long observed=q.serverDiscardDelayMs(id);assertTrue("backoff "+observed+" expected "+delay,observed<=delay&&observed>=delay-250);}
-        VoicePendingQueue recovered=queue();assertTrue(recovered.pendingServerDiscards().contains(id));assertTrue(recovered.serverDiscardDelayMs(id)>3599000);
+        long lastStarted=0;
+        for(long delay:expected){lastStarted=System.currentTimeMillis();q.serverDiscardFailed(id);long observed=q.serverDiscardDelayMs(id);long elapsed=System.currentTimeMillis()-lastStarted;assertTrue("backoff "+observed+" expected "+delay,observed<=delay&&observed>=delay-elapsed);}
+        VoicePendingQueue recovered=queue();assertTrue(recovered.pendingServerDiscards().contains(id));assertTrue(recovered.serverDiscardDelayMs(id)>=3600000-(System.currentTimeMillis()-lastStarted));
         recovered.confirmServerDiscard(id);assertTrue(recovered.pendingServerDiscards().isEmpty());assertTrue(queue().pendingServerDiscards().isEmpty());
     }
     @Test public void serverCopyExceptionIsLimitedToRecordedFailedSession()throws Exception {
@@ -272,7 +408,14 @@ public class VoicePendingQueueTest {
     @Test public void legacyTenMinuteFileIsArchivedInBoundedChunks()throws Exception {
         VoicePendingQueue q=queue();String id=session(q,19_200_002);
         java.util.List<Long> chunks=new java.util.ArrayList<>();
-        q.uploadOne(id,(pcm,sid,rate)->{chunks.add(pcm.length());return response(pcm,sid,"whole file");},(t,start)->{},null);
+        JSONObject original=receipt(q.pcmFile(id),id);
+        q.uploadOne(id,new VoicePendingQueue.Uploader() {
+            public String transcribe(File pcm,String sid,int rate)throws Exception {chunks.add(pcm.length());return new JSONObject().put("receipt",receipt(pcm,sid)).toString();}
+            public String finalizeParent(JSONObject identity,org.json.JSONArray children,int rate)throws Exception {
+                assertEquals(19_200_002L,identity.getLong("byte_count"));assertEquals(6,children.length());
+                return new JSONObject().put("text","whole file").put("ai_corrected",true).put("receipt",original).toString();
+            }
+        },(t,start)->assertEquals("whole file",t),null);
         assertEquals(java.util.Arrays.asList(3_840_000L,3_840_000L,3_840_000L,3_840_000L,3_840_000L,2L),chunks);
         assertTrue(q.receiptConfirmed(id));assertFalse(q.pcmFile(id).exists());
     }
@@ -307,5 +450,20 @@ public class VoicePendingQueueTest {
         VoicePendingQueue q=queue();List<String> delivery=new ArrayList<>();
         q.uploadOne(id,(pcm,sid,rate)->response(pcm,sid,"complete recovered words"),(t,start)->delivery.add(t),null);
         assertEquals(List.of("complete recovered words"),delivery);assertFalse(q.pcmFile(id).exists());
+    }
+    @Test public void correctedOpusOnlyArchivesRawCustodyWithoutSecondTranscription()throws Exception {
+        for(int size:new int[]{32,(int)VoicePendingQueue.CHUNK_BYTES+8}) {
+            VoicePendingQueue q=queue();String id=session(q,size);JSONObject original=receipt(q.pcmFile(id),id);
+            q.markOpusFinalCorrected(id);q.persistResult(id,"完整且已校正的串流文字",true,true);q.acknowledgeDelivery(id,false);q.markPending(id,"custody_needed");
+            AtomicInteger children=new AtomicInteger(),parents=new AtomicInteger();
+            q.uploadOne(id,new VoicePendingQueue.Uploader() {
+                public String transcribe(File pcm,String sid,int rate)throws Exception {fail("already corrected Opus must not transcribe/pay again");return null;}
+                public String archiveChunk(File pcm,String sid,int rate)throws Exception {children.incrementAndGet();return new JSONObject().put("receipt",receipt(pcm,sid)).toString();}
+                public String finalizeParent(JSONObject identity,org.json.JSONArray parts,int rate)throws Exception {fail("parent correction must not run twice");return null;}
+                public String archiveParent(JSONObject identity,org.json.JSONArray parts,int rate)throws Exception {parents.incrementAndGet();assertEquals(original.getString("sha256"),identity.getString("sha256"));return new JSONObject().put("receipt",original).toString();}
+            },(text,start)->fail("text already delivered"),null);
+            assertEquals(size>VoicePendingQueue.CHUNK_BYTES?2:1,children.get());assertEquals(size>VoicePendingQueue.CHUNK_BYTES?1:0,parents.get());
+            assertTrue(q.receiptConfirmed(id));assertFalse(q.pcmFile(id).exists());
+        }
     }
 }

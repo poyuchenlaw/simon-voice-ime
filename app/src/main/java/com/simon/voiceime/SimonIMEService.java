@@ -273,6 +273,9 @@ public class SimonIMEService extends InputMethodService {
 
     // v4.1: Audio streaming state (APPEND mode → WebSocket PCM chunks)
     private WebSocket audioStreamWs = null;
+    private final java.util.concurrent.ConcurrentHashMap<String,OpusStreamEncoder> opusEncoders=new java.util.concurrent.ConcurrentHashMap<>();
+    private volatile int opusDisabledGeneration=-1;
+    private volatile boolean opusDisabledForProcess;
     private final List<String> streamedChunks = Collections.synchronizedList(new ArrayList<>());
     private int streamChunkTotal = 0;
     private volatile boolean audioStreamActive = false;
@@ -338,7 +341,11 @@ public class SimonIMEService extends InputMethodService {
             ConnectivityManager cm=(ConnectivityManager)getSystemService(CONNECTIVITY_SERVICE);
             if(cm==null)return;
             voiceNetworkCallback=new ConnectivityManager.NetworkCallback(){
-                @Override public void onAvailable(Network network){drainPendingVoiceQueue();}
+                @Override public void onAvailable(Network network){
+                    VoicePendingQueue queue=voicePendingQueue;
+                    if(queue==null)return;
+                    queue.execute(() -> {for(String id:queue.pendingOldestFirst())queue.markPending(id,"network_available");drainPendingVoiceQueue();});
+                }
             };
             cm.registerNetworkCallback(new NetworkRequest.Builder().addCapability(android.net.NetworkCapabilities.NET_CAPABILITY_INTERNET).build(),voiceNetworkCallback);
         } catch(Exception e){Log.w(TAG,"voice network callback unavailable",e);}
@@ -385,11 +392,16 @@ public class SimonIMEService extends InputMethodService {
             }
             for(String id:queue.pendingOldestFirst()){
                 if(id.equals(activePendingSessionId)||pendingSessionByGeneration.containsValue(id)||!queue.due(id,System.currentTimeMillis()))continue;
-                queue.uploadOne(id,(pcm,sessionId,sampleRate)->{
-                    if(queue.receiptConfirmed(sessionId))return fetchServerArchiveText(sessionId);
-                    MultipartBody body=new MultipartBody.Builder().setType(MultipartBody.FORM)
+                queue.uploadOne(id,new VoicePendingQueue.Uploader() {
+                  @Override public String transcribe(java.io.File pcm,String sessionId,int sampleRate)throws Exception {return upload(pcm,sessionId,sampleRate,false);}
+                  @Override public String archiveChunk(java.io.File pcm,String sessionId,int sampleRate)throws Exception {return upload(pcm,sessionId,sampleRate,true);}
+                  private String upload(java.io.File pcm,String sessionId,int sampleRate,boolean custodyOnly)throws Exception {
+                    if(!custodyOnly&&queue.receiptConfirmed(sessionId))return fetchServerArchiveText(sessionId);
+                    MultipartBody.Builder form=new MultipartBody.Builder().setType(MultipartBody.FORM)
                             .addFormDataPart("file","recording.wav",pcmWavBody(pcm,sampleRate))
-                            .addFormDataPart("client_session_id",sessionId).build();
+                            .addFormDataPart("client_session_id",sessionId);
+                    if(custodyOnly)form.addFormDataPart("custody_only","true");
+                    MultipartBody body=form.build();
                     Request.Builder rb=new Request.Builder().url(getServerUrl()+"/v1/audio-archive").post(body);
                     String auth=getAuthPassword();if(auth!=null&&!auth.isEmpty())rb.addHeader("Authorization","Bearer "+auth);
                     long seconds=Math.max(60L,Math.min(150L,30L+(long)Math.ceil(pcm.length()/(sampleRate*2.0))));
@@ -415,9 +427,26 @@ public class SimonIMEService extends InputMethodService {
                         if(response.code()==413)throw new VoicePendingQueue.PayloadTooLargeException();
                         if(!response.isSuccessful())throw new VoicePendingQueue.UploadFailure(response.code(),response.body()==null?"":response.body().string());
                     String raw=response.body()==null?"":response.body().string();
-                    VoicePendingQueue.parseSuccessfulResponse(raw);
+                    if(!custodyOnly)VoicePendingQueue.parseSuccessfulResponse(raw);
                     return raw;
                     }
+                  }
+                  @Override public String finalizeParent(JSONObject identity,org.json.JSONArray children,int sampleRate)throws Exception {return parent(identity,children,false);}
+                  @Override public String archiveParent(JSONObject identity,org.json.JSONArray children,int sampleRate)throws Exception {return parent(identity,children,true);}
+                  private String parent(JSONObject identity,org.json.JSONArray children,boolean custodyOnly)throws Exception {
+                    MultipartBody body=new MultipartBody.Builder().setType(MultipartBody.FORM)
+                            .addFormDataPart("client_session_id",identity.getString("client_session_id"))
+                            .addFormDataPart("parent_byte_count",String.valueOf(identity.getLong("byte_count")))
+                            .addFormDataPart("parent_sha256",identity.getString("sha256"))
+                            .addFormDataPart("child_receipts",children.toString()).addFormDataPart("custody_only",String.valueOf(custodyOnly)).build();
+                    Request.Builder rb=new Request.Builder().url(getServerUrl()+"/v1/audio-archive/transcribe").post(body);
+                    String auth=getAuthPassword();if(auth!=null&&!auth.isEmpty())rb.addHeader("Authorization","Bearer "+auth);
+                    OkHttpClient client=httpClient.newBuilder().readTimeout(150,TimeUnit.SECONDS).callTimeout(160,TimeUnit.SECONDS).build();
+                    try(Response response=client.newCall(rb.build()).execute()) {
+                        if(!response.isSuccessful())throw new VoicePendingQueue.UploadFailure(response.code(),response.body()==null?"":response.body().string());
+                        String raw=response.body()==null?"":response.body().string();if(!custodyOnly)VoicePendingQueue.parseSuccessfulResponse(raw);return raw;
+                    }
+                  }
                 },new VoicePendingQueue.Delivery() {
                   @Override public void archiveToHistory(String text,String startedAt) {
                     if(clipboardHelper==null)throw new IllegalStateException("clipboard history unavailable");
@@ -426,6 +455,7 @@ public class SimonIMEService extends InputMethodService {
                   @Override public void deliver(String text,String startedAt) {
                     if(!VoiceResultText.isSilence(text)){
                         if(clipboardHelper==null)throw new IllegalStateException("clipboard history unavailable");
+                        if(!copyToSystemClipboard(text))throw new IllegalStateException("clipboard unavailable; retry delivery");
                         clipboardHelper.addToHistory(text);
                         showPendingVoiceNotification(startedAt);
                     }
@@ -435,10 +465,6 @@ public class SimonIMEService extends InputMethodService {
                     if("silence".equals(phase)&&!queue.backupFailed(sessionId)) { mainHandler.post(this::showNoVoiceStatus); }
                     if("pending_failed".equals(phase)){
                         recordVoiceEvent(phase,sessionId,audioMs,0,0,error,"",bytes,attempts);
-                        if(queue.needsAttention(sessionId))mainHandler.post(() -> {
-                            updateStatus("語音補傳需處理，錄音仍保留");
-                            showPendingVoiceNotice("語音補傳需處理");
-                        });
                     }
                 });
                 if(queue.totalBytes()>500L*1024*1024)showPendingVoiceQuotaWarning();
@@ -1435,15 +1461,44 @@ public class SimonIMEService extends InputMethodService {
         return true;
     }
 
+    private OpusStreamEncoder.Sink opusSink(WebSocket ws) {
+        return new OpusStreamEncoder.Sink() {
+            @Override public boolean configure(int delay) {
+                try{return ws.send(AppVersion.withAppVersion(new JSONObject().put("type","opus_config").put("encoder_delay_samples",delay)).toString());}
+                catch(Exception failure){return false;}
+            }
+            @Override public boolean send(byte[] packet){return ws.send(ByteString.of(packet,0,packet.length));}
+        };
+    }
+
+    private void sendStreamAudio(WebSocket ws,byte[] pcm,String id) {
+        try {
+            OpusStreamEncoder encoder=id==null?null:opusEncoders.get(id);
+            if(encoder!=null)encoder.write(pcm,pcm.length,opusSink(ws));
+            else if(!ws.send(ByteString.of(pcm,0,pcm.length)))throw new IOException("PCM transport rejected");
+            if(voicePendingQueue!=null)voicePendingQueue.noteStreamedBytes(id,pcm.length);
+        }catch(Exception failure) {
+            if(id!=null&&opusEncoders.containsKey(id))opusDisabledForProcess=true;
+            streamFailed=true;audioStreamActive=false;ws.cancel();
+            Log.w(TAG,"Audio encoding/transport failed; durable PCM retained",failure);
+        }
+    }
+
     private void sendAudioEndOfStream(WebSocket ws,String id) {
         for(java.util.Map.Entry<Integer,String> e:pendingSessionByGeneration.entrySet())
             if(e.getValue().equals(id))mainHandler.post(() -> armVoiceFinalDeadline(e.getKey()));
+        final OpusStreamEncoder encoder=id==null?null:opusEncoders.get(id);
         if(voicePendingQueue==null||id==null) {ws.send(AppVersion.controlMessage("finalize"));return;}
         voicePendingQueue.execute(() -> {
             try {
                 voicePendingQueue.sealStreamedBytes(id);
                 JSONObject eos=AppVersion.withAppVersion(voicePendingQueue.recordingIdentity(id));
+                if(encoder!=null) {
+                    eos.put("audio_format","opus").put("wire_byte_count",encoder.wireBytes()).put("wire_sha256",encoder.wireSha())
+                            .put("encoder_delay_samples",encoder.delaySamples());
+                }
                 eos.put("type","finalize");ws.send(eos.toString());
+                if(encoder!=null)opusEncoders.remove(id,encoder);
             }catch(Exception e) {Log.e(TAG,"Audio EOS identity unavailable; retaining local PCM",e);ws.send(AppVersion.controlMessage("finalize"));}
         });
     }
@@ -2648,13 +2703,13 @@ public class SimonIMEService extends InputMethodService {
                         int bufSize = pcmBuffer.size();
                         // 送出條件：(停頓 ≥500ms deterministic 且累積 ≥1s) 或 (累積 ≥1.5s 強制送)
                         boolean pauseDetected = silentBytes >= SILENCE_BYTES_TO_SPLIT && bufSize >= MIN_CHUNK_BYTES;
-                        boolean forceFlush = bufSize >= MAX_CHUNK_BYTES;
+                        boolean forceFlush = bufSize >= (recordingSessionId!=null&&opusEncoders.containsKey(recordingSessionId)?640:MAX_CHUNK_BYTES);
 
                         if (pauseDetected || forceFlush) {
                             byte[] chunkData = pcmBuffer.toByteArray();
                             pcmBuffer.reset();
                             silentBytes = 0;
-                            if(audioStreamWs.send(ByteString.of(chunkData, 0, chunkData.length))&&voicePendingQueue!=null)voicePendingQueue.noteStreamedBytes(recordingSessionId,chunkData.length);
+                            sendStreamAudio(audioStreamWs,chunkData,recordingSessionId);
                             lastVoiceChunkElapsed=SystemClock.elapsedRealtime();
                             streamChunkTotal++;
                             Log.i(TAG, "[AudioStream] chunk #" + streamChunkTotal
@@ -2665,7 +2720,23 @@ public class SimonIMEService extends InputMethodService {
                 }
             }
             } catch(Exception e) {Log.e(TAG,"Recorder stopped after capture error",e);}
-            finally {finishDurableRecording(recordingSessionId);}
+            finally {
+                finishDurableRecording(recordingSessionId);
+                OpusStreamEncoder encoder=recordingSessionId==null?null:opusEncoders.get(recordingSessionId);
+                if(encoder!=null)try {
+                    if(!streamFailed&&audioStreamActive&&audioStreamGeneration==myGen&&audioStreamWs!=null) {
+                        byte[] tail=pcmBuffer.toByteArray();pcmBuffer.reset();
+                        if(tail.length>0){sendStreamAudio(audioStreamWs,tail,recordingSessionId);streamChunkTotal++;}
+                        if(!streamFailed)encoder.finish(opusSink(audioStreamWs));
+                    }
+                }catch(Exception failure) {
+                    opusDisabledForProcess=true;streamFailed=true;audioStreamActive=false;if(audioStreamWs!=null)audioStreamWs.cancel();
+                    Log.w(TAG,"Opus EOS failed; original PCM retained",failure);
+                }finally {
+                    try{encoder.close();}catch(Exception failure){Log.w(TAG,"Opus release failed",failure);}
+                    if(streamFailed)opusEncoders.remove(recordingSessionId,encoder);
+                }
+            }
         }, "AudioRecorder");
         recordingThread.start();
     }
@@ -2675,6 +2746,10 @@ public class SimonIMEService extends InputMethodService {
      * APPEND 模式下，每 2 秒送 PCM chunk → Server Groq Whisper + Moonshot K2 → 即時回傳文字。
      */
     private void startAudioStreamWs(final int myGen) {
+        startAudioStreamWs(myGen,false);
+    }
+
+    private void startAudioStreamWs(final int myGen,final boolean requestedOpus) {
         final String custodySessionId=pendingSessionByGeneration.get(myGen);
         streamedChunks.clear();
         streamChunkTotal = 0;
@@ -2704,6 +2779,7 @@ public class SimonIMEService extends InputMethodService {
         audioStreamGeneration=myGen;
         audioStreamActive=false;
         audioStreamWs = httpClient.newWebSocket(wsReq, new WebSocketListener() {
+            private boolean capabilityProbeClosed;
             @Override
             public void onOpen(WebSocket ws, Response response) {
                 // Send auth + context
@@ -2711,6 +2787,8 @@ public class SimonIMEService extends InputMethodService {
                 try {
                     JSONObject authMsg = AppVersion.withAppVersion(new JSONObject());
                     authMsg.put("type", "auth");
+                    authMsg.put("audio_format",requestedOpus?"opus":"pcm_s16le");
+                    if(requestedOpus)authMsg.put("opus_config_required",true);
                     authMsg.put("password", auth != null ? auth : "");
                     authMsg.put("client_session_id",custodySessionId==null?"":custodySessionId);
                     if (!contextBefore.isEmpty()) authMsg.put("context_before", contextBefore);
@@ -2719,8 +2797,9 @@ public class SimonIMEService extends InputMethodService {
                 } catch (Exception e) {
                     try {
                         JSONObject fallback=AppVersion.withAppVersion(new JSONObject());
-                        fallback.put("type","auth").put("password",auth!=null?auth:"")
+                        fallback.put("type","auth").put("audio_format",requestedOpus?"opus":"pcm_s16le").put("password",auth!=null?auth:"")
                             .put("client_session_id",custodySessionId==null?"":custodySessionId);
+                        if(requestedOpus)fallback.put("opus_config_required",true);
                         if(!ws.send(fallback.toString()))throw new IOException("fallback auth send rejected");
                     } catch(Exception fallbackError) {
                         Log.e(TAG,"Audio stream auth failed; retaining recording",fallbackError);
@@ -2741,7 +2820,22 @@ public class SimonIMEService extends InputMethodService {
                     if ("auth_ok".equals(type)) {
                         Log.i(TAG, "[AudioStream] 認證成功");
                         if(myGen==audioStreamGeneration&&myGen==activeUtteranceGeneration&&isRecording
-                                &&!recoverySessionByGeneration.containsKey(myGen))audioStreamActive=true;
+                                &&!recoverySessionByGeneration.containsKey(myGen)) {
+                            if(!requestedOpus&&!opusDisabledForProcess&&opusDisabledGeneration!=myGen&&"OP20".equals(json.optString("opus_framing"))) {
+                                org.json.JSONArray formats=json.optJSONArray("audio_formats");boolean supported=false;
+                                if(formats!=null)for(int i=0;i<formats.length();i++)if("opus".equals(formats.optString(i)))supported=true;
+                                if(supported && custodySessionId!=null)try {
+                                    opusEncoders.put(custodySessionId,new OpusStreamEncoder());capabilityProbeClosed=true;
+                                    ws.close(1000,"opus capability probe complete");startAudioStreamWs(myGen,true);return;
+                                }catch(Exception unavailable){opusDisabledForProcess=true;opusDisabledGeneration=myGen;Log.w(TAG,"Opus unavailable; using PCM",unavailable);}
+                            }
+                            if(requestedOpus&&!"opus".equals(json.optString("audio_format"))) {
+                                opusDisabledForProcess=true;opusDisabledGeneration=myGen;
+                                OpusStreamEncoder old=opusEncoders.remove(custodySessionId);if(old!=null)old.close();
+                                capabilityProbeClosed=true;ws.close(1000,"opus not negotiated");startAudioStreamWs(myGen,false);return;
+                            }
+                            audioStreamActive=true;
+                        }
                         else ws.close(1000,"recording preserved for recovery");
 
                     } else if ("auth_fail".equals(type)) {
@@ -2803,6 +2897,8 @@ public class SimonIMEService extends InputMethodService {
                             }
                             if(consumeSilentResult(myGen,finalText))return;
                             serverFinalGenerations.add(myGen);
+                            if(requestedOpus && custodySessionId!=null && voicePendingQueue!=null)
+                                voicePendingQueue.execute(() -> voicePendingQueue.markOpusFinalCorrected(custodySessionId));
                             // Main-thread snapshot cannot mix a new recording's preview into this generation.
                             final String candidate = isWatchService() ? "" : appendRescueCandidate(myGen);
                             final boolean rescue = !isWatchService() && TextLossGuard.shouldRescue(
@@ -2845,6 +2941,7 @@ public class SimonIMEService extends InputMethodService {
 
                     } else if ("error".equals(type)) {
                         String msg = json.optString("message", "unknown");
+                        if(requestedOpus&&msg.toLowerCase(java.util.Locale.ROOT).contains("opus"))opusDisabledForProcess=true;
                         Log.e(TAG, "[AudioStream] 伺服器錯誤: " + msg);
                         if (myGen == utteranceGeneration.get()) {
                             streamFailed = true;
@@ -2871,6 +2968,7 @@ public class SimonIMEService extends InputMethodService {
 
             @Override
             public void onFailure(WebSocket ws, Throwable t, Response response) {
+                if(capabilityProbeClosed)return;
                 if (guardStoppedGenerations.contains(myGen)) return;
                 Log.w(TAG, "[AudioStream] WebSocket 連線失敗（改走整段音訊 fallback）", t);
                 String sessionId=pendingSessionByGeneration.get(myGen);
@@ -2901,12 +2999,14 @@ public class SimonIMEService extends InputMethodService {
 
             @Override
             public void onClosing(WebSocket ws,int code,String reason) {
+                if(capabilityProbeClosed){ws.close(code,reason);return;}
                 mainHandler.post(() -> recoverUnfinishedVoiceGeneration(myGen,"ws_closing_without_final"));
                 ws.close(code,reason);
             }
 
             @Override
             public void onClosed(WebSocket ws, int code, String reason) {
+                if(capabilityProbeClosed)return;
                 if (guardStoppedGenerations.contains(myGen)) return;
                 Log.i(TAG, "[AudioStream] WebSocket 已關閉: " + code + " " + reason);
                 mainHandler.post(() -> recoverUnfinishedVoiceGeneration(myGen,"ws_closed_without_final"));
@@ -3145,7 +3245,7 @@ public class SimonIMEService extends InputMethodService {
         if (currentMode == Mode.APPEND && audioStreamWs != null && streamChunkTotal > 0) {
             // v4.4.2: 送出所有殘餘音訊（不管多短），避免末尾 1-2 字被裁切
             if (pcmData.length > 0) {
-                if(audioStreamWs.send(ByteString.of(pcmData, 0, pcmData.length))&&voicePendingQueue!=null)voicePendingQueue.noteStreamedBytes(stoppedSessionId,pcmData.length);
+                sendStreamAudio(audioStreamWs,pcmData,stoppedSessionId);
                 Log.i(TAG, "[AudioStream] 送出剩餘音訊 (" + pcmData.length + " bytes)");
             }
             // Send finalize command
@@ -3182,7 +3282,7 @@ public class SimonIMEService extends InputMethodService {
         if (currentMode == Mode.APPEND && audioStreamWs != null) {
             // Send remaining audio in buffer (less than 2 seconds)
             if (pcmData.length > 0) {
-                if(audioStreamWs.send(ByteString.of(pcmData, 0, pcmData.length))&&voicePendingQueue!=null)voicePendingQueue.noteStreamedBytes(stoppedSessionId,pcmData.length);
+                sendStreamAudio(audioStreamWs,pcmData,stoppedSessionId);
                 Log.i(TAG, "[AudioStream] 送出剩餘音訊 (" + pcmData.length + " bytes)");
             }
             // Send finalize command

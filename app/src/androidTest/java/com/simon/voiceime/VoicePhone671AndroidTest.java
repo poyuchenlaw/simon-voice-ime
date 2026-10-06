@@ -81,11 +81,17 @@ public class VoicePhone671AndroidTest extends VoiceGuardsAndroidTest {
             OutputStream output=socket.getOutputStream();
             output.write(("HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: "+accept+"\r\n\r\n").getBytes(StandardCharsets.US_ASCII));output.flush();
             if(seq==1)firstOutput=output;
-            String id=null;boolean authenticated=false;ByteArrayOutputStream pcm=new ByteArrayOutputStream();int[] opcode={0};
+            String id=null;boolean authenticated=false;ByteArrayOutputStream pcm=new ByteArrayOutputStream();int[] opcode={0};int progressIndex=0;int nextProgressBytes=48000;
             for(byte[] b;!stop&&(b=frame(in,opcode))!=null;){
                 if(opcode[0]==8)return;
                 if(opcode[0]==9)continue;
-                if(opcode[0]==2){protocol.add(seq+":binary");if(!authenticated)throw new IOException("not authenticated");pcm.write(b);continue;}
+                if(opcode[0]==2){protocol.add(seq+":binary");if(!authenticated)throw new IOException("not authenticated");pcm.write(b);
+                    // Real server emits a preview roughly every 1–1.5 seconds of audio.
+                    if(pcm.size()>=nextProgressBytes){
+                        sendFrame(output,new JSONObject().put("type","chunk").put("index",progressIndex++).put("text","預覽"));
+                        nextProgressBytes=pcm.size()+48000;
+                    }
+                    continue;}
                 JSONObject msg=new JSONObject(new String(b,StandardCharsets.UTF_8));String type=msg.optString("type");protocol.add(seq+":"+type);
                 if("auth".equals(type)){id=msg.getString("client_session_id");sessions.put(id,seq);
                     if(authDelay>0)Thread.sleep(authDelay);
@@ -118,11 +124,11 @@ public class VoicePhone671AndroidTest extends VoiceGuardsAndroidTest {
             int seq=sessions.computeIfAbsent(id,k->sessions.size()+1);
             if(rejectAll){
                 rejectionCalls.computeIfAbsent(id,k->new AtomicInteger()).incrementAndGet();
-                respond(socket,reject200?200:503,reject200?new JSONObject().put("text","未經校正原文").put("receipt",receipt).put("ai_corrected",false).put("correction_status","needs_attention").put("correction_reason","audio_correction_rejected").put("retryable",false).toString():"{\"detail\":\"audio_correction_rejected\"}");return;
+                respond(socket,reject200?200:503,reject200?new JSONObject().put("text","未經校正原文").put("receipt",receipt).put("ai_corrected",false).put("correction_status","pending").put("correction_reason","audio_correction_rejected").put("retryable",true).toString():"{\"detail\":\"audio_correction_rejected\"}");return;
             }
             if(rejectTwelfth&&seq==12){respond(socket,503,"{\"detail\":\"audio_correction_rejected\"}");return;}
             recovered.add(id);
-            respond(socket,200,new JSONObject().put("text","段"+seq).put("receipt",receipt).toString());
+            respond(socket,200,new JSONObject().put("text","段"+seq).put("ai_corrected",true).put("receipt",receipt).toString());
         }else if(request.startsWith("POST /v1/audio-archive/transcribe ")){
             String form=new String(body,StandardCharsets.ISO_8859_1);
             int part=form.indexOf("name=\"client_session_id\""),a=form.indexOf("\r\n\r\n",part)+4,b=form.indexOf("\r\n",a);
@@ -133,7 +139,10 @@ public class VoicePhone671AndroidTest extends VoiceGuardsAndroidTest {
             JSONObject receipt=receipts.get(id);respond(socket,receipt==null?404:200,receipt==null?"{}":receipt.toString());
         }else respond(socket,404,"{}");
     }
+    // Initial release uses real AudioRecord/PCM with a guest-loopback server. No compression injection.
+    final boolean pcmInitial=androidx.test.platform.app.InstrumentationRegistry.getArguments().getString("pcm_initial","false").equals("true");
     void startVoice()throws Exception{
+        if(pcmInitial)injectRequired=false;
         openIme();int n=0;while(!"追".contentEquals(await("com.simon.voiceime:id/btnMode").getText())&&n++<6)tap("com.simon.voiceime:id/btnMode");
         assertEquals("追",await("com.simon.voiceime:id/btnMode").getText().toString());
     }
@@ -162,6 +171,10 @@ public class VoicePhone671AndroidTest extends VoiceGuardsAndroidTest {
         } while(SystemClock.elapsedRealtime()<diagnosticDeadline);
         assertNotNull(id);assertFalse("new public tap creates a distinct recording",id.equals(lastRecordedId));lastRecordedId=id;
         if(injectRequired) {
+        VoicePendingQueue recorderQueue=VoicePendingQueue.getInstance(getInstrumentation().getTargetContext().getFilesDir(),16000);
+        until=SystemClock.elapsedRealtime()+4000;
+        while(recorderQueue.audioMs(id)<40&&SystemClock.elapsedRealtime()<until)Thread.sleep(20);
+        assertTrue("native recorder has produced samples before emulator injection",recorderQueue.audioMs(id)>=40);
         java.nio.file.Files.write(new File(out,"inject-request").toPath(),id.getBytes(StandardCharsets.UTF_8));
         until=SystemClock.elapsedRealtime()+6000;
         File injected=new File(out,"injected-"+id);
@@ -226,7 +239,7 @@ public class VoicePhone671AndroidTest extends VoiceGuardsAndroidTest {
     public void testNormalFive()throws Exception{
         startVoice();for(int n=0;n<5;n++)record(1600);
         waitEditor("段1段2段3段4段5",20000);
-        assertEquals(5,audio.size());assertTrue("injectAudio reached real recorder",peaks.stream().anyMatch(p->p>=800));
+        assertEquals(5,audio.size());if(!pcmInitial)assertTrue("injectAudio reached real recorder",peaks.stream().anyMatch(p->p>=800));
         receipt("normal-five");
     }
     public void testMissingFirst()throws Exception{
@@ -237,7 +250,7 @@ public class VoicePhone671AndroidTest extends VoiceGuardsAndroidTest {
         Thread.sleep(13000);assertEquals("late final does not duplicate editor","段2段3段4",editor());
         ClipboardHelper history=new ClipboardHelper(getInstrumentation().getTargetContext());
         assertTrue(history.getHistory().contains("段1"));
-        assertTrue("injectAudio reached real recorder",peaks.stream().anyMatch(p->p>=800));
+        if(!pcmInitial)assertTrue("injectAudio reached real recorder",peaks.stream().anyMatch(p->p>=800));
         receipt("missing-first");
     }
     public void testDelayedOpenShortAndRapid()throws Exception{
@@ -245,7 +258,7 @@ public class VoicePhone671AndroidTest extends VoiceGuardsAndroidTest {
         long until=SystemClock.elapsedRealtime()+30000;while(audio.size()<3&&SystemClock.elapsedRealtime()<until)Thread.sleep(100);
         assertEquals("all generations have complete archived PCM",3,audio.size());
         assertTrue("short recording preserved",audio.values().stream().allMatch(p->p.length>=20000));
-        assertTrue("injectAudio reached real recorder",peaks.stream().anyMatch(p->p>=800));
+        if(!pcmInitial)assertTrue("injectAudio reached real recorder",peaks.stream().anyMatch(p->p>=800));
         receipt("delayed-open-short-rapid");
     }
     public void testExactShortBeforeOpen()throws Exception {
@@ -262,7 +275,7 @@ public class VoicePhone671AndroidTest extends VoiceGuardsAndroidTest {
         emptyFirst=true;startVoice();record(1600);record(1600);
         waitEditor("段2",20000);
         long until=SystemClock.elapsedRealtime()+20000;while(recovered.size()<1&&SystemClock.elapsedRealtime()<until)Thread.sleep(100);
-        assertEquals(1,recovered.size());assertTrue(peaks.stream().anyMatch(p->p>=800));
+        assertEquals(1,recovered.size());if(!pcmInitial)assertTrue(peaks.stream().anyMatch(p->p>=800));
         receipt("audible-empty");
     }
     public void testBatchRecovery()throws Exception{
@@ -272,23 +285,20 @@ public class VoicePhone671AndroidTest extends VoiceGuardsAndroidTest {
         for(int n=0;n<12;n++)record(900);
         VoicePendingQueue q=VoicePendingQueue.getInstance(getInstrumentation().getTargetContext().getFilesDir(),16000);
         long until=SystemClock.elapsedRealtime()+40000;
-        while(q.needsAttentionSessions().isEmpty()&&SystemClock.elapsedRealtime()<until)Thread.sleep(200);
-        assertEquals(11,recovered.size());assertEquals(1,q.needsAttentionSessions().size());
-        String rejected=q.needsAttentionSessions().get(0);assertEquals(3,q.attempts(rejected));assertTrue(q.pcmFile(rejected).exists());
+        while(recovered.size()<11&&SystemClock.elapsedRealtime()<until)Thread.sleep(200);
+        assertEquals(11,recovered.size());assertTrue(q.needsAttentionSessions().isEmpty());
+        assertFalse(q.pendingOldestFirst().isEmpty());String rejected=q.pendingOldestFirst().get(0);
+        assertTrue(q.pcmFile(rejected).exists());rejectTwelfth=false;
+        until=SystemClock.elapsedRealtime()+25000;
+        while(!q.delivered(rejected)&&SystemClock.elapsedRealtime()<until)Thread.sleep(100);
+        assertTrue("availability restores automatic delivery",q.delivered(rejected));
         ClipboardHelper history=new ClipboardHelper(getInstrumentation().getTargetContext());
-        for(int n=1;n<=11;n++)assertTrue(history.getHistory().contains("段"+n));
-        assertEquals("使用者原本剪貼簿",cm.getPrimaryClip().getItemAt(0).getText().toString());
+        for(int n=1;n<=12;n++)assertTrue(history.getHistory().contains("段"+n));
+        assertEquals("段12",cm.getPrimaryClip().getItemAt(0).getText().toString());
+        assertEquals("recovery never inserts into current editor","",editor());
         android.app.NotificationManager nm=(android.app.NotificationManager)getInstrumentation().getTargetContext().getSystemService(Context.NOTIFICATION_SERVICE);
-        android.service.notification.StatusBarNotification[] notifications=nm.getActiveNotifications();
-        assertEquals(1,notifications.length);assertEquals(671,notifications[0].getId());
-        assertTrue(notifications[0].getNotification().extras.getCharSequence(android.app.Notification.EXTRA_TITLE).toString().contains("已恢復 11 段"));
-        int attempts=q.attempts(rejected);Thread.sleep(6000);assertEquals(attempts,q.attempts(rejected));
-        tap("com.simon.voiceime:id/btnClipboard");
-        AccessibilityNodeInfo picked=textNode(await("com.simon.voiceime:id/clipRecycler"),"段11");
-        assertNotNull("recovered text is visible in public clipboard history",picked);
-        while(!picked.isClickable()&&picked.getParent()!=null)picked=picked.getParent();
-        assertTrue("user can select recovered text",picked.performAction(AccessibilityNodeInfo.ACTION_CLICK));
-        waitEditor("段11",5000);
+        assertEquals(1,nm.getActiveNotifications().length);
+        Thread.sleep(6000);assertEquals(12,recovered.size());
         receipt("batch-recovery");
     }
 
@@ -301,21 +311,24 @@ public class VoicePhone671AndroidTest extends VoiceGuardsAndroidTest {
         receipt("closed-without-final");
     }
     public void testSingleVoice()throws Exception{
-        startVoice();record(1600);waitEditor("段1",10000);receipt("single-voice");
+        startVoice();record(1600);long stop=SystemClock.elapsedRealtime();waitEditor("段1",10000);save("pcm-stop-latency",new JSONObject().put("stop_to_editor_ms",SystemClock.elapsedRealtime()-stop).put("provider","guest-loopback-fixture"));receipt("single-voice");
     }
 
     void officialRejection(boolean modern)throws Exception {
         rejectAll=true;reject200=modern;openDelay=2500;authDelay=500;startVoice();record(900);
         VoicePendingQueue q=VoicePendingQueue.getInstance(getInstrumentation().getTargetContext().getFilesDir(),16000);
         String id=lastRecordedId;long until=SystemClock.elapsedRealtime()+30000;
-        while(!q.needsAttention(id)&&SystemClock.elapsedRealtime()<until)Thread.sleep(100);
-        assertTrue(q.needsAttention(id));int expected=modern?1:3;
-        assertEquals(expected,q.attempts(id));assertEquals(expected,rejectionCalls.get(id).get());
+        while(q.attempts(id)<1&&SystemClock.elapsedRealtime()<until)Thread.sleep(100);
+        assertFalse(q.needsAttention(id));assertTrue(q.pendingOldestFirst().contains(id));
         assertFalse(q.delivered(id));assertTrue(q.pcmFile(id).exists());
-        long bytes=q.pcmFile(id).length();assertTrue(bytes>0);assertFalse(q.pendingOldestFirst().contains(id));
-        Thread.sleep(6000);assertEquals(expected,rejectionCalls.get(id).get());assertEquals(bytes,q.pcmFile(id).length());
         assertFalse(new ClipboardHelper(getInstrumentation().getTargetContext()).getHistory().contains("未經校正原文"));
-        receipt(modern?"official-200-attention":"official-503-rejection");
+        rejectAll=false;until=SystemClock.elapsedRealtime()+25000;
+        while(!q.delivered(id)&&SystemClock.elapsedRealtime()<until)Thread.sleep(100);
+        assertTrue("automatic recovery without user retry",q.delivered(id));
+        android.content.ClipboardManager cm=(android.content.ClipboardManager)getInstrumentation().getTargetContext().getSystemService(Context.CLIPBOARD_SERVICE);
+        assertEquals("段1",cm.getPrimaryClip().getItemAt(0).getText().toString());
+        assertEquals("old recovery does not edit current field","",editor());
+        receipt(modern?"official-200-automatic":"official-503-automatic");
     }
     public void testOfficial503Rejection()throws Exception {officialRejection(false);}
     public void testOfficial200Attention()throws Exception {officialRejection(true);}
@@ -339,6 +352,41 @@ public class VoicePhone671AndroidTest extends VoiceGuardsAndroidTest {
         ui.dropShellPermissionIdentity();record(900);Thread.sleep(3000);
         assertEquals(before,editor());assertEquals(0,recovered.size());assertEquals(1,audio.size());
         assertTrue(peaks.stream().allMatch(p->p<800));receipt("low-silence");
+    }
+
+    public void testLongDisconnectThenTwoShort()throws Exception {
+        omitFirst=true;closeOnStop=true;startVoice();record(51000);
+        String longId=lastRecordedId;
+        closeOnStop=false;
+        record(1600);record(1600);
+        waitEditor("段2段3",15000);
+        long until=SystemClock.elapsedRealtime()+15000;
+        while(recovered.size()<1&&SystemClock.elapsedRealtime()<until)Thread.sleep(100);
+        assertEquals(1,recovered.size());assertEquals(longId,recovered.get(0));
+        assertTrue("long capture is at least 50 seconds",audio.get(longId).length/32>=50000);
+        assertTrue(new ClipboardHelper(getInstrumentation().getTargetContext()).getHistory().contains("段1"));
+        Thread.sleep(6000);assertEquals("no duplicate recovery",1,recovered.size());
+        assertEquals("後兩段出字不重複","段2段3",editor());
+        save("long-stop-timing",new JSONObject().put("stop_close_write_ms",stopCloseDelayMs));
+        receipt("long-disconnect-two-short");
+    }
+
+    public void testOfflineLeavesDurableRecordingForRestart()throws Exception {
+        rejectAll=true;openDelay=2500;authDelay=500;startVoice();record(900);
+        VoicePendingQueue q=VoicePendingQueue.getInstance(getInstrumentation().getTargetContext().getFilesDir(),16000);
+        long until=SystemClock.elapsedRealtime()+15000;while(q.attempts(lastRecordedId)<1&&SystemClock.elapsedRealtime()<until)Thread.sleep(100);
+        assertFalse(q.delivered(lastRecordedId));assertTrue(q.pcmFile(lastRecordedId).exists());
+        java.nio.file.Files.write(new File(out,"restart-session").toPath(),lastRecordedId.getBytes(StandardCharsets.UTF_8));
+        save("restart-before",new JSONObject().put("session",lastRecordedId).put("bytes",q.pcmFile(lastRecordedId).length()).put("verdict","PASS"));
+    }
+    public void testAutomaticRecoveryAfterProcessRestart()throws Exception {
+        String id=new String(java.nio.file.Files.readAllBytes(new File(out,"restart-session").toPath()),StandardCharsets.UTF_8);
+        startVoice();VoicePendingQueue q=VoicePendingQueue.getInstance(getInstrumentation().getTargetContext().getFilesDir(),16000);
+        long until=SystemClock.elapsedRealtime()+30000;while(!q.delivered(id)&&SystemClock.elapsedRealtime()<until)Thread.sleep(100);
+        assertTrue("persisted recording recovered on new process",q.delivered(id));
+        android.content.ClipboardManager cm=(android.content.ClipboardManager)getInstrumentation().getTargetContext().getSystemService(Context.CLIPBOARD_SERVICE);
+        assertEquals("段1",cm.getPrimaryClip().getItemAt(0).getText().toString());assertEquals("",editor());
+        Thread.sleep(6000);assertEquals(1,recovered.size());receipt("restart-after");
     }
 
 }

@@ -120,7 +120,7 @@ public class VoiceGuardsAndroidTest extends TestCase {
             for(android.view.accessibility.AccessibilityWindowInfo w:ui.getWindows()){
                 AccessibilityNodeInfo root=w.getRoot();if(root==null)continue;
                 if(field==null)field=editable(root);
-                for(AccessibilityNodeInfo n:root.findAccessibilityNodeInfosByText("🎤"))if(n.isVisibleToUser())tab=n;
+                for(AccessibilityNodeInfo n:root.findAccessibilityNodeInfosByText("🎤"))if(n.isVisibleToUser()&&!"com.simon.voiceime:id/btnMic".equals(n.getViewIdResourceName()))tab=n;
             }
             AccessibilityNodeInfo target=tab!=null?tab:field;
             if(target!=null){Rect r=new Rect();target.getBoundsInScreen(r);shell("input tap "+r.centerX()+" "+(tab!=null?r.centerY():r.top+40));}
