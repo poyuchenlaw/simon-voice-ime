@@ -37,7 +37,7 @@ public class VoicePhone671AndroidTest extends VoiceGuardsAndroidTest {
     final List<String> protocol=new CopyOnWriteArrayList<>();
     final List<String> recovered=new CopyOnWriteArrayList<>();
     final List<Integer> peaks=new CopyOnWriteArrayList<>();
-    volatile boolean omitFirst,emptyFirst,rejectTwelfth,closeFirst,rejectAll,reject200,closeOnStop;
+    volatile boolean omitFirst,emptyFirst,rejectTwelfth,closeFirst,rejectAll,reject200,closeOnStop,legacySuccess;
     final Map<String,AtomicInteger> rejectionCalls=new ConcurrentHashMap<>();
     volatile OutputStream firstOutput;volatile long stopCloseDelayMs; boolean injectRequired=true; volatile long openDelay,authDelay;
     @Override protected void setUp()throws Exception{
@@ -128,7 +128,9 @@ public class VoicePhone671AndroidTest extends VoiceGuardsAndroidTest {
             }
             if(rejectTwelfth&&seq==12){respond(socket,503,"{\"detail\":\"audio_correction_rejected\"}");return;}
             recovered.add(id);
-            respond(socket,200,new JSONObject().put("text","段"+seq).put("ai_corrected",true).put("receipt",receipt).toString());
+            JSONObject success=new JSONObject().put("text","段"+seq).put("receipt",receipt);
+            if(!legacySuccess)success.put("ai_corrected",true);
+            respond(socket,200,success.toString());
         }else if(request.startsWith("POST /v1/audio-archive/transcribe ")){
             String form=new String(body,StandardCharsets.ISO_8859_1);
             int part=form.indexOf("name=\"client_session_id\""),a=form.indexOf("\r\n\r\n",part)+4,b=form.indexOf("\r\n",a);
@@ -332,6 +334,7 @@ public class VoicePhone671AndroidTest extends VoiceGuardsAndroidTest {
     }
     public void testOfficial503Rejection()throws Exception {officialRejection(false);}
     public void testOfficial200Attention()throws Exception {officialRejection(true);}
+    public void testLegacyArchiveSuccess()throws Exception {legacySuccess=true;officialRejection(false);}
     public void testCloseMillisecondsAfterStop()throws Exception {
         closeOnStop=true;startVoice();record(1600);
         VoicePendingQueue q=VoicePendingQueue.getInstance(getInstrumentation().getTargetContext().getFilesDir(),16000);
