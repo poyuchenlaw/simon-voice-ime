@@ -717,7 +717,7 @@ extern "C" JNIEXPORT jboolean JNICALL Java_com_simon_voiceime_RimeZhuyinNative_n
 extern "C" JNIEXPORT jobjectArray JNICALL Java_com_simon_voiceime_RimeZhuyinNative_nativeOptionGroups(JNIEnv* env,jclass,jlong h) {
     auto* s=state(h);jclass cls=env->FindClass("java/lang/String");int n=s?s->regroup.options.size():0;
     auto out=env->NewObjectArray(n,cls,nullptr);for(int i=0;i<n;i++){
-        auto value=env->NewStringUTF(s->regroup.options[i].character?"char":"word");env->SetObjectArrayElement(out,i,value);env->DeleteLocalRef(value);
+        auto value=env->NewStringUTF(s->regroup.options[i].literal?"literal":(s->regroup.options[i].character?"char":"word"));env->SetObjectArrayElement(out,i,value);env->DeleteLocalRef(value);
     }return out;
 }
 extern "C" JNIEXPORT void JNICALL Java_com_simon_voiceime_RimeZhuyinNative_nativeRestore(JNIEnv* env,jclass,jlong h,jstring keys,jstring text,jintArray stops) {

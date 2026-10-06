@@ -4672,7 +4672,8 @@ public class SimonIMEService extends InputMethodService {
         cancelPendingTextCandidates();
         int wordScroll=boWordCandidateScroll.getScrollX(),charScroll=boCandidateScroll.getScrollX();
         List<View> words=new ArrayList<>(),characters=new ArrayList<>();
-        if(sentencePhone!=null){sentencePhone.beginDisplay();for(JSONObject option:sentencePhone.rowOptions()){TextView item=sentenceOption(option);item.setText("AI · "+sentencePhone.optionText(option));words.add(item);sentencePhone.displayed(option,words.size());}}
+        // Z2: sentence suggestions stay off the word row until the Z3 preview design.
+        if(sentencePhone!=null)sentencePhone.beginDisplay();
         int wi=0,ci=0;
         for(ZhuyinInputController.TextChoice choice:zhuyinInput.textChoices()){
             if("char".equals(choice.kind))characters.add(pooledTextChoice(textCharViewPool,ci++,choice));

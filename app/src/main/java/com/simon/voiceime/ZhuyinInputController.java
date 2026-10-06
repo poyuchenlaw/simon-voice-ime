@@ -166,7 +166,7 @@ final class ZhuyinInputController {
     }
 
     private boolean textLayout;
-    void setTextLayout(boolean enabled){textLayout=enabled;engine.setTextLayout(enabled);}
+    void setTextLayout(boolean enabled){textLayout=enabled;engine.setTextLayout(enabled);if(retype!=null)retype.setTextLayout(enabled);}
     boolean textLayout(){return textLayout;}
     private State deleteWholeLastCharacter(){
         if(retype!=null)return retypeState(retype.press("backspace"));
@@ -226,9 +226,10 @@ final class ZhuyinInputController {
             int[] focus=probe.previewEditRange();boolean oneCharacterFocus=focus!=null&&focus[1]-focus[0]==1;
             for(int n=0;n<labels.size();n++)if(!labels.get(n).isEmpty()&&!labels.get(n).codePoints().anyMatch(ZhuyinInputController::isPhoneticGlyph)){
                 String kind=n<groups.size()?groups.get(n):"word";
+                if("literal".equals(kind))continue;
                 int[] range=n<ranges.size()?ranges.get(n):null;
                 if(wordFocus&&(range==null||focus==null||("word".equals(kind)?range[0]!=focus[0]||range[1]!=focus[1]:range[0]!=boundary-1||range[1]!=boundary)))continue;
-                choices.add(new TextChoice(labels.get(n),kind,text,keys,boundary,n,true,false,range==null?-1:range[0],range==null?-1:range[1]));
+                if("char".equals(kind)||labels.get(n).codePointCount(0,labels.get(n).length())>1)choices.add(new TextChoice(labels.get(n),kind,text,keys,boundary,n,true,false,range==null?-1:range[0],range==null?-1:range[1]));
                 // An exact one-character word operation also belongs in the
                 // character row. Verify the native focus range before sharing it.
                 if(oneCharacterFocus&&!"char".equals(kind)&&labels.get(n).codePointCount(0,labels.get(n).length())==1)
@@ -238,11 +239,11 @@ final class ZhuyinInputController {
                 // Preserve the boundary word menu's native order. Focus-word
                 // alternatives supplement it; putting them first crowds out
                 // the words that were reachable in the previous layout.
-                List<String> wordLabels=probe.regroupLabels();List<int[]> wordRanges=probe.optionRanges();List<TextChoice> ordered=new ArrayList<>();
+                List<String> wordLabels=probe.regroupLabels(),wordGroups=probe.optionGroups();List<int[]> wordRanges=probe.optionRanges();List<TextChoice> ordered=new ArrayList<>();
                 java.util.Set<String> seen=new java.util.HashSet<>();
                 // A tapped boundary offers native words containing its left glyph,
                 // including a word that continues across the caret.
-                for(int n=0;n<wordLabels.size();n++){String label=wordLabels.get(n);int[] range=n<wordRanges.size()?wordRanges.get(n):null;if(wordFocus&&(range==null||range[0]>=boundary||range[1]<boundary))continue;if(!label.isEmpty()&&!label.contains("｜")&&!label.codePoints().anyMatch(ZhuyinInputController::isPhoneticGlyph)){ordered.add(new TextChoice(label,"word",text,keys,boundary,n,false,wordFocus,range==null?-1:range[0],range==null?-1:range[1]));seen.add(label);}}
+                for(int n=0;n<wordLabels.size();n++){String label=wordLabels.get(n);if(label.codePointCount(0,label.length())<2)continue;if(n<wordGroups.size()&&"literal".equals(wordGroups.get(n)))continue;int[] range=n<wordRanges.size()?wordRanges.get(n):null;if(wordFocus&&(range==null||range[0]>=boundary||range[1]<boundary))continue;if(!label.isEmpty()&&!label.contains("｜")&&!label.codePoints().anyMatch(ZhuyinInputController::isPhoneticGlyph)){ordered.add(new TextChoice(label,"word",text,keys,boundary,n,false,wordFocus,range==null?-1:range[0],range==null?-1:range[1]));seen.add(label);}}
                 for(TextChoice c:choices)if(!"word".equals(c.kind)||seen.add(c.label))ordered.add(c);
                 choices=ordered;
             }
@@ -402,7 +403,7 @@ final class ZhuyinInputController {
         retypeOriginal=text;retypeStart=start;retypeEnd=end;
         retypeSourceReading=fixedReading.isEmpty()?new ArrayList<>(engine.phoneticSyllables()):new ArrayList<>(fixedReading);
         if(retypeSourceReading.size()!=count)retypeSourceReading=Collections.emptyList();
-        retype=new ZhuyinInputController(separate,abbreviationIndex);retype.setLearningEnabled(learningEnabled);
+        retype=new ZhuyinInputController(separate,abbreviationIndex);retype.setLearningEnabled(learningEnabled);retype.setTextLayout(textLayout);
         previewFocused=false;previewBoundary=-1;
         return retypeState(retype.state());
     }
@@ -435,7 +436,7 @@ final class ZhuyinInputController {
         if(readings.size()!=text.codePointCount(0,text.length()))return false;
         Engine separate=retypeEngineFactory.get();if(separate==null)return false;
         retypeOriginal=text;retypeStart=retypeEnd=previewBoundary;retypeSourceReading=readings;
-        retype=new ZhuyinInputController(separate,abbreviationIndex);retype.setLearningEnabled(learningEnabled);
+        retype=new ZhuyinInputController(separate,abbreviationIndex);retype.setLearningEnabled(learningEnabled);retype.setTextLayout(textLayout);
         textInsertion=true;previewFocused=false;return true;
     }
 
