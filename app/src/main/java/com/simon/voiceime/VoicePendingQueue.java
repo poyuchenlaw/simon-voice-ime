@@ -120,6 +120,7 @@ final class VoicePendingQueue {
         try {
             JSONObject j=new JSONObject(raw==null?"":raw);
             if("needs_attention".equals(j.optString("correction_status")))throw new NeedsAttentionException();
+            if("pending".equals(j.optString("correction_status"))||(j.has("ai_corrected")&&!j.optBoolean("ai_corrected")))throw new IOException("audio_correction_rejected");
             if(j.has("error")&&!j.isNull("error"))throw new IOException("transcription error payload");
             if(!j.has("text")||!(j.get("text") instanceof String))throw new IOException("malformed transcription response");
             return j.getString("text");

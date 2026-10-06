@@ -157,6 +157,15 @@ public class VoicePendingQueueTest {
         assertEquals(32000,q.pcmFile(id).length());assertTrue(q.pendingOldestFirst().contains(id));
         assertTrue(queue().retryDelayMs(id)>0);
     }
+    @Test public void pendingCorrectionNeverDeliversUncorrectedText()throws Exception {
+        VoicePendingQueue q=queue();String id=session(q,32000);
+        q.uploadOne(id,(pcm,sid,rate)->new JSONObject(response(pcm,sid,"未經校正原文")).put("ai_corrected",false).put("correction_status","pending").put("retryable",true).toString(),(t,start)->fail("uncorrected text must never be delivered"),null);
+        assertFalse(q.delivered(id));assertEquals(32000,q.pcmFile(id).length());
+        assertTrue(q.pendingOldestFirst().contains(id));assertTrue(q.retryDelayMs(id)>0);
+        List<String> delivered=new ArrayList<>();
+        q.uploadOne(id,(pcm,sid,rate)->new JSONObject(response(pcm,sid,"校正完成")).put("ai_corrected",true).toString(),(t,start)->delivered.add(t),null);
+        assertEquals(Arrays.asList("校正完成"),delivered);
+    }
     @Test public void lateSocketCallbackCannotBypassAutomaticBackoff()throws Exception {
         VoicePendingQueue q=queue();String id=session(q,32000);
         q.uploadOne(id,(pcm,sid,rate)->{throw new VoicePendingQueue.UploadFailure(503,"busy");},(t,start)->fail(),null);
