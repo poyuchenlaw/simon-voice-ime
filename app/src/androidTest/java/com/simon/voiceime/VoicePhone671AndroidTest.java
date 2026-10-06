@@ -279,7 +279,7 @@ public class VoicePhone671AndroidTest extends VoiceGuardsAndroidTest {
         receipt("audible-empty");
     }
     public void testBatchRecovery()throws Exception{
-        authDelay=3500;rejectTwelfth=true;startVoice();
+        authDelay=3500;rejectTwelfth=true;startVoice();String initialEditor=editor();
         android.content.ClipboardManager cm=(android.content.ClipboardManager)getInstrumentation().getTargetContext().getSystemService(Context.CLIPBOARD_SERVICE);
         cm.setPrimaryClip(ClipData.newPlainText("fixture","使用者原本剪貼簿"));
         for(int n=0;n<12;n++)record(900);
@@ -295,7 +295,7 @@ public class VoicePhone671AndroidTest extends VoiceGuardsAndroidTest {
         ClipboardHelper history=new ClipboardHelper(getInstrumentation().getTargetContext());
         for(int n=1;n<=12;n++)assertTrue(history.getHistory().contains("段"+n));
         assertEquals("段12",cm.getPrimaryClip().getItemAt(0).getText().toString());
-        assertEquals("recovery never inserts into current editor","",editor());
+        assertEquals("recovery never inserts into current editor",initialEditor,editor());
         android.app.NotificationManager nm=(android.app.NotificationManager)getInstrumentation().getTargetContext().getSystemService(Context.NOTIFICATION_SERVICE);
         assertEquals(1,nm.getActiveNotifications().length);
         Thread.sleep(6000);assertEquals(12,recovered.size());
@@ -315,7 +315,7 @@ public class VoicePhone671AndroidTest extends VoiceGuardsAndroidTest {
     }
 
     void officialRejection(boolean modern)throws Exception {
-        rejectAll=true;reject200=modern;openDelay=2500;authDelay=500;startVoice();record(900);
+        rejectAll=true;reject200=modern;openDelay=2500;authDelay=500;startVoice();String initialEditor=editor();record(900);
         VoicePendingQueue q=VoicePendingQueue.getInstance(getInstrumentation().getTargetContext().getFilesDir(),16000);
         String id=lastRecordedId;long until=SystemClock.elapsedRealtime()+30000;
         while(q.attempts(id)<1&&SystemClock.elapsedRealtime()<until)Thread.sleep(100);
@@ -327,7 +327,7 @@ public class VoicePhone671AndroidTest extends VoiceGuardsAndroidTest {
         assertTrue("automatic recovery without user retry",q.delivered(id));
         android.content.ClipboardManager cm=(android.content.ClipboardManager)getInstrumentation().getTargetContext().getSystemService(Context.CLIPBOARD_SERVICE);
         assertEquals("段1",cm.getPrimaryClip().getItemAt(0).getText().toString());
-        assertEquals("old recovery does not edit current field","",editor());
+        assertEquals("old recovery does not edit current field",initialEditor,editor());
         receipt(modern?"official-200-automatic":"official-503-automatic");
     }
     public void testOfficial503Rejection()throws Exception {officialRejection(false);}
@@ -381,11 +381,11 @@ public class VoicePhone671AndroidTest extends VoiceGuardsAndroidTest {
     }
     public void testAutomaticRecoveryAfterProcessRestart()throws Exception {
         String id=new String(java.nio.file.Files.readAllBytes(new File(out,"restart-session").toPath()),StandardCharsets.UTF_8);
-        startVoice();VoicePendingQueue q=VoicePendingQueue.getInstance(getInstrumentation().getTargetContext().getFilesDir(),16000);
+        startVoice();String initialEditor=editor();VoicePendingQueue q=VoicePendingQueue.getInstance(getInstrumentation().getTargetContext().getFilesDir(),16000);
         long until=SystemClock.elapsedRealtime()+30000;while(!q.delivered(id)&&SystemClock.elapsedRealtime()<until)Thread.sleep(100);
         assertTrue("persisted recording recovered on new process",q.delivered(id));
         android.content.ClipboardManager cm=(android.content.ClipboardManager)getInstrumentation().getTargetContext().getSystemService(Context.CLIPBOARD_SERVICE);
-        assertEquals("段1",cm.getPrimaryClip().getItemAt(0).getText().toString());assertEquals("",editor());
+        assertEquals("段1",cm.getPrimaryClip().getItemAt(0).getText().toString());assertEquals(initialEditor,editor());
         Thread.sleep(6000);assertEquals(1,recovered.size());receipt("restart-after");
     }
 
