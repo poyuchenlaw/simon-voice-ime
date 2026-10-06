@@ -105,6 +105,48 @@ public class Z12AndroidTest extends TextRows670AndroidTest {
             while(!shown().isEmpty())tap("⌫");
         }
     }
+    /** Normal sentence input, real Rime menus; catches loss of named single-glyph choices. */
+    public void testNamedCharactersInNormalSentence()throws Exception {
+        start();String input="ㄨㄛˇㄉㄜ˙ㄍㄨㄥ ㄗㄨㄛˋㄏㄠˇㄌㄜ˙";
+        keys(input);screenshot("named-sentence-typed");
+        save("named-sentence-input.json",new JSONObject().put("physical_keys",input).put("state",stateReadback()).toString());
+        assertEquals("ordinary sentence produced by physical Zhuyin taps","我的工作好了",shown());
+        JSONArray receipts=new JSONArray();String[] named={"我","的","了"};int[] positions={0,1,5};
+        for(int n=0;n<named.length;n++){
+            String target=named[n];int position=positions[n];tapBoundary(position==0?0:position+1);
+            awaitCandidateCount(characters,1);String before=shown();JSONArray menu=new JSONArray();int namedIndex=-1,alternative=-1;
+            for(int i=0;i<characters.getChildCount();i++){
+                TextView v=(TextView)characters.getChildAt(i);ZhuyinInputController.TextChoice c=(ZhuyinInputController.TextChoice)v.getTag();
+                menu.put(new JSONObject().put("label",v.getText().toString()).put("kind",c.kind).put("start",c.start).put("end",c.end));
+                if(target.equals(v.getText().toString()))namedIndex=i;
+                else if(alternative<0)alternative=i;
+            }
+            JSONObject receipt=new JSONObject().put("target",target).put("position",position).put("before",before).put("menu",menu);
+            receipts.put(receipt);save("named-sentence-candidates.json",receipts.toString());screenshot("named-"+target+"-menu");
+            assertTrue("named character "+target+" must exist in character row at position "+position,namedIndex>=0);
+            ZhuyinInputController.TextChoice namedChoice=(ZhuyinInputController.TextChoice)characters.getChildAt(namedIndex).getTag();
+            assertEquals("char",namedChoice.kind);assertEquals(position,namedChoice.start);assertEquals(position+1,namedChoice.end);
+            assertTrue("a distinct choice is required to prove actual replacement",alternative>=0);
+            String alt=((TextView)characters.getChildAt(alternative)).getText().toString();
+            tapCharacterIndex(alternative);receipt.put("alternative",alt).put("after_alternative",shown());
+            save("named-sentence-candidates.json",receipts.toString());screenshot("named-"+target+"-alternative");
+            assertEquals("only target glyph changes",before.substring(0,position)+alt+before.substring(position+1),shown());
+            tapBoundary(position==0?0:position+1);awaitCandidateCount(characters,1);namedIndex=-1;
+            for(int i=0;i<characters.getChildCount();i++)if(target.equals(((TextView)characters.getChildAt(i)).getText().toString())){namedIndex=i;break;}
+            screenshot("named-"+target+"-before-pick");
+            assertTrue("named character remains selectable after alternative",namedIndex>=0);
+            tapCharacterIndex(namedIndex);receipt.put("after_named",shown()).put("state",stateReadback());
+            save("named-sentence-candidates.json",receipts.toString());screenshot("named-"+target+"-after-pick");
+            assertEquals("named choice restores exact sentence and preserves prefix/suffix","我的工作好了",shown());
+        }
+        tap("↵");String committed=String.valueOf(await("test_input").getText());
+        save("named-sentence-commit.json",new JSONObject().put("committed",committed).toString());
+        assertEquals("named sentence commits exactly","我的工作好了",committed);
+    }
+    void tapCharacterIndex(int index)throws Exception {
+        revealIndex(characters,charScroll,index);TextView picked=(TextView)characters.getChildAt(index);android.graphics.Rect r=new android.graphics.Rect();
+        inst.runOnMainSync(()->{int[] at=new int[2];picked.getLocationOnScreen(at);r.set(at[0],at[1],at[0]+picked.getWidth(),at[1]+picked.getHeight());});tap(r);Thread.sleep(300);inst.waitForIdleSync();
+    }
     AiSentencePhone phone(){
         try{android.content.Context ctx=row1.getContext();while(!(ctx instanceof SimonIMEService)&&ctx instanceof android.content.ContextWrapper)ctx=((android.content.ContextWrapper)ctx).getBaseContext();
             java.lang.reflect.Field f=SimonIMEService.class.getDeclaredField("sentencePhone");f.setAccessible(true);return (AiSentencePhone)f.get(ctx);
