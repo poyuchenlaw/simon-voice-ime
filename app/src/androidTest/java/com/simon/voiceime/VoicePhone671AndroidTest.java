@@ -318,7 +318,7 @@ public class VoicePhone671AndroidTest extends VoiceGuardsAndroidTest {
         rejectAll=true;reject200=modern;openDelay=2500;authDelay=500;startVoice();String initialEditor=editor();record(900);
         VoicePendingQueue q=VoicePendingQueue.getInstance(getInstrumentation().getTargetContext().getFilesDir(),16000);
         String id=lastRecordedId;long until=SystemClock.elapsedRealtime()+30000;
-        while(q.attempts(id)<1&&SystemClock.elapsedRealtime()<until)Thread.sleep(100);
+        while((q.attempts(id)<1||!q.pendingOldestFirst().contains(id))&&SystemClock.elapsedRealtime()<until)Thread.sleep(100);
         assertFalse(q.needsAttention(id));assertTrue(q.pendingOldestFirst().contains(id));
         assertFalse(q.delivered(id));assertTrue(q.pcmFile(id).exists());
         assertFalse(new ClipboardHelper(getInstrumentation().getTargetContext()).getHistory().contains("未經校正原文"));
