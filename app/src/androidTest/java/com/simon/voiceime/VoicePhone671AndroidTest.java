@@ -143,7 +143,6 @@ public class VoicePhone671AndroidTest extends VoiceGuardsAndroidTest {
         control("after_start_tap",duration);
         long until=SystemClock.elapsedRealtime()+4000;while(SystemClock.elapsedRealtime()<until&&!"⏹".contentEquals(await("com.simon.voiceime:id/btnMic").getText()))Thread.sleep(50);
         assertEquals("⏹",await("com.simon.voiceime:id/btnMic").getText().toString());
-        if(injectRequired) {
         String id=null;
         long diagnosticDeadline=SystemClock.elapsedRealtime()+2000;
         do {
@@ -155,6 +154,7 @@ public class VoicePhone671AndroidTest extends VoiceGuardsAndroidTest {
         Thread.sleep(20);
         } while(SystemClock.elapsedRealtime()<diagnosticDeadline);
         assertNotNull(id);assertFalse("new public tap creates a distinct recording",id.equals(lastRecordedId));lastRecordedId=id;
+        if(injectRequired) {
         java.nio.file.Files.write(new File(out,"inject-request").toPath(),id.getBytes(StandardCharsets.UTF_8));
         until=SystemClock.elapsedRealtime()+6000;
         File injected=new File(out,"injected-"+id);
@@ -235,6 +235,16 @@ public class VoicePhone671AndroidTest extends VoiceGuardsAndroidTest {
         assertTrue("short recording preserved",audio.values().stream().allMatch(p->p.length>=20000));
         assertTrue("injectAudio reached real recorder",peaks.stream().anyMatch(p->p>=800));
         receipt("delayed-open-short-rapid");
+    }
+    public void testExactShortBeforeOpen()throws Exception {
+        openDelay=2500;authDelay=500;injectRequired=false;startVoice();record(900);
+        long until=SystemClock.elapsedRealtime()+20000;
+        while((audio.size()<1||!protocol.contains("1:auth"))&&SystemClock.elapsedRealtime()<until)Thread.sleep(100);
+        assertEquals(1,audio.size());assertTrue(protocol.contains("1:auth"));
+        byte[] pcm=audio.values().iterator().next();
+        assertTrue("actual 0.9s AudioRecord capture, allowing read-block granularity",pcm.length/32>=800&&pcm.length/32<=1100);
+        assertFalse("stopped unauthenticated socket sends no binary or EOS",protocol.contains("1:binary")||protocol.contains("1:finalize"));
+        receipt("exact-short-before-open");
     }
     public void testAudibleEmpty()throws Exception{
         emptyFirst=true;startVoice();record(1600);record(1600);
