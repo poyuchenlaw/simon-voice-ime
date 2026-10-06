@@ -40,6 +40,29 @@ public class VoicePendingQueueTest {
         q.markPendingAsync(id,"late_socket_close",null);q.runIO(()->null);
         assertTrue("late callbacks cannot restart rejected audio",q.needsAttention(id));
     }
+    @Test public void official503ContractStopsAndRetainsPcm()throws Exception {
+        VoicePendingQueue q=queue();String id=session(q,32000);AtomicInteger calls=new AtomicInteger();
+        for(int n=0;n<12;n++)q.uploadOne(id,(pcm,sid,rate)->{calls.incrementAndGet();throw new VoicePendingQueue.UploadFailure(503,"{\"detail\":\"audio_correction_rejected\"}");},(t,start)->fail(),null);
+        assertEquals(3,calls.get());assertTrue(q.needsAttention(id));assertEquals(32000,q.pcmFile(id).length());
+        assertFalse(q.pendingOldestFirst().contains(id));assertTrue(queue().needsAttention(id));
+    }
+    @Test public void official200NeedsAttentionContractStopsWithoutDeliveryOrDeletion()throws Exception {
+        VoicePendingQueue q=queue();String id=session(q,32000);AtomicInteger calls=new AtomicInteger();
+        for(int n=0;n<12;n++)q.uploadOne(id,(pcm,sid,rate)->{calls.incrementAndGet();return new JSONObject(response(pcm,sid,"未經校正原文")).put("ai_corrected",false).put("correction_status","needs_attention").put("correction_reason","audio_correction_rejected").put("retryable",false).toString();},(t,start)->fail("needs_attention text cannot be delivered"),null);
+        assertEquals(1,calls.get());assertTrue(q.needsAttention(id));assertFalse(q.delivered(id));assertEquals(32000,q.pcmFile(id).length());
+        assertFalse(q.pendingOldestFirst().contains(id));assertTrue(queue().needsAttention(id));
+    }
+    @Test public void manualRetryCannotResurrectDiscardedAttentionSession()throws Exception {
+        VoicePendingQueue q=queue();String id=session(q,32000);
+        for(int n=0;n<3;n++)q.uploadOne(id,(pcm,sid,rate)->{throw new VoicePendingQueue.UploadFailure(503,"{\"detail\":\"audio_correction_rejected\"}");},(t,start)->fail(),null);
+        // Hold IO to exercise the synchronous discard marker before asynchronous disk cleanup.
+        java.util.concurrent.CountDownLatch entered=new java.util.concurrent.CountDownLatch(1),release=new java.util.concurrent.CountDownLatch(1);
+        q.execute(()->{entered.countDown();try{release.await();}catch(InterruptedException e){throw new RuntimeException(e);}});
+        assertTrue(entered.await(3,java.util.concurrent.TimeUnit.SECONDS));
+        try {q.discardAsync(id);assertFalse(q.needsAttentionSessions().contains(id));}finally{release.countDown();}
+        q.retryForUser(id);
+        q.runIO(()->null);assertFalse(q.pendingOldestFirst().contains(id));assertFalse(q.pcmFile(id).exists());
+    }
     @Test public void emptyPendingIsDeletedAndNeverUploaded()throws Exception {
         VoicePendingQueue q=queue();String id=q.begin();q.markPending(id,"test");
         assertFalse("empty PCM must leave pending queue",q.pendingOldestFirst().contains(id));

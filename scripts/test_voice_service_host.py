@@ -49,6 +49,10 @@ if ready:parts.append(block(ready.start()))
 start=src.index('String finalText = json.optString("text", "");',src.index('} else if ("final".equals(type))'))
 end=src.index('Log.i(TAG, "[AudioStream] 最終文字:',start)
 parts.append('void wsFinal(JSONObject json,int myGen) {\n'+src[start:end]+'\n}')
+# Execute the real onOpen callback with explicit captured context and a transport fake.
+opened=re.search(r'public void onOpen\(WebSocket ws, Response response\)',src)
+assert opened, 'production onOpen callback missing'
+parts.append(block(opened.start()).replace('public void onOpen(WebSocket ws, Response response)', 'void wsOpen(WebSocket ws, Response response,String custodySessionId,String contextBefore,String contextAfter,int myGen)'))
 # One real recorder-loop iteration, bound to a fake recorder. No production statements rewritten.
 record_start=src.index('                int read;',src.index('while (isRecording)'))
 record_end=src.index('                long voiceNow=',record_start)

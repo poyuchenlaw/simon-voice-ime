@@ -37,7 +37,9 @@ public class VoicePhone671AndroidTest extends VoiceGuardsAndroidTest {
     final List<String> protocol=new CopyOnWriteArrayList<>();
     final List<String> recovered=new CopyOnWriteArrayList<>();
     final List<Integer> peaks=new CopyOnWriteArrayList<>();
-    volatile boolean omitFirst,emptyFirst,rejectTwelfth,closeFirst; boolean injectRequired=true; volatile long openDelay,authDelay;
+    volatile boolean omitFirst,emptyFirst,rejectTwelfth,closeFirst,rejectAll,reject200,closeOnStop;
+    final Map<String,AtomicInteger> rejectionCalls=new ConcurrentHashMap<>();
+    volatile OutputStream firstOutput;volatile long stopCloseDelayMs; boolean injectRequired=true; volatile long openDelay,authDelay;
     @Override protected void setUp()throws Exception{
         super.setUp();
         out=new File(getInstrumentation().getTargetContext().getFilesDir(),"v671-vphone");out.mkdirs();
@@ -78,6 +80,7 @@ public class VoicePhone671AndroidTest extends VoiceGuardsAndroidTest {
             String accept=android.util.Base64.encodeToString(MessageDigest.getInstance("SHA-1").digest((key+"258EAFA5-E914-47DA-95CA-C5AB0DC85B11").getBytes(StandardCharsets.US_ASCII)),android.util.Base64.NO_WRAP);
             OutputStream output=socket.getOutputStream();
             output.write(("HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: "+accept+"\r\n\r\n").getBytes(StandardCharsets.US_ASCII));output.flush();
+            if(seq==1)firstOutput=output;
             String id=null;boolean authenticated=false;ByteArrayOutputStream pcm=new ByteArrayOutputStream();int[] opcode={0};
             for(byte[] b;!stop&&(b=frame(in,opcode))!=null;){
                 if(opcode[0]==8)return;
@@ -113,6 +116,10 @@ public class VoicePhone671AndroidTest extends VoiceGuardsAndroidTest {
             byte[] pcm=Arrays.copyOfRange(body,data,end);audio.put(id,pcm);peaks.add(peak(pcm));
             JSONObject receipt=custody(id,pcm);receipts.put(id,receipt);
             int seq=sessions.computeIfAbsent(id,k->sessions.size()+1);
+            if(rejectAll){
+                rejectionCalls.computeIfAbsent(id,k->new AtomicInteger()).incrementAndGet();
+                respond(socket,reject200?200:503,reject200?new JSONObject().put("text","未經校正原文").put("receipt",receipt).put("ai_corrected",false).put("correction_status","needs_attention").put("correction_reason","audio_correction_rejected").put("retryable",false).toString():"{\"detail\":\"audio_correction_rejected\"}");return;
+            }
             if(rejectTwelfth&&seq==12){respond(socket,503,"{\"detail\":\"audio_correction_rejected\"}");return;}
             recovered.add(id);
             respond(socket,200,new JSONObject().put("text","段"+seq).put("receipt",receipt).toString());
@@ -169,6 +176,11 @@ public class VoicePhone671AndroidTest extends VoiceGuardsAndroidTest {
         control("before_stop",duration);
         assertEquals("recording must still be active before public stop","⏹",await("com.simon.voiceime:id/btnMic").getText().toString());
         tap("com.simon.voiceime:id/btnMic");
+        if(closeOnStop&&firstOutput!=null){
+            long closed=SystemClock.elapsedRealtime();
+            synchronized(firstOutput){firstOutput.write(new byte[]{(byte)0x88,2,3,(byte)0xe8});firstOutput.flush();}
+            stopCloseDelayMs=SystemClock.elapsedRealtime()-closed;
+        }
         control("after_stop_tap",duration);
         until=SystemClock.elapsedRealtime()+6000;
         while(SystemClock.elapsedRealtime()<until&&!"🎤".contentEquals(await("com.simon.voiceime:id/btnMic").getText()))Thread.sleep(50);
@@ -290,6 +302,33 @@ public class VoicePhone671AndroidTest extends VoiceGuardsAndroidTest {
     }
     public void testSingleVoice()throws Exception{
         startVoice();record(1600);waitEditor("段1",10000);receipt("single-voice");
+    }
+
+    void officialRejection(boolean modern)throws Exception {
+        rejectAll=true;reject200=modern;openDelay=2500;authDelay=500;startVoice();record(900);
+        VoicePendingQueue q=VoicePendingQueue.getInstance(getInstrumentation().getTargetContext().getFilesDir(),16000);
+        String id=lastRecordedId;long until=SystemClock.elapsedRealtime()+30000;
+        while(!q.needsAttention(id)&&SystemClock.elapsedRealtime()<until)Thread.sleep(100);
+        assertTrue(q.needsAttention(id));int expected=modern?1:3;
+        assertEquals(expected,q.attempts(id));assertEquals(expected,rejectionCalls.get(id).get());
+        assertFalse(q.delivered(id));assertTrue(q.pcmFile(id).exists());
+        long bytes=q.pcmFile(id).length();assertTrue(bytes>0);assertFalse(q.pendingOldestFirst().contains(id));
+        Thread.sleep(6000);assertEquals(expected,rejectionCalls.get(id).get());assertEquals(bytes,q.pcmFile(id).length());
+        assertFalse(new ClipboardHelper(getInstrumentation().getTargetContext()).getHistory().contains("未經校正原文"));
+        receipt(modern?"official-200-attention":"official-503-rejection");
+    }
+    public void testOfficial503Rejection()throws Exception {officialRejection(false);}
+    public void testOfficial200Attention()throws Exception {officialRejection(true);}
+    public void testCloseMillisecondsAfterStop()throws Exception {
+        closeOnStop=true;startVoice();record(1600);
+        VoicePendingQueue q=VoicePendingQueue.getInstance(getInstrumentation().getTargetContext().getFilesDir(),16000);
+        long until=SystemClock.elapsedRealtime()+20000;
+        while(recovered.isEmpty()&&SystemClock.elapsedRealtime()<until)Thread.sleep(100);
+        assertEquals(1,recovered.size());assertEquals(lastRecordedId,recovered.get(0));
+        assertTrue(new ClipboardHelper(getInstrumentation().getTargetContext()).getHistory().contains("段1"));
+        String diagnostics=shell("cat /data/data/com.simon.voiceime/files/ime-diagnostics.jsonl");
+        assertTrue("actual close callback exercised",diagnostics.contains("ws_closed_without_final")||diagnostics.contains("ws_closing_without_final"));
+        save("close-timing",new JSONObject().put("stop_close_write_ms",stopCloseDelayMs));receipt("close-milliseconds-after-stop");
     }
 
     public void testLowSilence()throws Exception{

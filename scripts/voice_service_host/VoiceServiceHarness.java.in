@@ -67,7 +67,7 @@ public class VoiceServiceHarness {
     void showPendingVoiceQuotaWarning(){}
     void showPendingVoiceNotice(String message){}
     String getServerUrl(){return "http://fake";}
-    String getAuthPassword(){return "host-auth";}
+    String authPassword="host-auth";String getAuthPassword(){return authPassword;}
     void settlePendingCorrectionCapture(){}
     static class TextSnapshot {}
     TextSnapshot getCurrentTextSnapshotSafely(){return new TextSnapshot();}
@@ -136,6 +136,7 @@ public class VoiceServiceHarness {
     static class Builder {FakeHttp h;Builder(FakeHttp h){this.h=h;}Builder readTimeout(long t,TimeUnit u){return this;}Builder callTimeout(long t,TimeUnit u){return this;}OkHttpClient build(){OkHttpClient client=new OkHttpClient();client.requestUrls=h.requestUrls;client.requestMethods=h.requestMethods;client.requestAuths=h.requestAuths;client.requestTimes=h.requestTimes;client.calls=h.calls;client.routes=h.routes;client.code=h.code;client.raw=h.raw;client.entered=h.entered;client.release=h.release;client.callbacks=h.callbacks;return client;}}
     static class okhttp3 {static class FormBody extends RequestBody {static class Builder {Builder add(String k,String v){return this;}FormBody build(){return new FormBody();}}}}
     static class WebSocket {final List<String> messages=new ArrayList<>();boolean send(String message){messages.add(message);return true;}}
+    static class BuildConfig {static final String VERSION_NAME="6.70";}
     static class AppVersion {static String controlMessage(String type){return "{\"type\":\""+type+"\"}";}static JSONObject withAppVersion(JSONObject j){return j;}static MultipartBody.Builder withAppVersion(MultipartBody.Builder b){return b;}static okhttp3.FormBody.Builder withAppVersion(okhttp3.FormBody.Builder b){return b;}}
     static class LocalSTT {String result="rescued words";String recognize(byte[] pcm,int rate){return result;}void flushVad(java.util.function.Consumer<String> c){}void waitForPendingSegments(){}boolean isReady(){return true;}}
     static class EnglishMapper {String apply(String s){return s;}}
@@ -187,6 +188,37 @@ public class VoiceServiceHarness {
         wsFinal(new JSONObject().put("text",""),1);wsFinal(new JSONObject().put("text","第二段"),2);barrier();
         assertEquals(Arrays.asList("第二段"),connection.inserted);assertTrue(recoverySessionByGeneration.containsKey(1));files(first,true);
         httpFallbackFullAudio(1);assertTrue("no concurrent alternate-session upload",httpClient.callbacks.isEmpty());
+    }
+    String unfinishedSession(int gen)throws Exception {String id=voicePendingQueue.begin();voicePendingQueue.append(id,new byte[32000],32000);pendingSessionByGeneration.put(gen,id);return id;}
+    @Test public void closeImmediatelyAfterStopRecoversStillActiveSession()throws Exception {
+        String id=unfinishedSession(1);voicePendingQueue.holdForReceipt(id);activePendingSessionId=id;
+        isRecording=false;recordingFinalizing=false;activeUtteranceGeneration=1;
+        recoverUnfinishedVoiceGeneration(1,"ws_closed_without_final");barrier();
+        assertFalse("recovered generation must no longer block drain",pendingSessionByGeneration.containsKey(1));
+        assertEquals("pending",new JSONObject(new String(java.nio.file.Files.readAllBytes(new File(temp.getRoot(),"voice_pending/"+id+".json").toPath()))).getString("state"));
+        files(id,true);voicePendingQueue.releaseReceiptWait(id);assertTrue(voicePendingQueue.pendingOldestFirst().contains(id));httpClient.code=200;
+        drainPendingVoiceQueue();waitFor(()->!pendingDrainRunning.get());barrier();
+        assertEquals(Arrays.asList("queued words"),clipboardHelper.history);files(id,false);
+    }
+    @Test public void authSendFallbackEscapesPasswordAndPreservesSession()throws Exception {
+        authPassword="quote\" slash\\ newline\n";
+        WebSocket ws=new WebSocket(){int calls;@Override boolean send(String msg){messages.add(msg);return ++calls!=1;}};
+        wsOpen(ws,new Response(101,""),"test-session","before","after",1);
+        assertEquals(2,ws.messages.size());JSONObject fallback=new JSONObject(ws.messages.get(1));
+        assertEquals(authPassword,fallback.getString("password"));assertEquals("auth",fallback.getString("type"));
+        assertEquals("test-session",fallback.getString("client_session_id"));
+    }
+    @Test public void hundredImmediateStopClosesBecomePendingAndEligible()throws Exception {
+        for(int gen=1;gen<=100;gen++) {
+            String id=unfinishedSession(gen);voicePendingQueue.holdForReceipt(id);activePendingSessionId=id;
+            activeUtteranceGeneration=gen;isRecording=false;recordingFinalizing=false;
+            recoverUnfinishedVoiceGeneration(gen,"ws_closed_without_final");barrier();
+            assertFalse(pendingSessionByGeneration.containsKey(gen));assertNull(activePendingSessionId);
+            assertEquals("pending",new JSONObject(new String(java.nio.file.Files.readAllBytes(new File(temp.getRoot(),"voice_pending/"+id+".json").toPath()))).getString("state"));
+        }
+        // Receipt wait is independent: releasing it exposes every recovered recording to drain.
+        for(String id:recoverySessionByGeneration.values())voicePendingQueue.releaseReceiptWait(id);
+        assertEquals(100,voicePendingQueue.pendingOldestFirst().size());
     }
     /* SERVICE_METHODS */
     @Test public void lifecycleCallbacksFlushPendingPcm()throws Exception {

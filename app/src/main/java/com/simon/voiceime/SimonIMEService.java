@@ -1411,10 +1411,13 @@ public class SimonIMEService extends InputMethodService {
         cancelVoiceFinalDeadline(gen);
         String id=pendingSessionByGeneration.get(gen);
         if(id==null)return;
+        if(id.equals(activePendingSessionId))activePendingSessionId=null;
         recoverySessionByGeneration.put(gen,id);
         reserveUtteranceGeneration(gen);
         // Close the ordering slot before recovery; the durable queue owns this ID.
         completeReservedUtteranceWithoutText(gen);
+        // Recovery owns a finalized recording even when the recorder ID has not been cleared yet.
+        markPendingGeneration(gen,reason);
         updateStatus("語音暫未送出，已保留補傳；後續語音可繼續");
         showPendingVoiceNotice("語音已保留，等待補傳");
         recordVoiceEvent("pending_saved",id,voicePendingQueue==null?0:voicePendingQueue.audioMs(id),0,0,reason,"",0,0);
@@ -2714,7 +2717,15 @@ public class SimonIMEService extends InputMethodService {
                     if (!contextAfter.isEmpty()) authMsg.put("context_after", contextAfter);
                     if(!ws.send(authMsg.toString()))throw new IOException("auth send rejected");
                 } catch (Exception e) {
-                    ws.send("{\"app_version\":\"" + BuildConfig.VERSION_NAME + "\",\"type\":\"auth\",\"password\":\"" + (auth != null ? auth : "") + "\"}");
+                    try {
+                        JSONObject fallback=AppVersion.withAppVersion(new JSONObject());
+                        fallback.put("type","auth").put("password",auth!=null?auth:"")
+                            .put("client_session_id",custodySessionId==null?"":custodySessionId);
+                        if(!ws.send(fallback.toString()))throw new IOException("fallback auth send rejected");
+                    } catch(Exception fallbackError) {
+                        Log.e(TAG,"Audio stream auth failed; retaining recording",fallbackError);
+                        mainHandler.post(() -> recoverUnfinishedVoiceGeneration(myGen,"auth_send_failed"));
+                    }
                 }
                 Log.i(TAG, "[AudioStream] WebSocket 已連線，已送出認證" +
                         (contextBefore.isEmpty() ? "" : " (含上下文)"));

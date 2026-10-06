@@ -22,14 +22,17 @@ final class VoicePendingQueue {
             this.status=status;this.code=body!=null&&body.contains("correction_rejected")?"audio_correction_rejected":"http_"+status;
         }
     }
+    static final class NeedsAttentionException extends IOException {
+        NeedsAttentionException(){super("audio_correction_rejected needs_attention retryable=false");}
+    }
     static final int MAX_AUTO_ATTEMPTS=8, MAX_CORRECTION_REJECTIONS=3;
     boolean needsAttention(String id) {Snapshot s=snapshots.get(id);return s!=null&&"needs_attention".equals(s.state);}
     List<String> needsAttentionSessions() {
         List<String> ids=new ArrayList<>();
-        for(Map.Entry<String,Snapshot> e:snapshots.entrySet())if("needs_attention".equals(e.getValue().state))ids.add(e.getKey());
+        for(Map.Entry<String,Snapshot> e:snapshots.entrySet())if(!discarded.contains(e.getKey())&&"needs_attention".equals(e.getValue().state))ids.add(e.getKey());
         return ids;
     }
-    void retryForUser(String id) {runIO(() -> {JSONObject m=metadata.get(id);if(m!=null){m.put("attempts",0).put("correction_rejections",0);update(id,"pending","manual_retry",0);}return null;});}
+    void retryForUser(String id) {runIO(() -> {JSONObject m=metadata.get(id);if(m!=null&&!discarded.contains(id)){m.put("attempts",0).put("correction_rejections",0);update(id,"pending","manual_retry",0);}return null;});}
 
     interface Uploader { String transcribe(File pcm, String sessionId, int sampleRate) throws Exception; }
     interface Delivery {
@@ -108,6 +111,7 @@ final class VoicePendingQueue {
     static String parseSuccessfulResponse(String raw)throws IOException {
         try {
             JSONObject j=new JSONObject(raw==null?"":raw);
+            if("needs_attention".equals(j.optString("correction_status")) && !j.optBoolean("retryable",true))throw new NeedsAttentionException();
             if(j.has("error")&&!j.isNull("error"))throw new IOException("transcription error payload");
             if(!j.has("text")||!(j.get("text") instanceof String))throw new IOException("malformed transcription response");
             return j.getString("text");
@@ -414,7 +418,7 @@ final class VoicePendingQueue {
                 JSONObject m=metadata.get(id);if(m==null||discarded.contains(id))return null;
                 int rejections=m.optInt("correction_rejections")+(rejected?1:0);
                 m.put("correction_rejections",rejections);
-                boolean stop=permanent||attempts(id)>=MAX_AUTO_ATTEMPTS||rejections>=MAX_CORRECTION_REJECTIONS;
+                boolean stop=e instanceof NeedsAttentionException||permanent||attempts(id)>=MAX_AUTO_ATTEMPTS||rejections>=MAX_CORRECTION_REJECTIONS;
                 update(id,stop?"needs_attention":"pending",reason,stop?Long.MAX_VALUE:System.currentTimeMillis()+backoff);
                 return null;
             });
