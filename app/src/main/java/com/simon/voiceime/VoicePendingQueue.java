@@ -15,6 +15,22 @@ final class VoicePendingQueue {
         PayloadTooLargeException() { super("HTTP 413"); }
     }
 
+    static final class UploadFailure extends IOException {
+        final int status; final String code;
+        UploadFailure(int status,String body) {
+            super("HTTP "+status+(body!=null&&body.contains("correction_rejected")?" audio_correction_rejected":""));
+            this.status=status;this.code=body!=null&&body.contains("correction_rejected")?"audio_correction_rejected":"http_"+status;
+        }
+    }
+    static final int MAX_AUTO_ATTEMPTS=8, MAX_CORRECTION_REJECTIONS=3;
+    boolean needsAttention(String id) {Snapshot s=snapshots.get(id);return s!=null&&"needs_attention".equals(s.state);}
+    List<String> needsAttentionSessions() {
+        List<String> ids=new ArrayList<>();
+        for(Map.Entry<String,Snapshot> e:snapshots.entrySet())if("needs_attention".equals(e.getValue().state))ids.add(e.getKey());
+        return ids;
+    }
+    void retryForUser(String id) {runIO(() -> {JSONObject m=metadata.get(id);if(m!=null){m.put("attempts",0).put("correction_rejections",0);update(id,"pending","manual_retry",0);}return null;});}
+
     interface Uploader { String transcribe(File pcm, String sessionId, int sampleRate) throws Exception; }
     interface Delivery {
         void deliver(String text, String startedAt);
@@ -219,9 +235,9 @@ final class VoicePendingQueue {
             finally {if(completion!=null)completion.run();}
         });
     }
-    void markPending(String id,String error) {runIO(() -> {if(!capturing.contains(id))flushFile(id);update(id,"pending",error,0);return null;});}
+    void markPending(String id,String error) {runIO(() -> {if(needsAttention(id))return null;if(!capturing.contains(id))flushFile(id);update(id,"pending",error,0);return null;});}
     void markPendingAsync(String id,String error,Runnable completion) {
-        execute(() -> {try {if(!capturing.contains(id))flushFile(id);update(id,"pending",error,0);}catch(IOException e){throw new IllegalStateException(e);}if(completion!=null)completion.run();});
+        execute(() -> {try {if(!needsAttention(id)){if(!capturing.contains(id))flushFile(id);update(id,"pending",error,0);}}catch(IOException e){throw new IllegalStateException(e);}if(completion!=null)completion.run();});
     }
     void discard(String id) {
         if(id==null)return;discarded.add(id);
@@ -321,7 +337,7 @@ final class VoicePendingQueue {
         entries.sort(Comparator.comparingLong(entry->entry.getValue().start));
         List<String> ids=new ArrayList<>();for(Map.Entry<String,Snapshot> entry:entries)ids.add(entry.getKey());return ids;
     }
-    boolean due(String id,long now) {Snapshot s=snapshots.get(id);return s!=null&&now>=s.next;}
+    boolean due(String id,long now) {Snapshot s=snapshots.get(id);return s!=null&&"pending".equals(s.state)&&now>=s.next;}
     long retryDelayMs(String id) {Snapshot s=snapshots.get(id);return s==null?MIN_BACKOFF_MS:Math.max(0,s.next-System.currentTimeMillis());}
     byte[] pcmBytes(String id)throws IOException {return runIO(() -> {flushFile(id);return Files.readAllBytes(pcm(id).toPath());});}
     File pcmFile(String id) {return pcm(id);} // Path only; callers must use runIO for reading it.
@@ -389,9 +405,20 @@ final class VoicePendingQueue {
             delivery.deliver(VoiceResultText.clean(text),String.valueOf(claim.optLong("started_at")));
             acknowledgeDelivery(id,true);
         } catch(Exception e) {
+            String reason=e.getClass().getSimpleName()+": "+String.valueOf(e.getMessage());
+            boolean rejected=reason.contains("correction_rejected");
+            boolean permanent=e instanceof UploadFailure&&((UploadFailure)e).status>=400
+                    &&((UploadFailure)e).status<500&&((UploadFailure)e).status!=429;
             long backoff=Math.min(MAX_BACKOFF_MS,MIN_BACKOFF_MS*(1L<<Math.min(16,Math.max(0,attempts(id)-1))));
-            runIO(() -> {update(id,"pending",e.getClass().getSimpleName(),System.currentTimeMillis()+backoff);return null;});
-            if(observer!=null)observer.event("pending_failed",id,audioMs(id),audioMs(id)*sampleRate*2/1000,attempts(id),e.getClass().getSimpleName());
+            runIO(() -> {
+                JSONObject m=metadata.get(id);if(m==null||discarded.contains(id))return null;
+                int rejections=m.optInt("correction_rejections")+(rejected?1:0);
+                m.put("correction_rejections",rejections);
+                boolean stop=permanent||attempts(id)>=MAX_AUTO_ATTEMPTS||rejections>=MAX_CORRECTION_REJECTIONS;
+                update(id,stop?"needs_attention":"pending",reason,stop?Long.MAX_VALUE:System.currentTimeMillis()+backoff);
+                return null;
+            });
+            if(observer!=null)observer.event("pending_failed",id,audioMs(id),audioMs(id)*sampleRate*2/1000,attempts(id),reason);
         }
     }
     /** Parent PCM is retained until every ordered range has a durable, matching receipt. */
@@ -558,7 +585,7 @@ final class VoicePendingQueue {
         }
         for(Map.Entry<String,JSONObject> entry:metadata.entrySet()) {
             JSONObject m=entry.getValue();
-            if(!pcm(entry.getKey()).exists()&&(m.has("audio_receipt")||m.has("chunk_receipts"))&&((!m.optBoolean("delivered")&&!m.optBoolean("clipboard_written"))||m.optBoolean("server_transcript_pending"))) {
+            if(!"needs_attention".equals(m.optString("state"))&&!pcm(entry.getKey()).exists()&&(m.has("audio_receipt")||m.has("chunk_receipts"))&&((!m.optBoolean("delivered")&&!m.optBoolean("clipboard_written"))||m.optBoolean("server_transcript_pending"))) {
                 try {update(entry.getKey(),"pending","recovered_text_outbox",m.optLong("next_attempt_at"));}catch(IOException e){throw new IllegalStateException(e);}
             }
         }

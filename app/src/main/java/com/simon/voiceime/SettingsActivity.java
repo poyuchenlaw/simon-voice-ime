@@ -87,6 +87,19 @@ public class SettingsActivity extends Activity {
 
         EditText voiceCap = findViewById(R.id.voiceSessionCapMinutes);
         voiceCap.setText(String.valueOf(prefs.getInt("voice_session_cap_minutes",VoiceSessionGuard.DEFAULT_CAP_MINUTES)));
+        android.widget.Button retryVoice=new android.widget.Button(this);
+        retryVoice.setText("重試需處理的語音");
+        android.view.ViewGroup voiceSettings=(android.view.ViewGroup)voiceCap.getParent();
+        voiceSettings.addView(retryVoice,voiceSettings.indexOfChild(voiceCap)+1);
+        retryVoice.setOnClickListener(v -> {
+            VoicePendingQueue q=VoicePendingQueue.getInstance(getFilesDir(),16000);
+            q.execute(() -> {
+                java.util.List<String> ids=q.needsAttentionSessions();
+                for(String id:ids)q.retryForUser(id);
+                runOnUiThread(() -> Toast.makeText(this,ids.isEmpty()?"沒有需處理語音":"已安排重試；返回鍵盤即可補傳",Toast.LENGTH_LONG).show());
+            });
+        });
+
 
         // v6.20: 複製自動記詞開關（預設開；即時持久化）
         CheckBox checkAutoVocab = findViewById(R.id.checkAutoVocab);

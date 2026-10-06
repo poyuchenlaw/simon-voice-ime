@@ -19,7 +19,7 @@ def block(start,text=None):
             if level==0:return text[start:m.end()]
     raise ValueError('unclosed block')
 names=['fetchServerArchiveText','commitFinalText','pasteClipboardText','copyToSystemClipboard','reserveUtteranceGeneration','completeReservedUtteranceWithText','completeReservedUtteranceWithoutText','collectReadyUtteranceCommitsLocked','handleWTIResponse','sendFullAudioHttpFallback','finalizeStreamingSession','drainPendingVoiceQueue','schedulePendingDrain','markPendingGeneration','handleAiCommandResponse','sendAiCommand','sendAiCommandAudio','commitReadyUtterance','consumeSilentResult','voiceAudioDurationMs','keepPendingModeResult','showNoVoiceStatus','deliverVoiceResult','isDiscardedVoiceGeneration','persistRecordingRead','finishDurableRecording','discardProtectedRecording','readAndPersistRecordingAudio','pcmWavBody','durableOrMemoryAudioBody','rescueReplaceAudio']
-names.extend(['receiveAudioReceipt','sendAudioEndOfStream','finishWhenRecorderStopped','sendToWTI','notePendingGeneration','httpFallbackFullAudio','runOfflineFullAudioFallback','sendTextProcess','completeAppendProcessTextFailureWithOfflineFallback'])
+names.extend(['cancelVoiceFinalDeadline','armVoiceFinalDeadline','recoverUnfinishedVoiceGeneration','recoverLateVoiceFinal','receiveAudioReceipt','sendAudioEndOfStream','finishWhenRecorderStopped','sendToWTI','notePendingGeneration','httpFallbackFullAudio','runOfflineFullAudioFallback','sendTextProcess','completeAppendProcessTextFailureWithOfflineFallback'])
 parts=[]
 counts={}
 # These production APIs do not exist in the work order's requested old revision.

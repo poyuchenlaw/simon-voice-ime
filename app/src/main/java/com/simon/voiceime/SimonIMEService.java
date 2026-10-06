@@ -351,7 +351,7 @@ public class SimonIMEService extends InputMethodService {
         String auth=getAuthPassword();if(auth!=null&&!auth.isEmpty())rb.addHeader("Authorization","Bearer "+auth);
         OkHttpClient client=httpClient.newBuilder().readTimeout(150,TimeUnit.SECONDS).callTimeout(160,TimeUnit.SECONDS).build();
         try(Response response=client.newCall(rb.build()).execute()) {
-            if(!response.isSuccessful())throw new IOException("stored transcription HTTP "+response.code());
+            if(!response.isSuccessful())throw new VoicePendingQueue.UploadFailure(response.code(),response.body()==null?"":response.body().string());
             String raw=response.body()==null?"":response.body().string();
             VoicePendingQueue.parseSuccessfulResponse(raw);
             return raw;
@@ -413,7 +413,7 @@ public class SimonIMEService extends InputMethodService {
                             throw new IOException("audio custody conflict");
                         }
                         if(response.code()==413)throw new VoicePendingQueue.PayloadTooLargeException();
-                        if(!response.isSuccessful())throw new IOException("HTTP "+response.code());
+                        if(!response.isSuccessful())throw new VoicePendingQueue.UploadFailure(response.code(),response.body()==null?"":response.body().string());
                     String raw=response.body()==null?"":response.body().string();
                     VoicePendingQueue.parseSuccessfulResponse(raw);
                     return raw;
@@ -425,10 +425,8 @@ public class SimonIMEService extends InputMethodService {
                   }
                   @Override public void deliver(String text,String startedAt) {
                     if(!VoiceResultText.isSilence(text)){
-                        ClipboardManager cm=(ClipboardManager)getSystemService(CLIPBOARD_SERVICE);
-                        if(cm==null)throw new IllegalStateException("clipboard unavailable");
-                        cm.setPrimaryClip(ClipData.newPlainText("simon-ime",text));
-                        if(clipboardHelper!=null)clipboardHelper.addToHistory(text);
+                        if(clipboardHelper==null)throw new IllegalStateException("clipboard history unavailable");
+                        clipboardHelper.addToHistory(text);
                         showPendingVoiceNotification(startedAt);
                     }
                     recordVoiceEvent("pending_uploaded",id,queue.audioMs(id),text==null?0:text.length(),0,"","clipboard",queue.totalBytes(),queue.attempts(id));
@@ -437,7 +435,10 @@ public class SimonIMEService extends InputMethodService {
                     if("silence".equals(phase)&&!queue.backupFailed(sessionId)) { mainHandler.post(this::showNoVoiceStatus); }
                     if("pending_failed".equals(phase)){
                         recordVoiceEvent(phase,sessionId,audioMs,0,0,error,"",bytes,attempts);
-
+                        if(queue.needsAttention(sessionId))mainHandler.post(() -> {
+                            updateStatus("語音補傳需處理，錄音仍保留");
+                            showPendingVoiceNotice("語音補傳需處理");
+                        });
                     }
                 });
                 if(queue.totalBytes()>500L*1024*1024)showPendingVoiceQuotaWarning();
@@ -486,9 +487,21 @@ public class SimonIMEService extends InputMethodService {
             String time=startedAt;
             try{time=new java.text.SimpleDateFormat("HH:mm",java.util.Locale.getDefault()).format(new java.util.Date(Long.parseLong(startedAt)));}catch(Exception ignored){}
             Notification.Builder b=android.os.Build.VERSION.SDK_INT>=26?new Notification.Builder(this,channel):new Notification.Builder(this);
-            nm.notify((int)(System.currentTimeMillis()&0x7fffffff),b.setSmallIcon(android.R.drawable.ic_btn_speak_now)
-                    .setContentTitle("上一段語音已轉成文字，已放剪貼簿").setContentText(time).setAutoCancel(true).build());
+            nm.notify(671,b.setOnlyAlertOnce(true).setSmallIcon(android.R.drawable.ic_btn_speak_now)
+                    .setContentTitle("已恢復 " + recoveredVoiceCount.incrementAndGet() + " 段").setContentText("開啟鍵盤 📋 歷史，點選文字取回（"+time+"）").setAutoCancel(true).build());
         }catch(Exception e){Log.w(TAG,"pending voice notification failed",e);}
+    }
+    private void showPendingVoiceNotice(String message) {
+        try {
+            NotificationManager nm=(NotificationManager)getSystemService(NOTIFICATION_SERVICE);if(nm==null)return;
+            String channel="voice_pending";
+            nm.createNotificationChannel(new NotificationChannel(channel,"語音補傳",NotificationManager.IMPORTANCE_DEFAULT));
+            nm.notify(671,new Notification.Builder(this,channel).setSmallIcon(android.R.drawable.ic_btn_speak_now)
+                    .setOnlyAlertOnce(true).setContentTitle(recoveredVoiceCount.get()>0?"已恢復 "+recoveredVoiceCount.get()+" 段；"+message:message)
+                    .setContentIntent(android.app.PendingIntent.getActivity(this,671,new Intent(this,SettingsActivity.class),
+                            android.app.PendingIntent.FLAG_UPDATE_CURRENT|android.app.PendingIntent.FLAG_IMMUTABLE))
+                    .setContentText("錄音仍保留；點選開啟設定，可手動重試").build());
+        }catch(Exception e){Log.w(TAG,"pending voice notice failed",e);}
     }
     private void showPendingVoiceQuotaWarning(){try{NotificationManager nm=(NotificationManager)getSystemService(NOTIFICATION_SERVICE);if(nm==null)return;
         if(!pendingQuotaWarningShown.compareAndSet(false,true))return;
@@ -1217,7 +1230,14 @@ public class SimonIMEService extends InputMethodService {
         if(isDiscardedVoiceGeneration(ready.generation))return;
         deliverVoiceResult(ready.generation,ready.text,() -> {
             commitFinalText(VoiceResultText.clean(ready.text));
-            updateStatus("完成: " + truncate(VoiceResultText.clean(ready.text),20));
+            if("commit".equals(lastCommitMethod))updateStatus("完成: " + truncate(VoiceResultText.clean(ready.text),20));
+            else if(lastCommitClipboardWritten) {
+                updateStatus("文字已保留剪貼簿，可長按貼上");
+                showPendingVoiceNotice("文字已保留剪貼簿，可長按貼上");
+            } else {
+                updateStatus("文字未送出，已保留補傳");
+                showPendingVoiceNotice("文字未送出，已保留補傳");
+            }
         });
     }
 
@@ -1268,6 +1288,8 @@ public class SimonIMEService extends InputMethodService {
     }
     private void deliverVoiceResult(int gen,String text,boolean deleteOnly,boolean append,Runnable delivery) {
         if(isDiscardedVoiceGeneration(gen)||deliveredVoiceGenerations.contains(gen))return;
+        if(recoverLateVoiceFinal(gen,text))return;
+        cancelVoiceFinalDeadline(gen);
         if(!deleteOnly&&consumeSilentResult(gen,text,append))return;
         final String id=pendingSessionByGeneration.get(gen);
         final boolean full=serverFullAudioGenerations.contains(gen)||serverFinalGenerations.contains(gen);
@@ -1306,6 +1328,14 @@ public class SimonIMEService extends InputMethodService {
     }
 
     private void persistRecordingRead(String id,byte[] buffer,int read) {
+        for(int i=0;i+1<read;i+=2) {
+            int sample=(short)((buffer[i]&255)|(buffer[i+1]<<8));
+            if(Math.abs(sample)>=800) {
+                for(java.util.Map.Entry<Integer,String> e:pendingSessionByGeneration.entrySet())
+                    if(e.getValue().equals(id))audibleVoiceGenerations.add(e.getKey());
+                break;
+            }
+        }
         if(voicePendingQueue!=null&&id!=null&&read>0&&!discardedProtectedSessions.contains(id))
             voicePendingQueue.appendAsync(id,buffer,read);
     }
@@ -1352,7 +1382,59 @@ public class SimonIMEService extends InputMethodService {
         });
     }
 
+    // A stopped recording must not hold the ordered commit queue indefinitely.
+    private static final long VOICE_FINAL_DEADLINE_MS = 35_000L;
+    private final java.util.concurrent.ConcurrentHashMap<Integer,Runnable> voiceFinalDeadlines = new java.util.concurrent.ConcurrentHashMap<>();
+    private final java.util.concurrent.ConcurrentHashMap<Integer,String> recoverySessionByGeneration = new java.util.concurrent.ConcurrentHashMap<>();
+    private final java.util.Set<Integer> audibleVoiceGenerations = java.util.concurrent.ConcurrentHashMap.newKeySet();
+    private final java.util.concurrent.atomic.AtomicInteger recoveredVoiceCount = new java.util.concurrent.atomic.AtomicInteger();
+    private volatile int audioStreamGeneration;
+
+    private void cancelVoiceFinalDeadline(int gen) {
+        Runnable callback=voiceFinalDeadlines.remove(gen);
+        if(callback!=null)mainHandler.removeCallbacks(callback);
+    }
+
+    private void armVoiceFinalDeadline(int gen) {
+        if(gen<=0||isWatchService())return;
+        cancelVoiceFinalDeadline(gen);
+        Runnable callback=() -> recoverUnfinishedVoiceGeneration(gen,"final_deadline");
+        voiceFinalDeadlines.put(gen,callback);
+        mainHandler.postDelayed(callback,VOICE_FINAL_DEADLINE_MS);
+    }
+
+    private void recoverUnfinishedVoiceGeneration(int gen,String reason) {
+        if(isDiscardedVoiceGeneration(gen)||deliveredVoiceGenerations.contains(gen)||acceptedTextLengths.containsKey(gen))return;
+        if((isRecording||recordingFinalizing)&&gen==activeUtteranceGeneration){
+            afterRecordingFinalization.add(() -> recoverUnfinishedVoiceGeneration(gen,reason));return;
+        }
+        cancelVoiceFinalDeadline(gen);
+        String id=pendingSessionByGeneration.get(gen);
+        if(id==null)return;
+        recoverySessionByGeneration.put(gen,id);
+        reserveUtteranceGeneration(gen);
+        // Close the ordering slot before recovery; the durable queue owns this ID.
+        completeReservedUtteranceWithoutText(gen);
+        updateStatus("語音暫未送出，已保留補傳；後續語音可繼續");
+        showPendingVoiceNotice("語音已保留，等待補傳");
+        recordVoiceEvent("pending_saved",id,voicePendingQueue==null?0:voicePendingQueue.audioMs(id),0,0,reason,"",0,0);
+    }
+
+    private boolean recoverLateVoiceFinal(int gen,String text) {
+        String id=recoverySessionByGeneration.get(gen);
+        if(id==null)return false;
+        if(voicePendingQueue!=null&&!VoiceResultText.isSilence(text)&&!isDiscardedVoiceGeneration(gen)) {
+            voicePendingQueue.execute(() -> {
+                if(!voicePendingQueue.delivered(id))voicePendingQueue.persistResult(id,text,true,true);
+                drainPendingVoiceQueue();
+            });
+        }
+        return true;
+    }
+
     private void sendAudioEndOfStream(WebSocket ws,String id) {
+        for(java.util.Map.Entry<Integer,String> e:pendingSessionByGeneration.entrySet())
+            if(e.getValue().equals(id))mainHandler.post(() -> armVoiceFinalDeadline(e.getKey()));
         if(voicePendingQueue==null||id==null) {ws.send(AppVersion.controlMessage("finalize"));return;}
         voicePendingQueue.execute(() -> {
             try {
@@ -1388,6 +1470,8 @@ public class SimonIMEService extends InputMethodService {
             return;
         }
 
+        cancelVoiceFinalDeadline(gen);
+        if(recoverLateVoiceFinal(gen,text))return;
         if(consumeSilentResult(gen,text))return;
         final String cleanedText=VoiceResultText.clean(text);
         List<ReadyUtterance> readyTexts = new ArrayList<>();
@@ -2614,6 +2698,8 @@ public class SimonIMEService extends InputMethodService {
         String wsUrl = serverUrl.replace("http://", "ws://").replace("https://", "wss://") + "/ws/stream-audio";
 
         Request wsReq = new Request.Builder().url(AppVersion.withAppVersion(wsUrl)).build();
+        audioStreamGeneration=myGen;
+        audioStreamActive=false;
         audioStreamWs = httpClient.newWebSocket(wsReq, new WebSocketListener() {
             @Override
             public void onOpen(WebSocket ws, Response response) {
@@ -2626,12 +2712,9 @@ public class SimonIMEService extends InputMethodService {
                     authMsg.put("client_session_id",custodySessionId==null?"":custodySessionId);
                     if (!contextBefore.isEmpty()) authMsg.put("context_before", contextBefore);
                     if (!contextAfter.isEmpty()) authMsg.put("context_after", contextAfter);
-                    ws.send(authMsg.toString());
+                    if(!ws.send(authMsg.toString()))throw new IOException("auth send rejected");
                 } catch (Exception e) {
                     ws.send("{\"app_version\":\"" + BuildConfig.VERSION_NAME + "\",\"type\":\"auth\",\"password\":\"" + (auth != null ? auth : "") + "\"}");
-                }
-                if (myGen == utteranceGeneration.get()) {
-                    audioStreamActive = true;
                 }
                 Log.i(TAG, "[AudioStream] WebSocket 已連線，已送出認證" +
                         (contextBefore.isEmpty() ? "" : " (含上下文)"));
@@ -2646,6 +2729,9 @@ public class SimonIMEService extends InputMethodService {
 
                     if ("auth_ok".equals(type)) {
                         Log.i(TAG, "[AudioStream] 認證成功");
+                        if(myGen==audioStreamGeneration&&myGen==activeUtteranceGeneration&&isRecording
+                                &&!recoverySessionByGeneration.containsKey(myGen))audioStreamActive=true;
+                        else ws.close(1000,"recording preserved for recovery");
 
                     } else if ("auth_fail".equals(type)) {
                         Log.e(TAG, "[AudioStream] 認證失敗");
@@ -2656,12 +2742,12 @@ public class SimonIMEService extends InputMethodService {
                         }
                         mainHandler.post(() -> {
                             if (myGen != utteranceGeneration.get()) {
-                                httpFallbackFullAudio(myGen);
+                                recoverUnfinishedVoiceGeneration(myGen,"ws_unfinished");
                             } else if (isRecording) {
                                 updateStatus("🔴 錄音中…（連線中斷，本地暫存）");
                             } else {
                                 updateStatus("整理中…");
-                                httpFallbackFullAudio(myGen);
+                                recoverUnfinishedVoiceGeneration(myGen,"ws_unfinished");
                             }
                         });
 
@@ -2699,6 +2785,11 @@ public class SimonIMEService extends InputMethodService {
                         String sessionId=pendingSessionByGeneration.get(myGen);
                         recordVoiceEvent("final",sessionId,sessionId==null?0:voicePendingQueue.audioMs(sessionId),finalText.length(),0,"","",0,0);
                         mainHandler.post(() -> {
+                            cancelVoiceFinalDeadline(myGen);
+                            if(recoverLateVoiceFinal(myGen,finalText))return;
+                            if(VoiceResultText.isSilence(finalText)&&audibleVoiceGenerations.contains(myGen)) {
+                                recoverUnfinishedVoiceGeneration(myGen,"audible_empty_final");return;
+                            }
                             if(consumeSilentResult(myGen,finalText))return;
                             serverFinalGenerations.add(myGen);
                             // Main-thread snapshot cannot mix a new recording's preview into this generation.
@@ -2732,7 +2823,7 @@ public class SimonIMEService extends InputMethodService {
                                 //       而非把無標點串流文字倒進輸入框。
                                 Log.w(TAG, "[AudioStream] final 為空，改用整段音訊 HTTP fallback");
                                 updateStatus("整理中…");
-                                httpFallbackFullAudio(myGen);
+                                recoverUnfinishedVoiceGeneration(myGen,"ws_unfinished");
                             }
                             if (rescue) {
                                 clipboardHelper.addToHistory(candidate);
@@ -2753,12 +2844,12 @@ public class SimonIMEService extends InputMethodService {
                         if(sessionId!=null&&voicePendingQueue!=null){voicePendingQueue.execute(() -> voicePendingQueue.markPending(sessionId,"ws_error:"+msg));recordVoiceEvent("ws_close",sessionId,voicePendingQueue.audioMs(sessionId),0,0,msg,"",voicePendingQueue.totalBytes(),0);}
                         mainHandler.post(() -> {
                             if (myGen != utteranceGeneration.get()) {
-                                httpFallbackFullAudio(myGen);
+                                recoverUnfinishedVoiceGeneration(myGen,"ws_unfinished");
                             } else if (isRecording) {
                                 updateStatus("🔴 錄音中…（連線中斷，本地暫存）");
                             } else {
                                 updateStatus("整理中…");
-                                httpFallbackFullAudio(myGen);
+                                recoverUnfinishedVoiceGeneration(myGen,"ws_unfinished");
                             }
                         });
                     }
@@ -2787,20 +2878,27 @@ public class SimonIMEService extends InputMethodService {
                 //   - 已停止（finalize 階段才斷）：立刻用整段保留音訊重轉錄（有標點、走校正）。
                 mainHandler.post(() -> {
                     if (myGen != utteranceGeneration.get()) {
-                        httpFallbackFullAudio(myGen);
+                        recoverUnfinishedVoiceGeneration(myGen,"ws_unfinished");
                     } else if (isRecording) {
                         updateStatus("🔴 錄音中…（連線中斷，本地暫存）");
                     } else {
                         updateStatus("整理中…");
-                        httpFallbackFullAudio(myGen);
+                        recoverUnfinishedVoiceGeneration(myGen,"ws_unfinished");
                     }
                 });
+            }
+
+            @Override
+            public void onClosing(WebSocket ws,int code,String reason) {
+                mainHandler.post(() -> recoverUnfinishedVoiceGeneration(myGen,"ws_closing_without_final"));
+                ws.close(code,reason);
             }
 
             @Override
             public void onClosed(WebSocket ws, int code, String reason) {
                 if (guardStoppedGenerations.contains(myGen)) return;
                 Log.i(TAG, "[AudioStream] WebSocket 已關閉: " + code + " " + reason);
+                mainHandler.post(() -> recoverUnfinishedVoiceGeneration(myGen,"ws_closed_without_final"));
                 String id=pendingSessionByGeneration.get(myGen);
                 if(id!=null&&voicePendingQueue!=null){recordVoiceEvent("ws_close",id,voicePendingQueue.audioMs(id),0,code,reason,"",voicePendingQueue.totalBytes(),0);
                     if(code!=1000){voicePendingQueue.execute(() -> voicePendingQueue.markPending(id,"ws_close:"+code));if(!isRecording)drainPendingVoiceQueue();}}
@@ -3017,10 +3115,19 @@ public class SimonIMEService extends InputMethodService {
         //       （有標點、走伺服器校正），而非 pcmData 殘片（只剩斷線後那段）。
         if (currentMode == Mode.APPEND && streamFailed) {
             streamedChunks.clear();
-            httpFallbackFullAudio(myGen);
+            recoverUnfinishedVoiceGeneration(myGen,"stream_failed_at_stop");
             return;
         }
 
+        if(currentMode==Mode.APPEND) {
+            armVoiceFinalDeadline(myGen);
+            if(!audioStreamActive||audioStreamGeneration!=myGen) {
+                audioStreamWs=null;audioStreamActive=false;
+                recoverUnfinishedVoiceGeneration(myGen,"stopped_before_auth_ok");
+                // onOpen still sends auth first; auth_ok closes a stopped generation.
+                return;
+            }
+        }
         // === v4.4: 音訊串流收尾必須在 "太短" 檢查之前 ===
         // 修正 bug: pcmBuffer 在每次送 WS chunk 時 reset()，所以停止錄音時殘餘可能 < 3200
         // 但此時 WS 已經送了 N 個 chunks，不能 cancel()，必須 finalize
@@ -4935,9 +5042,11 @@ public class SimonIMEService extends InputMethodService {
         if((isRecording||recordingFinalizing)&&gen==activeUtteranceGeneration) {
             afterRecordingFinalization.add(() -> httpFallbackFullAudio(gen));return;
         }
+        if(recoverySessionByGeneration.containsKey(gen))return;
         // v6.25: 終局守衛——同一 generation 只允許一次 commit/fallback，擋 WS 晚到回呼造成的重複提交
         if(guardStoppedGenerations.contains(gen)||isDiscardedVoiceGeneration(gen)||deliveredVoiceGenerations.contains(gen)||serverFinalGenerations.contains(gen)
                 ||acceptedTextLengths.containsKey(gen)||!fullAudioRequests.add(gen))return;
+        armVoiceFinalDeadline(gen);
         reserveUtteranceGeneration(gen);
         byte[] pcm = getFullPcmForGeneration(gen);
         String id=pendingSessionByGeneration.get(gen);
@@ -5715,6 +5824,7 @@ public class SimonIMEService extends InputMethodService {
     public void onStartInputView(EditorInfo info, boolean restarting) {
         super.onStartInputView(info, restarting);
         if (isWatchService()) return;
+        drainPendingVoiceQueue();
         configureTextRows();
         if(textLayoutSelected()&&zhuyinInput!=null&&!protectedInputField&&!zhuyinInput.previewText().isEmpty()){reclaimTextComposition(info);applyZhuyinState(zhuyinInput.state());}
         warmUpConnection();
@@ -5803,6 +5913,10 @@ public class SimonIMEService extends InputMethodService {
             audioStreamWs = null;
             audioStreamActive = false;
         }
+        for(Integer gen:new java.util.ArrayList<>(pendingSessionByGeneration.keySet()))
+            recoverUnfinishedVoiceGeneration(gen,"ime_destroy");
+        for(Runnable callback:voiceFinalDeadlines.values())mainHandler.removeCallbacks(callback);
+        voiceFinalDeadlines.clear();
         if (mainHandler != null) {
             mainHandler.removeCallbacks(mPendingCorrectionCaptureRunnable);
             mainHandler.removeCallbacks(connectionWarmUpRunnable);

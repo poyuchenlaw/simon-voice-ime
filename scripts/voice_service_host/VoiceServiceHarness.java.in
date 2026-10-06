@@ -10,6 +10,10 @@ import static org.junit.Assert.*;
 
 public class VoiceServiceHarness {
     @Rule public TemporaryFolder temp=new TemporaryFolder();
+    static final long VOICE_FINAL_DEADLINE_MS=35000;
+    final ConcurrentHashMap<Integer,Runnable> voiceFinalDeadlines=new ConcurrentHashMap<>();
+    final ConcurrentHashMap<Integer,String> recoverySessionByGeneration=new ConcurrentHashMap<>();
+    final Set<Integer> audibleVoiceGenerations=ConcurrentHashMap.newKeySet();
     VoicePendingQueue voicePendingQueue;
     final AtomicBoolean pendingDrainRunning=new AtomicBoolean();
     final ScheduledExecutorService pendingVoiceExecutor=Executors.newSingleThreadScheduledExecutor(r->{Thread t=new Thread(r,"host-uploader");t.setDaemon(true);return t;});
@@ -61,6 +65,7 @@ public class VoiceServiceHarness {
     void recordVoiceEvent(String p,String id,long ms,int chars,int code,String reason,String method,long bytes,int attempts){}
     void showPendingVoiceNotification(String start){notifications++;}
     void showPendingVoiceQuotaWarning(){}
+    void showPendingVoiceNotice(String message){}
     String getServerUrl(){return "http://fake";}
     String getAuthPassword(){return "host-auth";}
     void settlePendingCorrectionCapture(){}
@@ -94,7 +99,7 @@ public class VoiceServiceHarness {
     static class ClipData {final String text;ClipData(String t){text=t;}static ClipData newPlainText(String label,String t){return new ClipData(t);}}
     static void assertNoSilenceToken(String text){assertFalse("silence token escaped into a user text sink",java.util.regex.Pattern.compile("(?iu)[<\\[({〈《【（＜]\\s*s\\s*i\\s*l\\s*[>\\])}〉》】）＞]").matcher(text).find());}
     static class ClipboardManager {boolean fail;final List<String> values=new CopyOnWriteArrayList<>();void setPrimaryClip(ClipData c){assertNoSilenceToken(c.text);if(fail)throw new IllegalStateException("clipboard unavailable");values.add(c.text);}}
-    static class ClipboardHelper {final List<String> history=new CopyOnWriteArrayList<>();void addToHistory(String s){history.add(s);}}
+    static class ClipboardHelper {final List<String> history=new CopyOnWriteArrayList<>();void addToHistory(String s){history.remove(s);history.add(s);}}
     interface InputConnection {boolean commitText(String t,int n);boolean performContextMenuAction(int n);boolean deleteSurroundingText(int b,int a);CharSequence getTextBeforeCursor(int n,int f);CharSequence getTextAfterCursor(int n,int f);}
     static class FakeConnection implements InputConnection {
         boolean fail,pasteFails;int deletes,pastes;final List<String> inserted=new CopyOnWriteArrayList<>();
@@ -161,6 +166,28 @@ public class VoiceServiceHarness {
     JSONObject identity(String id)throws Exception {return voicePendingQueue.recordingIdentity(id);}
     int totalBytesRead; final int SKIP_INITIAL_BYTES=12800;
     final ByteArrayOutputStream pcmBuffer=new ByteArrayOutputStream();
+    @Test public void missingFirstFinalHasBoundedRelease()throws Exception {
+        String first=session(1);voicePendingQueue.holdForReceipt(first);
+        sendAudioEndOfStream(new WebSocket(),first);barrier();
+        for(int gen=2;gen<=4;gen++){String id=session(gen);voicePendingQueue.holdForReceipt(id);wsFinal(new JSONObject().put("text","段"+gen),gen);}
+        barrier();assertTrue(connection.inserted.isEmpty());
+        for(Runnable r:new ArrayList<>(mainHandler.delayed))r.run();barrier();
+        assertEquals(Arrays.asList("段2","段3","段4"),connection.inserted);
+        assertFalse(pendingSessionByGeneration.containsKey(1));files(first,true);
+    }
+    @Test public void fiveNormalFinalsStayOrderedAndExactlyOnce()throws Exception {
+        for(int gen=1;gen<=5;gen++)voicePendingQueue.holdForReceipt(session(gen));
+        for(int gen:new int[]{5,3,1,4,2})wsFinal(new JSONObject().put("text","段"+gen),gen);
+        barrier();assertEquals(Arrays.asList("段1","段2","段3","段4","段5"),connection.inserted);
+        wsFinal(new JSONObject().put("text","段1"),1);barrier();assertEquals(5,connection.inserted.size());
+    }
+    @Test public void audibleEmptyFinalRecoversButDoesNotHoldLaterFinal()throws Exception {
+        String first=session(1);voicePendingQueue.holdForReceipt(first);audibleVoiceGenerations.add(1);
+        String second=session(2);voicePendingQueue.holdForReceipt(second);
+        wsFinal(new JSONObject().put("text",""),1);wsFinal(new JSONObject().put("text","第二段"),2);barrier();
+        assertEquals(Arrays.asList("第二段"),connection.inserted);assertTrue(recoverySessionByGeneration.containsKey(1));files(first,true);
+        httpFallbackFullAudio(1);assertTrue("no concurrent alternate-session upload",httpClient.callbacks.isEmpty());
+    }
     /* SERVICE_METHODS */
     @Test public void lifecycleCallbacksFlushPendingPcm()throws Exception {
         for(int callback=0;callback<4;callback++) {
@@ -246,7 +273,7 @@ public class VoiceServiceHarness {
     @Test public void twoDrainTriggersProduceOneUpload()throws Exception {
         String id=session(1);pendingSessionByGeneration.remove(1);httpClient.entered=new CountDownLatch(1);httpClient.release=new CountDownLatch(1);
         httpClient.code=200;drainPendingVoiceQueue();assertTrue(httpClient.entered.await(3,TimeUnit.SECONDS));drainPendingVoiceQueue();httpClient.release.countDown();waitFor(()->!new File(temp.getRoot(),"voice_pending/"+id+".pcm").exists());waitFor(()->!pendingDrainRunning.get());barrier();
-        files(id,false);assertEquals(1,httpClient.calls.get());assertEquals(1,notifications);assertEquals(Arrays.asList("queued words"),clipboard.values);
+        files(id,false);assertEquals(1,httpClient.calls.get());assertEquals(1,notifications);assertEquals(Arrays.asList("queued words"),clipboardHelper.history);assertTrue("pending recovery preserves primary clipboard",clipboard.values.isEmpty());
     }
     @Test public void queuedSilenceOnlyShowsStatus()throws Exception {
         String id=session(1);pendingSessionByGeneration.remove(1);httpClient.code=200;httpClient.raw="{\"text\":\"[ SIL ]\"}";
@@ -287,7 +314,7 @@ public class VoiceServiceHarness {
         httpClient.callbacks.get(0).onResponse(new Call(httpClient),new Response(200,"{\"text\":\"whole recording\"}"));barrier();files(id,true);
     }
     @Test public void liveClipboardFailureUsesReceiptOutboxWithoutReupload()throws Exception {
-        String id=session(1);voicePendingQueue.holdForReceipt(id);clipboard.fail=true;connection.fail=true;connection.pasteFails=true;wtiResponse(new JSONObject().put("text","saved answer"),Mode.SPELL,1);barrier();files(id,true);receiveAudioReceipt(id,identity(id));barrier();voicePendingQueue.releaseReceiptWait(id);clipboard.fail=false;markPendingGeneration(1,"retry delivery");pendingSessionByGeneration.clear();voicePendingQueue.markPending(id,"retry delivery");drainPendingVoiceQueue();waitFor(()->!pendingDrainRunning.get());barrier();files(id,false);assertEquals(Arrays.asList("saved answer"),clipboard.values);assertEquals(0,httpClient.calls.get());
+        String id=session(1);voicePendingQueue.holdForReceipt(id);clipboard.fail=true;connection.fail=true;connection.pasteFails=true;wtiResponse(new JSONObject().put("text","saved answer"),Mode.SPELL,1);barrier();files(id,true);receiveAudioReceipt(id,identity(id));barrier();voicePendingQueue.releaseReceiptWait(id);clipboard.fail=false;markPendingGeneration(1,"retry delivery");pendingSessionByGeneration.clear();voicePendingQueue.markPending(id,"retry delivery");drainPendingVoiceQueue();waitFor(()->!pendingDrainRunning.get());barrier();files(id,false);assertEquals(Arrays.asList("saved answer"),clipboardHelper.history);assertTrue("pending recovery preserves primary clipboard",clipboard.values.isEmpty());assertEquals(0,httpClient.calls.get());
     }
     @Test public void malformedAndServerErrorResultsRetainAudioInEveryMode()throws Exception {
         httpClient.code=503;
@@ -372,7 +399,7 @@ public class VoiceServiceHarness {
         drainPendingVoiceQueue();waitFor(()->!pendingDrainRunning.get());barrier();
         assertFalse("known-bad local PCM can leave only after sufficient server custody",voicePendingQueue.pcmFile(id).exists());
         assertTrue(voicePendingQueue.receiptConfirmed(id));assertTrue(connection.inserted.isEmpty());assertTrue(clipboard.values.isEmpty());
-        assertTrue("custody-only recovery must not claim microphone silence",status.contains("伺服器已保存"));
+        assertFalse("custody-only recovery must not claim microphone silence",status.contains("沒有錄到聲音"));
         }
     }
     @Test public void failedLocalCopyFetchesAndDeliversServerTranscript()throws Exception {
@@ -386,7 +413,7 @@ public class VoiceServiceHarness {
         httpClient.routes.put("http://fake/v1/audio-receipt?client_session_id="+id,new Response(200,receipt.toString()));
         httpClient.routes.put("http://fake/v1/audio-archive/transcribe",new Response(200,new JSONObject().put("text","recovered first word").put("receipt",receipt).toString()));
         drainPendingVoiceQueue();waitFor(()->!pendingDrainRunning.get());barrier();
-        assertEquals(Arrays.asList("recovered first word"),clipboard.values);
+        assertEquals(Arrays.asList("recovered first word"),clipboardHelper.history);assertTrue("pending recovery preserves primary clipboard",clipboard.values.isEmpty());
         assertTrue(connection.inserted.isEmpty());assertEquals(1,notifications);
         assertTrue("must transcribe the stored copy by ID",httpClient.requestUrls.contains("http://fake/v1/audio-archive/transcribe"));
         assertFalse(voicePendingQueue.pcmFile(id).exists());
@@ -396,7 +423,7 @@ public class VoiceServiceHarness {
         assertTrue(voicePendingQueue.acceptReceipt(id,receipt));
         httpClient.routes.put("http://fake/v1/audio-archive/transcribe",new Response(200,new JSONObject().put("text","stored after empty live").put("receipt",receipt).toString()));
         consumeSilentResult(1,"");barrier();waitFor(()->!pendingDrainRunning.get());barrier();
-        assertEquals(Arrays.asList("stored after empty live"),clipboard.values);
+        assertEquals(Arrays.asList("stored after empty live"),clipboardHelper.history);assertTrue("pending recovery preserves primary clipboard",clipboard.values.isEmpty());
         assertEquals(Arrays.asList("stored after empty live"),clipboardHelper.history);
         assertEquals(1,notifications);assertTrue(connection.inserted.isEmpty());
         assertEquals(Arrays.asList("http://fake/v1/audio-archive/transcribe"),httpClient.requestUrls);
@@ -432,7 +459,7 @@ public class VoiceServiceHarness {
         voicePendingQueue=new VoicePendingQueue(temp.getRoot(),16000);
         httpClient.routes.put("http://fake/v1/audio-archive/transcribe",new Response(200,new JSONObject().put("text","retry recovered").put("receipt",receipt).toString()));
         int before=httpClient.requestUrls.size();drainPendingVoiceQueue();waitFor(()->!pendingDrainRunning.get());barrier();
-        assertEquals(Arrays.asList("retry recovered"),clipboard.values);assertEquals(1,notifications);assertTrue(connection.inserted.isEmpty());
+        assertEquals(Arrays.asList("retry recovered"),clipboardHelper.history);assertTrue("pending recovery preserves primary clipboard",clipboard.values.isEmpty());assertEquals(1,notifications);assertTrue(connection.inserted.isEmpty());
         assertEquals(Arrays.asList("http://fake/v1/audio-archive/transcribe"),httpClient.requestUrls.subList(before,httpClient.requestUrls.size()));
     }
     @Test public void failedServerDiscardDoesNotPollAgainBeforeBackoff()throws Exception {
@@ -474,7 +501,7 @@ public class VoiceServiceHarness {
     }
 
     @Test public void serviceRestartRedeliversSavedTextWithoutResetOrUpload()throws Exception {
-        String id=session(1);voicePendingQueue.persistResult(id,"saved before process exit");voicePendingQueue.acceptReceipt(id,identity(id));voicePendingQueue=new VoicePendingQueue(temp.getRoot(),16000);pendingSessionByGeneration.clear();drainPendingVoiceQueue();waitFor(()->!pendingDrainRunning.get());barrier();files(id,false);assertEquals(Arrays.asList("saved before process exit"),clipboard.values);assertEquals(0,httpClient.calls.get());
+        String id=session(1);voicePendingQueue.persistResult(id,"saved before process exit");voicePendingQueue.acceptReceipt(id,identity(id));voicePendingQueue=new VoicePendingQueue(temp.getRoot(),16000);pendingSessionByGeneration.clear();drainPendingVoiceQueue();waitFor(()->!pendingDrainRunning.get());barrier();files(id,false);assertEquals(Arrays.asList("saved before process exit"),clipboardHelper.history);assertTrue("pending recovery preserves primary clipboard",clipboard.values.isEmpty());assertEquals(0,httpClient.calls.get());
     }
 
     @Test public void protectedDiscardDuringQueuedUploadBlocksLateDelivery()throws Exception {
@@ -565,7 +592,7 @@ public class VoiceServiceHarness {
         assertTrue("unconfirmed local punctuation must not count as delivery",clipboard.values.isEmpty());
         httpClient.code=200;httpClient.raw="{\"text\":\"real recovered speech\"}";
         waitFor(()->voicePendingQueue.due(id,System.currentTimeMillis()));drainPendingVoiceQueue();waitFor(()->!pendingDrainRunning.get());barrier();files(id,false);
-        assertEquals(Arrays.asList("real recovered speech"),clipboard.values);assertEquals(1,notifications);
+        assertEquals(Arrays.asList("real recovered speech"),clipboardHelper.history);assertTrue("pending recovery preserves primary clipboard",clipboard.values.isEmpty());assertEquals(1,notifications);
     }
 
     @Test public void emptyTextResultShowsSilenceAndWaitsForReceipt()throws Exception {
@@ -575,7 +602,7 @@ public class VoiceServiceHarness {
         String id=session(1);activePendingSessionId=id;httpClient.code=200;
         releaseActiveRecordingSession(id);assertNull(activePendingSessionId);completeReservedUtteranceWithoutText(1);
         waitFor(()->!pendingDrainRunning.get());barrier();files(id,false);assertFalse(pendingSessionByGeneration.containsValue(id));
-        assertEquals(Arrays.asList("queued words"),clipboard.values);
+        assertEquals(Arrays.asList("queued words"),clipboardHelper.history);assertTrue("pending recovery preserves primary clipboard",clipboard.values.isEmpty());
     }
 
     @Test public void wsFinalDeliveredOnceWithoutDifferentFullFileReupload()throws Exception {
@@ -590,7 +617,7 @@ public class VoiceServiceHarness {
         String id=session(1);voicePendingQueue.holdForReceipt(id);handleAiCommandResponse(new Response(200,"{\"text\":\"AI answer\"}"),1,1);barrier();files(id,true);voicePendingQueue.releaseReceiptWait(id);httpClient.code=200;httpClient.raw="{\"text\":\"spoken instruction\"}";drainPendingVoiceQueue();waitFor(()->!pendingDrainRunning.get());barrier();files(id,false);assertEquals(Arrays.asList("AI answer"),clipboard.values);assertEquals(1,httpClient.calls.get());assertEquals(0,notifications);
     }
     @Test public void emptyAiAnswerArchivesWithoutLaterFieldInsertion()throws Exception {
-        String id=session(1);voicePendingQueue.holdForReceipt(id);handleAiCommandResponse(new Response(200,"{\"text\":\"\"}"),1,1);barrier();files(id,true);assertTrue(httpClient.callbacks.isEmpty());assertTrue(clipboard.values.isEmpty());waitFor(()->!pendingDrainRunning.get());httpClient.code=200;voicePendingQueue.releaseReceiptWait(id);drainPendingVoiceQueue();waitFor(()->!voicePendingQueue.pcmFile(id).exists()&&voicePendingQueue.delivered(id));waitFor(()->!pendingDrainRunning.get());barrier();files(id,false);assertEquals(Arrays.asList("queued words"),clipboard.values);assertTrue(connection.inserted.isEmpty());
+        String id=session(1);voicePendingQueue.holdForReceipt(id);handleAiCommandResponse(new Response(200,"{\"text\":\"\"}"),1,1);barrier();files(id,true);assertTrue(httpClient.callbacks.isEmpty());assertTrue(clipboard.values.isEmpty());waitFor(()->!pendingDrainRunning.get());httpClient.code=200;voicePendingQueue.releaseReceiptWait(id);drainPendingVoiceQueue();waitFor(()->!voicePendingQueue.pcmFile(id).exists()&&voicePendingQueue.delivered(id));waitFor(()->!pendingDrainRunning.get());barrier();files(id,false);assertEquals(Arrays.asList("queued words"),clipboardHelper.history);assertTrue("pending recovery preserves primary clipboard",clipboard.values.isEmpty());assertTrue(connection.inserted.isEmpty());
     }
     @Test public void emptyTextModesAllEnterArchiveDrain()throws Exception {
         List<String> ids=new ArrayList<>();
@@ -641,7 +668,7 @@ public class VoiceServiceHarness {
     }
 
     @Test public void savedSpellPunctuationRetriesDeliveryAsRealText()throws Exception {
-        String id=session(1);voicePendingQueue.holdForReceipt(id);clipboard.fail=true;connection.fail=true;connection.pasteFails=true;wtiResponse(new JSONObject().put("text","，"),Mode.SPELL,1);barrier();files(id,true);receiveAudioReceipt(id,identity(id));barrier();voicePendingQueue.releaseReceiptWait(id);clipboard.fail=false;voicePendingQueue.markPending(id,"retry");drainPendingVoiceQueue();waitFor(()->!pendingDrainRunning.get());barrier();files(id,false);assertEquals(Arrays.asList("，"),clipboard.values);assertEquals(0,httpClient.calls.get());
+        String id=session(1);voicePendingQueue.holdForReceipt(id);clipboard.fail=true;connection.fail=true;connection.pasteFails=true;wtiResponse(new JSONObject().put("text","，"),Mode.SPELL,1);barrier();files(id,true);receiveAudioReceipt(id,identity(id));barrier();voicePendingQueue.releaseReceiptWait(id);clipboard.fail=false;voicePendingQueue.markPending(id,"retry");drainPendingVoiceQueue();waitFor(()->!pendingDrainRunning.get());barrier();files(id,false);assertEquals(Arrays.asList("，"),clipboardHelper.history);assertTrue("pending recovery preserves primary clipboard",clipboard.values.isEmpty());assertEquals(0,httpClient.calls.get());
     }
     @Test public void blankMarkersKeepAudioInAllModes()throws Exception {
         for(Mode mode:new Mode[]{Mode.REPLACE,Mode.SPELL,Mode.TRANSLATE}) {
@@ -656,7 +683,7 @@ public class VoiceServiceHarness {
         assertEquals(Arrays.asList("answer"),clipboard.values);assertEquals(Arrays.asList("answer"),connection.inserted);
     }
     @Test public void emptyModeResultSurvivesRestartAndArchives()throws Exception {
-        String id=session(1);voicePendingQueue.holdForReceipt(id);handleAiCommandResponse(new Response(200,"{\"text\":\"\"}"),1,1);barrier();voicePendingQueue=new VoicePendingQueue(temp.getRoot(),16000);pendingSessionByGeneration.clear();httpClient.code=200;drainPendingVoiceQueue();waitFor(()->!pendingDrainRunning.get());barrier();files(id,false);assertEquals(Arrays.asList("queued words"),clipboard.values);assertEquals(1,httpClient.calls.get());
+        String id=session(1);voicePendingQueue.holdForReceipt(id);handleAiCommandResponse(new Response(200,"{\"text\":\"\"}"),1,1);barrier();voicePendingQueue=new VoicePendingQueue(temp.getRoot(),16000);pendingSessionByGeneration.clear();httpClient.code=200;drainPendingVoiceQueue();waitFor(()->!pendingDrainRunning.get());barrier();files(id,false);assertEquals(Arrays.asList("queued words"),clipboardHelper.history);assertTrue("pending recovery preserves primary clipboard",clipboard.values.isEmpty());assertEquals(1,httpClient.calls.get());
     }
     @Test public void clipboardOnlyStreamSuccessStillWaitsForAudioReceipt()throws Exception {
         String id=session(1);voicePendingQueue.holdForReceipt(id);connection.fail=true;connection.pasteFails=true;wsFinal(new JSONObject().put("text","clipboard final"),1);barrier();files(id,true);
@@ -675,10 +702,10 @@ public class VoiceServiceHarness {
         for(String id:ids)files(id,false);assertTrue(connection.inserted.isEmpty());assertEquals(3,httpClient.calls.get());assertEquals(3,notifications);
     }
     @Test public void aiBodyReadFailureAndFieldSwitchKeepModeAudio()throws Exception {
-        String id=session(1);voicePendingQueue.holdForReceipt(id);handleAiCommandResponse(new Response(200,""){Body body(){throw new IllegalStateException("body read failure");}},1,1);barrier();files(id,true);assertTrue(clipboard.values.isEmpty());voicePendingQueue.releaseReceiptWait(id);httpClient.code=200;drainPendingVoiceQueue();waitFor(()->!pendingDrainRunning.get());barrier();files(id,false);assertTrue(connection.inserted.isEmpty());assertEquals(Arrays.asList("queued words"),clipboard.values);
+        String id=session(1);voicePendingQueue.holdForReceipt(id);handleAiCommandResponse(new Response(200,""){Body body(){throw new IllegalStateException("body read failure");}},1,1);barrier();files(id,true);assertTrue(clipboard.values.isEmpty());voicePendingQueue.releaseReceiptWait(id);httpClient.code=200;drainPendingVoiceQueue();waitFor(()->!pendingDrainRunning.get());barrier();files(id,false);assertTrue(connection.inserted.isEmpty());assertEquals(Arrays.asList("queued words"),clipboardHelper.history);assertTrue("pending recovery preserves primary clipboard",clipboard.values.isEmpty());
     }
     @Test public void aiNetworkFailuresKeepOriginalModeRatherThanAppend()throws Exception {
-        String text=session(1);voicePendingQueue.holdForReceipt(text);sendAiCommand("instruction","context",1);httpClient.callbacks.get(0).onFailure(new Call(httpClient),new IOException("offline"));barrier();files(text,true);voicePendingQueue.releaseReceiptWait(text);httpClient.code=200;drainPendingVoiceQueue();waitFor(()->!pendingDrainRunning.get());barrier();files(text,false);assertTrue(connection.inserted.isEmpty());assertEquals(Arrays.asList("queued words"),clipboard.values);
+        String text=session(1);voicePendingQueue.holdForReceipt(text);sendAiCommand("instruction","context",1);httpClient.callbacks.get(0).onFailure(new Call(httpClient),new IOException("offline"));barrier();files(text,true);voicePendingQueue.releaseReceiptWait(text);httpClient.code=200;drainPendingVoiceQueue();waitFor(()->!pendingDrainRunning.get());barrier();files(text,false);assertTrue(connection.inserted.isEmpty());assertEquals(Arrays.asList("queued words"),clipboardHelper.history);assertTrue("pending recovery preserves primary clipboard",clipboard.values.isEmpty());
     }
 
     @Test public void eosUsesFullRecordingDigestAndWsReceiptNeedsNoHttp()throws Exception {
@@ -703,7 +730,7 @@ public class VoiceServiceHarness {
         assertTrue(httpClient.requestUrls.get(3).endsWith("/v1/audio-archive"));
         assertTrue(httpClient.requestTimes.get(1)-httpClient.requestTimes.get(0)>=TimeUnit.MILLISECONDS.toNanos(500));
         assertTrue(httpClient.requestTimes.get(2)-httpClient.requestTimes.get(1)>=TimeUnit.MILLISECONDS.toNanos(1000));
-        assertEquals(Arrays.asList("queued words"),clipboard.values);assertTrue(connection.inserted.isEmpty());
+        assertEquals(Arrays.asList("queued words"),clipboardHelper.history);assertTrue("pending recovery preserves primary clipboard",clipboard.values.isEmpty());assertTrue(connection.inserted.isEmpty());
     }
     @Test public void lostWsReceiptRecoversMatchingGetWithoutArchive()throws Exception {
         String id=session(1);pendingSessionByGeneration.clear();httpClient.code=200;httpClient.raw=identity(id).toString();finishDurableRecording(id);

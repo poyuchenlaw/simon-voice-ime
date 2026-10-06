@@ -20,6 +20,26 @@ public class VoicePendingQueueTest {
         return new JSONObject().put("client_session_id",id).put("byte_count",pcm.length()).put("sha256",hex.toString());
     }
     private String response(File pcm,String id,String text)throws Exception {return new JSONObject().put("receipt",receipt(pcm,id)).put("text",text).toString();}
+    @Test public void transient503HasBoundedAutomaticRetriesAndManualRecovery()throws Exception {
+        VoicePendingQueue q=queue();String id=session(q,32000);
+        for(int n=0;n<12;n++)q.uploadOne(id,(pcm,sid,rate)->{throw new VoicePendingQueue.UploadFailure(503,"busy");},(t,start)->fail(),null);
+        assertEquals(8,q.attempts(id));assertTrue(q.needsAttention(id));assertTrue(q.pcmFile(id).exists());
+        q=queue();assertTrue(q.needsAttention(id));q.retryForUser(id);
+        assertFalse(q.needsAttention(id));assertEquals(0,q.attempts(id));assertTrue(q.due(id,System.currentTimeMillis()));
+        List<String> delivered=new ArrayList<>();
+        q.uploadOne(id,(pcm,sid,rate)->response(pcm,sid,"手動恢復"),(t,start)->delivered.add(t),null);
+        assertEquals(Arrays.asList("手動恢復"),delivered);
+    }
+    @Test public void repeatedCorrectionRejectionStopsAndKeepsAudio()throws Exception {
+        VoicePendingQueue q=queue();String id=session(q,32000);
+        for(int n=0;n<5;n++)q.uploadOne(id,(pcm,sid,rate)->{throw new IOException("HTTP 503 audio_correction_rejected");},(t,start)->fail(),null);
+        assertEquals("permanent correction rejection is bounded",3,q.attempts(id));
+        assertFalse(q.pendingOldestFirst().contains(id));
+        assertTrue(q.pcmFile(id).exists());
+        assertFalse(queue().pendingOldestFirst().contains(id));
+        q.markPendingAsync(id,"late_socket_close",null);q.runIO(()->null);
+        assertTrue("late callbacks cannot restart rejected audio",q.needsAttention(id));
+    }
     @Test public void emptyPendingIsDeletedAndNeverUploaded()throws Exception {
         VoicePendingQueue q=queue();String id=q.begin();q.markPending(id,"test");
         assertFalse("empty PCM must leave pending queue",q.pendingOldestFirst().contains(id));
