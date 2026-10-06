@@ -58,6 +58,23 @@ public class ZhuyinInputControllerTest {
         @Override public List<String[]> personalPhrases() { return personalPhrases; }
     }
 
+    @Test public void singleWordAndMissingGroupsStayInCharacterRowDuringTyping() {
+        for(boolean missing:new boolean[]{false,true}) {
+            ZhuyinInputController.Engine engine=new ZhuyinInputController.Engine(){
+                public void key(String k){} public void backspace(){} public void space(){} public void enter(){} public void choose(int n){} public void moveCursor(String d){} public int cursorPosition(){return 0;}
+                public String composingText(){return "我們";} public List<String> candidates(){return Arrays.asList("我");} public String takeCommit(){return "";} public void clear(){}
+                public String sentenceKeys(){return "ㄨㄛˇㄇㄣ˙";} public boolean prepareSentence(String k,String t){return true;} public boolean moveCursorToPreviewCharacter(int n){return true;}
+                public List<String> regroupLabels(){return Arrays.asList("我","的","了","我們","原文");}
+                public List<String> optionGroups(){return missing?java.util.Collections.emptyList():Arrays.asList("word","word","word","word","literal");}
+                public List<int[]> optionRanges(){return Arrays.asList(new int[]{1,2},new int[]{1,2},new int[]{1,2},new int[]{0,2},new int[]{0,2});}
+                public int[] previewEditRange(){return new int[]{0,2};}
+            };
+            ZhuyinInputController c=new ZhuyinInputController(engine);c.setTextLayout(true);c.setRetypeEngineFactory(()->engine);
+            for(String label:Arrays.asList("我","的","了"))assertTrue("single word survives normal typing; missing="+missing,c.textChoices().stream().anyMatch(ch->label.equals(ch.label)&&"char".equals(ch.kind)));
+            if(!missing)assertFalse(c.textChoices().stream().anyMatch(ch->"原文".equals(ch.label)));
+        }
+    }
+
     @Test public void abbreviation_ranking_prefers_word_length_matching_input_and_deduplicates() {
         ZhuyinWordIndex index = ZhuyinWordIndex.forTesting(
                 new ZhuyinWordIndex.Entry("ㄧㄧ", "應有部分", "ㄧㄥˋ ㄧㄡˇ ㄅㄨˋ ㄈㄣˋ", Long.MAX_VALUE, true),

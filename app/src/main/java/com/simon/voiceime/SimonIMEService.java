@@ -4673,7 +4673,6 @@ public class SimonIMEService extends InputMethodService {
         int wordScroll=boWordCandidateScroll.getScrollX(),charScroll=boCandidateScroll.getScrollX();
         List<View> words=new ArrayList<>(),characters=new ArrayList<>();
         // Z2: sentence suggestions stay off the word row until the Z3 preview design.
-        if(sentencePhone!=null)sentencePhone.beginDisplay();
         int wi=0,ci=0;
         for(ZhuyinInputController.TextChoice choice:zhuyinInput.textChoices()){
             if("char".equals(choice.kind))characters.add(pooledTextChoice(textCharViewPool,ci++,choice));

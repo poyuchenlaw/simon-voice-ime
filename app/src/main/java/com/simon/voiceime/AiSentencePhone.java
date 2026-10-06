@@ -92,6 +92,12 @@ final class AiSentencePhone {
         catch(Exception failure){android.util.Log.w("AiSentencePhone","Mode migration telemetry failed",failure);}
     }
     private SharedPreferences prefs(){return context.getSharedPreferences("simon_ime_prefs",Context.MODE_PRIVATE);}
+    // Text layout has no AI suggestion surface during Z2. Preserve the
+    // independently enabled preview auto-apply path for the Z3 integration.
+    private boolean predictionEnabled(){
+        ZhuyinInputController c=host.controller();
+        return c==null||!c.textLayout()||("live".equals(sentenceMode())&&prefs().getBoolean("ai_sentence_auto_apply",false));
+    }
     void changed(boolean editorChange){
         if(applying)return;
         if(editorChange&&host.controller()!=null)host.controller().resetCommitTelemetry();
@@ -99,6 +105,7 @@ final class AiSentencePhone {
         if(transaction!=null&&!editorChange&&host.controller()!=null&&host.controller().sentenceKeys().equals(keyWitness)&&composingText(host.controller()).equals(ownedText))return;
         if(call!=null){call.cancel();call=null;event("cancelled");}
         if(pause!=null)handler.removeCallbacks(pause);
+        pause=null;
         if(transaction!=null){transaction.discard();transaction=null;underlineStart=underlineEnd=-1;}
         sentence.mode(sentenceMode());
         sentence.edit(now(),editorChange,host.allowed());request=null;
@@ -107,6 +114,8 @@ final class AiSentencePhone {
         expectedApplySelection=false;
         if(editorChange){compositionStart=compositionEnd=-1;installed.clear();touches.clear();touchKeys="";}
         localOption=null;projections.clear();
+        displayedRanks.clear();localRank=-1;
+        if(!predictionEnabled())return;
         if(host.allowed()&&host.controller()!=null&&!host.controller().wordFocused()){
             String[] repair=host.controller().localRepair();
             if(repair.length==2&&!repair[1].equals(host.controller().previewText()))try{
@@ -221,7 +230,7 @@ final class AiSentencePhone {
     }
     private void send(){send(false);}
     private void send(boolean eager){
-        if(!host.allowed()||transaction!=null&&transaction.automatic())return;
+        if(!predictionEnabled()||!host.allowed()||transaction!=null&&transaction.automatic())return;
         try {
             sentence.mode(sentenceMode());
             ZhuyinInputController controller=host.controller();String preview=controller==null?"":controller.previewText();

@@ -223,17 +223,17 @@ final class ZhuyinInputController {
             if(!cloned&&!probe.prepareSentence(candidateKeys(keys),text)||!probe.moveCursorToPreviewCharacter(boundary-1))return textChoiceCache;
             List<String> labels=probe.regroupLabels(),groups=probe.optionGroups();List<TextChoice> choices=new ArrayList<>();
             List<int[]> ranges=probe.optionRanges();
-            int[] focus=probe.previewEditRange();boolean oneCharacterFocus=focus!=null&&focus[1]-focus[0]==1;
+            int[] focus=probe.previewEditRange();
             for(int n=0;n<labels.size();n++)if(!labels.get(n).isEmpty()&&!labels.get(n).codePoints().anyMatch(ZhuyinInputController::isPhoneticGlyph)){
-                String kind=n<groups.size()?groups.get(n):"word";
+                String label=labels.get(n);int length=label.codePointCount(0,label.length());
+                String kind=n<groups.size()?groups.get(n):(length==1?"char":"word");
                 if("literal".equals(kind))continue;
+                // Single-glyph dictionary words belong in the character row even
+                // when lexical focus spans a word or native grouping is absent.
+                if(length==1)kind="char";
                 int[] range=n<ranges.size()?ranges.get(n):null;
                 if(wordFocus&&(range==null||focus==null||("word".equals(kind)?range[0]!=focus[0]||range[1]!=focus[1]:range[0]!=boundary-1||range[1]!=boundary)))continue;
-                if("char".equals(kind)||labels.get(n).codePointCount(0,labels.get(n).length())>1)choices.add(new TextChoice(labels.get(n),kind,text,keys,boundary,n,true,false,range==null?-1:range[0],range==null?-1:range[1]));
-                // An exact one-character word operation also belongs in the
-                // character row. Verify the native focus range before sharing it.
-                if(oneCharacterFocus&&!"char".equals(kind)&&labels.get(n).codePointCount(0,labels.get(n).length())==1)
-                    choices.add(new TextChoice(labels.get(n),"char",text,keys,boundary,n,true,false,range==null?-1:range[0],range==null?-1:range[1]));
+                choices.add(new TextChoice(label,kind,text,keys,boundary,n,true,false,range==null?-1:range[0],range==null?-1:range[1]));
             }
             if(probe.regroup(boundary)){
                 // Preserve the boundary word menu's native order. Focus-word
@@ -254,6 +254,7 @@ final class ZhuyinInputController {
         if(choice==null||!textChoiceCache.contains(choice)||!choice.witness.equals(previewText())||!choice.keys.equals(sentenceKeys())||retypeEngineFactory==null)return snapshot(false,false);
         Engine probe=engine.copyForTextEdit();boolean cloned=probe!=null;if(probe==null)probe=retypeEngineFactory.get();if(probe==null)return snapshot(false,false);
         try{
+            probe.setTextLayout(textLayout);
             if(!cloned&&!probe.prepareSentence(candidateKeys(choice.keys),choice.witness)||!(choice.characterFocus?(choice.wordFocus?probe.moveCursorToPreviewWord(choice.boundary-1):probe.moveCursorToPreviewCharacter(choice.boundary-1)):probe.regroup(choice.boundary)))return snapshot(false,false);
             List<String> labels=probe.regroupLabels();
             List<int[]> ranges=probe.optionRanges();

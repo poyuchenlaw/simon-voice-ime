@@ -80,22 +80,49 @@ public class Z12AndroidTest extends TextRows670AndroidTest {
         String preview=shown();tap("↵");assertEquals("commit exactly matches text preview",preview,String.valueOf(await("test_input").getText()));
         assertFalse("no phonetic in commit",preview.codePoints().anyMatch(x->x>=0x3105&&x<=0x312f||"ˊˇˋ˙ˉ".indexOf(x)>=0));
     }
+    public void testCharacterSelectionAfterRetype()throws Exception {
+        start();keys("ㄐㄧㄣ ㄊㄧㄢ ");tap("⌫");keys("ㄊㄧㄢ ");tapBoundary(0);awaitCandidateCount(characters,1);
+        int index=-1;for(int n=0;n<characters.getChildCount();n++)if(!"今".equals(((TextView)characters.getChildAt(n)).getText().toString())){index=n;break;}
+        assertTrue(index>=0);revealIndex(characters,charScroll,index);TextView picked=(TextView)characters.getChildAt(index);String label=picked.getText().toString();android.graphics.Rect r=new android.graphics.Rect();
+        inst.runOnMainSync(()->{int[] a=new int[2];picked.getLocationOnScreen(a);r.set(a[0],a[1],a[0]+picked.getWidth(),a[1]+picked.getHeight());});screenshot("retype-before-pick");tap(r);
+        save("retype-character-selection.json",new JSONObject().put("picked",label).put("after",shown()).put("state",stateReadback()).toString());screenshot("retype-after-pick");
+        assertEquals("character choice after delete/retype preserves suffix",label+"天",shown());
+    }
+    public void testNormalSingleCharacterCandidates()throws Exception {
+        start();JSONArray receipts=new JSONArray();
+        for(String input:new String[]{"ㄉㄜ˙","ㄌㄜ˙","ㄨㄛˇ","ㄐㄧㄣ ㄊㄧㄢ "}){
+            keys(input);final JSONArray[] available={null};inst.runOnMainSync(()->{try{
+                available[0]=new JSONArray();for(ZhuyinInputController.TextChoice c:actualController().textChoices())available[0].put(new JSONObject().put("label",c.label).put("kind",c.kind).put("start",c.start).put("end",c.end));
+            }catch(Exception e){throw new RuntimeException(e);}});
+            awaitCandidateCount(characters,1);screenshot("single-before-"+receipts.length());
+            String before=shown();int index=-1;
+            for(int i=0;i<characters.getChildCount();i++)if(!((TextView)characters.getChildAt(i)).getText().toString().equals(before.substring(before.length()-1))){index=i;break;}
+            assertTrue("normal typing must offer single-character alternatives",index>=0);
+            revealIndex(characters,charScroll,index);TextView picked=(TextView)characters.getChildAt(index);String label=picked.getText().toString();android.graphics.Rect r=new android.graphics.Rect();
+            inst.runOnMainSync(()->{int[] a=new int[2];picked.getLocationOnScreen(a);r.set(a[0],a[1],a[0]+picked.getWidth(),a[1]+picked.getHeight());});tap(r);
+            receipts.put(new JSONObject().put("input",input).put("before",before).put("picked",label).put("after",shown()).put("choices",available[0]));save("normal-single-candidates.json",receipts.toString());screenshot("single-after-"+receipts.length());
+            assertEquals("single candidate physically selects only final character",before.substring(0,before.length()-1)+label,shown());
+            while(!shown().isEmpty())tap("⌫");
+        }
+    }
     AiSentencePhone phone(){
         try{android.content.Context ctx=row1.getContext();while(!(ctx instanceof SimonIMEService)&&ctx instanceof android.content.ContextWrapper)ctx=((android.content.ContextWrapper)ctx).getBaseContext();
             java.lang.reflect.Field f=SimonIMEService.class.getDeclaredField("sentencePhone");f.setAccessible(true);return (AiSentencePhone)f.get(ctx);
         }catch(Exception e){throw new RuntimeException(e);}
     }
+    public void testLegacyAiSuggestionsRemainAvailable()throws Exception {legacy=true;testAiSuggestionOffWordRow();}
     public void testAiSuggestionOffWordRow()throws Exception {
         start();endpoint=new java.net.ServerSocket(8181,4,java.net.InetAddress.getByName("127.0.0.1"));
         inst.getTargetContext().getSharedPreferences("simon_ime_prefs",0).edit().putString("ai_sentence_mode","suggestions").commit();
         final JSONObject contract;try(java.io.InputStream asset=inst.getTargetContext().getAssets().open("sentence-contract.json")){contract=new JSONObject(new String(asset.readAllBytes(),java.nio.charset.StandardCharsets.UTF_8));}
+        java.util.concurrent.atomic.AtomicInteger requests=new java.util.concurrent.atomic.AtomicInteger();
         java.util.List<String> cancelledSockets=java.util.Collections.synchronizedList(new java.util.ArrayList<>());
         server=new Thread(()->{while(!stop)try(java.net.Socket socket=endpoint.accept()){
             socket.setSoTimeout(4000);java.io.InputStream input=new java.io.BufferedInputStream(socket.getInputStream());String first=line(input);int size=0;
             for(String h;!(h=line(input)).isEmpty();)if(h.toLowerCase().startsWith("content-length:"))size=Integer.parseInt(h.substring(15).trim());
             String body=new String(input.readNBytes(size),java.nio.charset.StandardCharsets.UTF_8),response="{}";int code=404;
             if(first.startsWith("POST /v1/ime/sentence-candidates ")){
-                JSONObject req=new JSONObject(body);String literal=req.getString("literal"),candidate=literal.endsWith("計畫")?literal.substring(0,literal.length()-2)+"計劃":literal.endsWith("計劃")?literal.substring(0,literal.length()-2)+"計畫":null;
+                requests.incrementAndGet();JSONObject req=new JSONObject(body);String literal=req.getString("literal"),candidate=literal.endsWith("計畫")?literal.substring(0,literal.length()-2)+"計劃":literal.endsWith("計劃")?literal.substring(0,literal.length()-2)+"計畫":null;
                 long now=android.os.SystemClock.elapsedRealtime();JSONArray options=new JSONArray();if(candidate!=null)options.put(new JSONObject().put("id","c1").put("text",candidate).put("repairs",new JSONArray()));
                 JSONObject result=new JSONObject().put("kind","response").put("schema_version",1).put("request_id",req.getString("request_id"))
                     .put("editor_generation",req.getLong("editor_generation")).put("composition_generation",req.getLong("composition_generation")).put("mode","suggestions")
@@ -110,6 +137,13 @@ public class Z12AndroidTest extends TextRows670AndroidTest {
         }catch(java.net.SocketException e){if(!stop)cancelledSockets.add(e.toString());}catch(Exception e){if(!stop)error=e;}},"Z12GuestAiFixture");server.start();
         try{
             keys("ㄐㄧˋㄏㄨㄚˋ");String original=shown();
+            if(!legacy){
+                Thread.sleep(2000);screenshot("z2-ai-hidden-screen");
+                save("z2-ai-disabled.json",new JSONObject().put("requests",requests.get()).put("words",readRows(false)).put("original",original).put("shown",shown()).toString());
+                assertEquals("hidden AI must issue no background requests",0,requests.get());assertEquals(original,shown());
+                inst.runOnMainSync(()->{try{for(String name:new String[]{"call","pause","request"}){java.lang.reflect.Field f=AiSentencePhone.class.getDeclaredField(name);f.setAccessible(true);assertNull("hidden AI pending "+name,f.get(phone()));}}catch(Exception e){throw new RuntimeException(e);}});
+                return;
+            }
             final int[] options={0};long end=android.os.SystemClock.uptimeMillis()+3500;
             while(android.os.SystemClock.uptimeMillis()<end){inst.runOnMainSync(()->{options[0]=0;for(JSONObject option:phone().rowOptions())if("ai".equals(option.optString("source")))options[0]++;});if(options[0]>0)break;Thread.sleep(50);}
             final JSONObject[] phoneState={null};inst.runOnMainSync(()->{try{
@@ -119,7 +153,7 @@ public class Z12AndroidTest extends TextRows670AndroidTest {
             save("z2-ai-phone-state.json",phoneState[0].put("state",stateReadback()).toString());
             assertTrue("fixture must produce a real validated AI row option",options[0]>0);
             // The two-character fixture is itself a dictionary word, unlike the long-sentence literal.
-            JSONArray rows=readRows(false);assertEquals("preview stays original until Z3",original,shown());
+            JSONArray rows=legacy?new JSONArray():readRows(false);assertEquals("preview stays original until Z3",original,shown());
             save("z2-ai-hidden.json",new JSONObject().put("validated_row_options",options[0]).put("words",rows).put("original_preview",original).put("shown",shown()).toString());screenshot("z2-ai-hidden-screen");
         }finally{stop=true;endpoint.close();server.join(5000);save("z2-fixture-cancelled-sockets.json",new JSONArray(cancelledSockets).toString());if(error!=null)throw new AssertionError(error);}
     }
