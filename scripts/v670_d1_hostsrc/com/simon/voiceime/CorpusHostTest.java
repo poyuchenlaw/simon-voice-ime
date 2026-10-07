@@ -2,17 +2,34 @@ package com.simon.voiceime;
 import java.nio.file.*;import java.util.*;import org.json.*;
 /** Real append-only controller replay, aligned by physical key offsets. */
 public final class CorpusHostTest {
+ // Spec: an explicit new tone replaces the previous tone, including tone 1.
+ // This oracle consumes raw key events, independently of the native engine.
+ static String typedKeys(String events){
+  StringBuilder out=new StringBuilder();
+  for(char k:events.toCharArray()){
+   // Space on an empty/already-toned syllable confirms; it is not another phonetic key.
+   if(k==' '&&(out.length()==0||" ˉˊˇˋ˙".indexOf(out.charAt(out.length()-1))>=0))continue;
+   if("ˊˇˋ˙".indexOf(k)>=0&&out.length()>0&&" ˉˊˇˋ˙".indexOf(out.charAt(out.length()-1))>=0)out.setCharAt(out.length()-1,k);
+   else out.append(k);
+  }
+  return out.toString();
+ }
  public static void main(String[] a)throws Exception{
   int cases=0,split=0,unmapped=0,observations=0,commitLeaks=0;
   ZhuyinInputController c=new ZhuyinInputController(new RimeZhuyinEngine(a[0],a[1]));
   c.setLearningEnabled(false);c.setTextLayout(true);
+  c.press("ㄉ");c.press("ㄜ");c.press("ˋ");c.press("˙");
+  if(!c.sentenceKeys().equals("ㄉㄜ˙"))throw new AssertionError("later neutral tone must replace falling tone");
+  c.clear();
   try{for(String line:Files.readAllLines(Paths.get(a[2]))){
    JSONObject row=new JSONObject(line);String keys=row.getString("keys");int start=row.getInt("start"),end=row.getInt("end");boolean bad=false,missing=false;c.clear();
    for(int i=0;i<keys.length();i++){
     c.press(keys.charAt(i)==' '?"space":keys.substring(i,i+1));if(i+1<end)continue;
     List<String> reading=c.phoneticSyllables();String joined=String.join("",reading).replace('ˉ',' ');
-    if(!joined.equals(keys.substring(0,i+1))){missing=true;continue;}
-    observations++;int offset=0;for(String syllable:reading){offset+=syllable.length();if(offset>start&&offset<end){bad=true;break;}}
+    String expected=c.sentenceKeys();
+    if(!expected.equals(typedKeys(keys.substring(0,i+1))))throw new AssertionError("physical keys differ from tone/space spec: "+row);
+    if(!joined.equals(expected)){missing=true;continue;}
+    observations++;int offset=0;for(String syllable:reading){offset+=syllable.length();if(offset>typedKeys(keys.substring(0,start)).length()&&offset<typedKeys(keys.substring(0,end)).length()){bad=true;break;}}
    }
    String preview=c.textPreview(),committed=c.press("enter").commitText;
    if(!preview.equals(committed)||committed.codePoints().anyMatch(cp->cp>=0x3105&&cp<=0x312f||"ˉˊˇˋ˙".indexOf(cp)>=0||cp>='A'&&cp<='Z'||cp>='a'&&cp<='z')){commitLeaks++;System.out.println("COMMIT_LEAK "+row);}

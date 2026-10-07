@@ -108,5 +108,22 @@ int main(int argc, char** argv) {
     std::cout << "ENABLED tail=中華民國 delta=" << candidate.second - found->second << std::endl;
   }
   if (!checked_tail) throw std::runtime_error("missing four-syllable tail fixture");
+  // Seven-syllable dictionary phrase: the last syllable is beyond the indexed
+  // prefix. A neutral-tone fallback must retain the specified 75-point cost.
+  rime::SyllableGraph exact_tone_graph, alternate_tone_graph;
+  enabled.BuildSyllableGraph("5j/ cj86bp6aup6ej/4ck6eji6", *prism, &exact_tone_graph);
+  enabled.BuildSyllableGraph("5j/ cj86bp6aup6ej/4ck6eji7", *prism, &alternate_tone_graph);
+  auto exact_tone_entries = lookup(dictionary, exact_tone_graph);
+  auto alternate_tone_entries = lookup(dictionary, alternate_tone_graph);
+  bool checked_alternate_tail = false;
+  for (const auto& entry : exact_tone_entries) {
+    if (entry.first.find(":中華人民共和國:") == std::string::npos) continue;
+    auto found = alternate_tone_entries.find(entry.first);
+    if (found == alternate_tone_entries.end() || std::abs(entry.second - found->second - 75.0) > 1e-9)
+      throw std::runtime_error("alternate tone dictionary tail lost specified low-priority cost");
+    checked_alternate_tail = true;
+    std::cout << "ALTERNATE tail=中華人民共和國 delta=" << entry.second - found->second << std::endl;
+  }
+  if (!checked_alternate_tail) throw std::runtime_error("missing alternate-tone dictionary tail fixture");
   std::cout << "PASS complete-edge, actual-edge pointer type, disabled dictionary guard, enabled tail cost" << std::endl;
 }

@@ -173,6 +173,7 @@ public class SimonIMEService extends InputMethodService {
     private InputConnection zhuyinComposingConnection;
     private String retainedTextField="",retainedTextBefore="",retainedText="";
     private int retainedTextEnd=-1;
+    private boolean retainedTextNeedsReclaim;
     private String textFieldIdentity(EditorInfo info){return info==null?"":info.packageName+":"+info.fieldId+":"+info.inputType+":"+info.fieldName;}
     private void rememberTextComposition(InputConnection ic,String value){
         if(!textLayoutSelected()||protectedInputField||ic==null||ic!=zhuyinComposingConnection||value.isEmpty())return;
@@ -192,15 +193,29 @@ public class SimonIMEService extends InputMethodService {
         retainedTextEnd=extracted.startOffset+extracted.selectionEnd;
         retainedTextField=textFieldIdentity(getCurrentInputEditorInfo());retainedTextBefore=before.toString();retainedText=value;
     }
-    private void reclaimTextComposition(EditorInfo info){
+    private boolean reclaimTextComposition(EditorInfo info){
         InputConnection ic=getCurrentInputConnection();
-        if(ic==null||protectedInputField||retainedTextEnd<0||!retainedTextField.equals(textFieldIdentity(info))||zhuyinInput==null||!retainedText.equals(zhuyinInput.textPreview()))return;
+        if(ic==null||protectedInputField||retainedTextEnd<0||!retainedTextField.equals(textFieldIdentity(info))||zhuyinInput==null)return false;
+        try{
         android.view.inputmethod.ExtractedTextRequest request=new android.view.inputmethod.ExtractedTextRequest();
         android.view.inputmethod.ExtractedText extracted=ic.getExtractedText(request,0);
         CharSequence before=ic.getTextBeforeCursor(retainedTextBefore.length(),0);
         // Recover only the exact former owned range in the exact same field.
         // A new editor, changed text or changed selection cannot be reclaimed.
-        if(extracted!=null&&extracted.selectionStart==extracted.selectionEnd&&extracted.startOffset+extracted.selectionEnd==retainedTextEnd&&before!=null&&retainedTextBefore.contentEquals(before)&&ic.setComposingRegion(retainedTextEnd-retainedText.length(),retainedTextEnd))zhuyinComposingConnection=ic;
+        if(extracted!=null&&extracted.selectionStart==extracted.selectionEnd&&extracted.startOffset+extracted.selectionEnd==retainedTextEnd&&before!=null&&retainedTextBefore.contentEquals(before)&&ic.setComposingRegion(retainedTextEnd-retainedText.length(),retainedTextEnd)){
+            zhuyinComposingConnection=ic;retainedTextNeedsReclaim=false;return true;
+        }
+        return false;
+        }catch(RuntimeException error){Log.w(TAG,"Text composition ownership unavailable: "+error.getClass().getSimpleName());return false;}
+    }
+
+    private void discardRetainedTextComposition(){
+        cancelPendingTextCandidates();
+        zhuyinComposingConnection=null;retainedTextNeedsReclaim=false;
+        retainedTextEnd=-1;retainedTextField=retainedTextBefore=retainedText="";
+        if(zhuyinInput!=null)zhuyinInput.clear();
+        renderZhuyinStreamPreview("");updateTextCount();
+        if(textLayoutSelected())renderTextCandidateRows();
     }
 
     private ZhuyinWordIndex zhuyinWordIndex;
@@ -465,6 +480,8 @@ public class SimonIMEService extends InputMethodService {
                     if("silence".equals(phase)&&!queue.backupFailed(sessionId)) { mainHandler.post(this::showNoVoiceStatus); }
                     if("pending_failed".equals(phase)){
                         recordVoiceEvent(phase,sessionId,audioMs,0,0,error,"",bytes,attempts);
+                        if(queue.receiptConfirmed(sessionId)&&error.contains("empty transcript for non-silent original audio"))
+                            mainHandler.post(() -> showPendingVoiceNotice("尚未取得辨識文字；原音已保留，會自動重試"));
                     }
                 });
                 if(queue.totalBytes()>500L*1024*1024)showPendingVoiceQuotaWarning();
@@ -526,7 +543,7 @@ public class SimonIMEService extends InputMethodService {
                     .setOnlyAlertOnce(true).setContentTitle(recoveredVoiceCount.get()>0?"已恢復 "+recoveredVoiceCount.get()+" 段；"+message:message)
                     .setContentIntent(android.app.PendingIntent.getActivity(this,671,new Intent(this,SettingsActivity.class),
                             android.app.PendingIntent.FLAG_UPDATE_CURRENT|android.app.PendingIntent.FLAG_IMMUTABLE))
-                    .setContentText("錄音仍保留；點選開啟設定，可手動重試").build());
+                    .setContentText(message.startsWith("尚未取得辨識文字")?"原音已由伺服器保存；取得文字後會自動送出":"錄音仍保留；點選開啟設定，可手動重試").build());
         }catch(Exception e){Log.w(TAG,"pending voice notice failed",e);}
     }
     private void showPendingVoiceQuotaWarning(){try{NotificationManager nm=(NotificationManager)getSystemService(NOTIFICATION_SERVICE);if(nm==null)return;
@@ -737,6 +754,16 @@ public class SimonIMEService extends InputMethodService {
         super.onStartInput(attribute, restarting);
         boolean wasProtected=protectedInputField;
         protectedInputField = isProtectedInputField(attribute);
+        clearRankingContext();
+        if(!restarting||protectedInputField||wasProtected)lastCommittedZhuyinWord=null;
+        if(protectedInputField)LocalConversationContext.clear();
+        String field=textFieldIdentity(attribute);
+        boolean retained=zhuyinInput!=null&&!zhuyinInput.textPreview().isEmpty();
+        if(!field.equals(retainedTextField)||protectedInputField!=wasProtected
+                ||protectedInputField&&retained&&(!restarting||zhuyinComposingConnection!=getCurrentInputConnection()))
+            discardRetainedTextComposition();
+        else if(retained&&!protectedInputField)retainedTextNeedsReclaim=true;
+        retainedTextField=field;
         if(sentencePhone!=null)sentencePhone.changed(true);
         sentenceInstalledCommit=null;
         if(protectedInputField&&!wasProtected&&isRecording){
@@ -2890,10 +2917,32 @@ public class SimonIMEService extends InputMethodService {
                         String sessionId=pendingSessionByGeneration.get(myGen);
                         recordVoiceEvent("final",sessionId,sessionId==null?0:voicePendingQueue.audioMs(sessionId),finalText.length(),0,"","",0,0);
                         mainHandler.post(() -> {
-                            cancelVoiceFinalDeadline(myGen);
-                            if(recoverLateVoiceFinal(myGen,finalText))return;
+                            if(!VoiceResultText.isSilence(finalText))cancelVoiceFinalDeadline(myGen);
+                            if(recoverLateVoiceFinal(myGen,finalText)){cancelVoiceFinalDeadline(myGen);return;}
                             if(VoiceResultText.isSilence(finalText)&&audibleVoiceGenerations.contains(myGen)) {
+                                cancelVoiceFinalDeadline(myGen);
                                 recoverUnfinishedVoiceGeneration(myGen,"audible_empty_final");return;
+                            }
+                            if(VoiceResultText.isSilence(finalText)) {
+                                // A rolling zero tail is not proof of complete digital silence.
+                                final byte[] completePcm=fullPcmByGeneration.get(myGen);
+                                final String silenceId=pendingSessionByGeneration.get(myGen);
+                                if(silenceId==null||voicePendingQueue==null) {
+                                    cancelVoiceFinalDeadline(myGen);
+                                    recoverUnfinishedVoiceGeneration(myGen,"unconfirmed_empty_final");return;
+                                }
+                                voicePendingQueue.execute(() -> {
+                                    boolean settled=false;
+                                    try {settled=voicePendingQueue.acknowledgeDigitalSilence(silenceId,completePcm);}
+                                    catch(Exception e) {Log.e(TAG,"Empty voice result settlement failed",e);}
+                                    final boolean verified=settled;
+                                    mainHandler.post(() -> {
+                                        cancelVoiceFinalDeadline(myGen);
+                                        if(verified)consumeSilentResult(myGen,finalText);
+                                        else recoverUnfinishedVoiceGeneration(myGen,"unconfirmed_empty_final");
+                                    });
+                                });
+                                return;
                             }
                             if(consumeSilentResult(myGen,finalText))return;
                             serverFinalGenerations.add(myGen);
@@ -4193,6 +4242,7 @@ public class SimonIMEService extends InputMethodService {
                     learnEnglishWord();
                     clearEnWordBuffer();
                 } else if (currentKeyboardMode == KeyboardMode.BOPOMOFO) {
+                    if(retainedTextNeedsReclaim)return;
                     zhuyinCommitVia="enter";
                     ZhuyinInputController.State state = zhuyinInput.press("enter");
                     applyZhuyinState(state);
@@ -4529,8 +4579,21 @@ public class SimonIMEService extends InputMethodService {
     }
 
     private boolean textLayoutSelected(){return !isWatchService()&&!"legacy_zhuyin".equals(getSharedPreferences("simon_ime_prefs",MODE_PRIVATE).getString("layout_mode","text_word_char"));}
+    private TextView boTextCount;
+    private void updateTextCount(){
+        if(boTextCount==null||zhuyinInput==null)return;
+        String preview=zhuyinInput.previewText();int count=preview.codePointCount(0,preview.length());
+        android.content.SharedPreferences p=getSharedPreferences("simon_ime_prefs",MODE_PRIVATE);
+        boolean enabled="live".equals(p.getString("ai_sentence_mode","suggestions"))&&p.getBoolean("ai_sentence_auto_apply",false);
+        boTextCount.setText(count+" 字 · "+(count<10?"滿十字可啟用整句校正":enabled?"停一秒檢查整句校正":"已達十字門檻（校正關閉）"));
+    }
     private void configureTextRows(){
         boolean text=textLayoutSelected();if(zhuyinInput!=null)zhuyinInput.setTextLayout(text);
+        if(text&&(boTextCount==null||boTextCount.getParent()!=bopomofoKeyboard)&&bopomofoKeyboard instanceof ViewGroup){
+            boTextCount=new TextView(this);boTextCount.setTag("composition-count");boTextCount.setTextSize(11);boTextCount.setTextColor(getColor(R.color.key_text));boTextCount.setPadding(dp(12),0,dp(12),0);
+            ((ViewGroup)bopomofoKeyboard).addView(boTextCount,1,new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,dp(18)));
+        }
+        if(boTextCount!=null)boTextCount.setVisibility(text?View.VISIBLE:View.GONE);updateTextCount();
         configurePreviewViewport(text);
         View reading=rootView==null?null:rootView.findViewById(R.id.boPhoneticPreviewScroll);
         if(reading!=null)reading.setVisibility(text?View.GONE:View.VISIBLE);
@@ -4559,9 +4622,13 @@ public class SimonIMEService extends InputMethodService {
     }
     private void applyZhuyinState(ZhuyinInputController.State state) {
         if (state == null) return;
+        if(retainedTextNeedsReclaim){
+            renderZhuyinStreamPreview(zhuyinInput.textPreview());updateTextCount();return;
+        }
         if(sentencePhone!=null)sentencePhone.changed(false);
         renderZhuyinStreamPreview(textLayoutSelected()?zhuyinInput.textPreview():zhuyinInput.previewText());
         if(boStreamPreview!=null)boStreamPreview.setText(shownTextPreview());
+        updateTextCount();
         if(boStreamPreview instanceof PreviewCursorView)((PreviewCursorView)boStreamPreview).setBoundary(zhuyinInput.keyCaret()>=0?zhuyinInput.keyPreviewCaret():zhuyinInput.previewBoundary()>=0?zhuyinInput.previewBoundary():zhuyinInput.wordFocused()?zhuyinInput.tappedCharacter():-1);
         TextView reading=bopomofoKeyboard==null?null:bopomofoKeyboard.findViewById(R.id.boPhoneticPreview);
         if(reading!=null&&textLayoutSelected()){reading.setText("");reading.setContentDescription("");}
@@ -4589,12 +4656,15 @@ public class SimonIMEService extends InputMethodService {
                 sentenceInstalledCommit=null;
                 zhuyinComposingConnection = null;
                 confirmStableZhuyinCommit(ic, state.commitText);
-                if (lastCommittedZhuyinWord != null && zhuyinAssociationHistory != null)
+                if (!protectedInputField && lastCommittedZhuyinWord != null && zhuyinAssociationHistory != null)
                     zhuyinAssociationHistory.record(lastCommittedZhuyinWord, state.commitText);
-                lastCommittedZhuyinWord = state.commitText;
+                lastCommittedZhuyinWord = protectedInputField ? null : state.commitText;
                 if (zhuyinWordIndex != null && state.composingText.isEmpty()) {
                     java.util.LinkedHashSet<String> next = new java.util.LinkedHashSet<>(zhuyinWordIndex.continuations(state.commitText));
-                    if (zhuyinAssociationHistory != null) next.addAll(zhuyinAssociationHistory.nextWords(state.commitText));
+                    if (!protectedInputField && zhuyinAssociationHistory != null) {
+                        next.addAll(zhuyinAssociationHistory.nextWords(state.commitText));
+                        next = new java.util.LinkedHashSet<>(zhuyinAssociationHistory.rankCandidates(new ArrayList<>(next), x -> x, state.commitText, "", "", ""));
+                    }
                     if (!next.isEmpty()) state = zhuyinInput.showAssociations(new ArrayList<>(next));
                 }
             }
@@ -4614,7 +4684,7 @@ public class SimonIMEService extends InputMethodService {
                 }
             }
         }
-        if(state.composingText.isEmpty()){cancelPendingTextCandidates();lastTextKeyUptime=-1;retainedTextEnd=-1;retainedTextField=retainedTextBefore=retainedText="";}
+        if(state.composingText.isEmpty()){retainedTextNeedsReclaim=false;cancelPendingTextCandidates();lastTextKeyUptime=-1;retainedTextEnd=-1;retainedTextField=retainedTextBefore=retainedText="";}
         else if(textLayoutSelected())rememberTextComposition(ic,zhuyinInput.textPreview());
 
         if(zhuyinInput.showIdleShortcuts()) renderZhuyinShortcuts();
@@ -4851,6 +4921,36 @@ public class SimonIMEService extends InputMethodService {
         pendingTextCandidates=null;
     }
     private boolean textCandidateRefreshRunning,textKeyRender;
+    private String rankingBefore="",rankingAfter="";
+    private long rankingField=-1,rankingSelection=0;
+    private Runnable pendingRankingContext;
+    private void clearRankingContext(){
+        rankingSelection++;
+        if(pendingRankingContext!=null&&mainHandler!=null)mainHandler.removeCallbacks(pendingRankingContext);
+        pendingRankingContext=null;rankingBefore=rankingAfter="";rankingField=-1;
+    }
+    private void deferRankingContext(){
+        clearRankingContext();
+        if(mainHandler==null||protectedInputField||currentKeyboardMode!=KeyboardMode.BOPOMOFO||!textLayoutSelected()||getCurrentInputConnection()==null)return;
+        final long selection=rankingSelection,field=fieldGeneration;
+        final InputConnection connection=getCurrentInputConnection();
+        final ZhuyinInputController owner=zhuyinInput;
+        pendingRankingContext=()->{
+            pendingRankingContext=null;
+            if(selection!=rankingSelection||field!=fieldGeneration||protectedInputField||currentKeyboardMode!=KeyboardMode.BOPOMOFO||!isInputViewShown()
+                    ||connection!=getCurrentInputConnection()||owner!=zhuyinInput)return;
+            try{
+                CharSequence left=connection.getTextBeforeCursor(50,0),right=connection.getTextAfterCursor(30,0);
+                if(selection!=rankingSelection||field!=fieldGeneration||protectedInputField||connection!=getCurrentInputConnection()||owner!=zhuyinInput||currentKeyboardMode!=KeyboardMode.BOPOMOFO||!isInputViewShown())return;
+                rankingBefore=left==null?"":left.toString();rankingAfter=right==null?"":right.toString();
+                String composition=owner==null?"":owner.textPreview();
+                if(!composition.isEmpty()&&rankingBefore.endsWith(composition))rankingBefore=rankingBefore.substring(0,rankingBefore.length()-composition.length());
+                rankingField=field;
+            }catch(RuntimeException error){rankingBefore=rankingAfter="";rankingField=-1;Log.w(TAG,"Local ranking context unavailable",error);return;}
+            if(zhuyinInput!=null)deferTextCandidateRows();
+        };
+        mainHandler.postDelayed(pendingRankingContext,100);
+    }
     private final List<TextView> textWordViewPool=new ArrayList<>(),textCharViewPool=new ArrayList<>();
     private void deferTextCandidateRows(){
         // Keep the first deadline: subsequent keys must not postpone a pending refresh.
@@ -4870,7 +4970,7 @@ public class SimonIMEService extends InputMethodService {
     private TextView pooledTextChoice(List<TextView> pool,int index,ZhuyinInputController.TextChoice choice){
         if(index==pool.size()){
             TextView item=new TextView(this);item.setTextSize(18);item.setGravity(Gravity.CENTER);item.setPadding(dp(12),0,dp(12),0);
-            item.setOnClickListener(v->{ZhuyinInputController.TextChoice selected=(ZhuyinInputController.TextChoice)v.getTag();textCandidateTaps++;if(sentencePhone!=null)sentencePhone.userTouched();applyZhuyinState(zhuyinInput.chooseTextCandidate(selected));});pool.add(item);
+            item.setOnClickListener(v->{ZhuyinInputController.TextChoice selected=(ZhuyinInputController.TextChoice)v.getTag();textCandidateTaps++;if(sentencePhone!=null)sentencePhone.userSelected();applyZhuyinState(zhuyinInput.chooseTextCandidate(selected));});pool.add(item);
         }
         TextView item=pool.get(index);if(!choice.label.contentEquals(item.getText()))item.setText(choice.label);
         item.setTag(choice);item.setEnabled(true);item.setTextColor(boStreamPreview.getCurrentTextColor());return item;
@@ -4892,11 +4992,46 @@ public class SimonIMEService extends InputMethodService {
         List<View> words=new ArrayList<>(),characters=new ArrayList<>();
         // Z2: sentence suggestions stay off the word row until the Z3 preview design.
         int wi=0,ci=0;
-        for(ZhuyinInputController.TextChoice choice:zhuyinInput.textChoices()){
+        List<ZhuyinInputController.TextChoice> textChoices=new ArrayList<>(zhuyinInput.textChoices());
+        android.view.inputmethod.EditorInfo editor=getCurrentInputEditorInfo();
+        String localContext="";
+        if(!protectedInputField&&editor!=null&&getSharedPreferences("simon_ime_prefs",MODE_PRIVATE).getBoolean("local_screen_context",false))
+            localContext=LocalConversationContext.text(editor.packageName,SystemClock.elapsedRealtime());
+        else LocalConversationContext.clear();
+        final String hint=localContext;
+        // Stable reorder only: no candidates introduced, no selected text changed, no network payload.
+        if(!protectedInputField&&zhuyinAssociationHistory!=null&&!focused){
+            List<ZhuyinInputController.TextChoice> wordChoices=new ArrayList<>();
+            for(ZhuyinInputController.TextChoice choice:textChoices)if("word".equals(choice.kind))wordChoices.add(choice);
+            String before=rankingField==fieldGeneration?rankingBefore:"",after=rankingField==fieldGeneration?rankingAfter:"";
+            List<ZhuyinInputController.TextChoice> ranked=zhuyinAssociationHistory.rankCandidates(wordChoices,c->c.label,
+                    "",before,after,hint);
+            // Reuse original transactions; character order and selected native targets stay untouched.
+            textChoices.removeIf(c->"word".equals(c.kind));textChoices.addAll(0,ranked);
+        }else if(!protectedInputField&&!focused&&!hint.isEmpty()){
+            List<ZhuyinInputController.TextChoice> wordChoices=new ArrayList<>();
+            for(ZhuyinInputController.TextChoice choice:textChoices)if("word".equals(choice.kind))wordChoices.add(choice);
+            wordChoices.sort(java.util.Comparator.comparing(c->!hint.contains(c.label)));
+            textChoices.removeIf(c->"word".equals(c.kind));textChoices.addAll(0,wordChoices);
+        }
+        for(ZhuyinInputController.TextChoice choice:textChoices){
             if("char".equals(choice.kind))characters.add(pooledTextChoice(textCharViewPool,ci++,choice));
             else words.add(pooledTextChoice(textWordViewPool,wi++,choice));
         }
-        reconcileTextRow(boWordCandidateItems,words);reconcileTextRow(boCandidateItems,characters);
+        // Use the same current-generation AI options and manual transaction as the phonetic layout.
+        List<JSONObject> options=sentencePhone==null?Collections.emptyList():sentencePhone.rowOptions();
+        if(sentencePhone!=null)sentencePhone.beginDisplay();
+        List<String> labels=new ArrayList<>(),groups=new ArrayList<>(),suggestions=new ArrayList<>();
+        for(View view:words){labels.add(((TextView)view).getText().toString());groups.add("word");}
+        for(JSONObject option:options)suggestions.add(sentencePhone.optionText(option));
+        List<View> orderedWords=new ArrayList<>();java.util.Map<View,JSONObject> displayedOptions=new java.util.IdentityHashMap<>();
+        if(options.isEmpty())orderedWords.addAll(words);
+        else for(int index:AiSentence.rowOrder(zhuyinInput.previewText(),focused,labels,groups,suggestions,Integer.MAX_VALUE)){
+            if(index>=0)orderedWords.add(words.get(index));
+            else {JSONObject option=options.get(-1-index);TextView item=sentenceOption(option);orderedWords.add(item);displayedOptions.put(item,option);}
+        }
+        reconcileTextRow(boWordCandidateItems,orderedWords);reconcileTextRow(boCandidateItems,characters);
+        if(sentencePhone!=null)for(java.util.Map.Entry<View,JSONObject> entry:displayedOptions.entrySet())sentencePhone.displayed(entry.getValue(),boWordCandidateItems.indexOfChild(entry.getKey())+1);
         boWordCandidateScroll.scrollTo(wordScroll,0);boCandidateScroll.scrollTo(charScroll,0);updateCandidateRightHint();
     }
     private void renderSentenceOptions(){
@@ -4999,6 +5134,7 @@ public class SimonIMEService extends InputMethodService {
             candidate.setContentDescription(renderedZhuyinCandidateKind+" "+origin+" "+value);
             String kind = renderedZhuyinCandidateKind;
             candidate.setOnClickListener(v -> {
+                if(sentencePhone!=null)sentencePhone.userSelected();
                 boolean cursorChoice=zhuyinInput.wordFocused()||zhuyinInput.keyCaret()>=0;
                 String beforeKeys=cursorChoice?zhuyinInput.sentenceKeys():"",choiceOrigin=zhuyinInput.candidateOrigin(candidateIndex);
                 List<String> beforeSyllables=cursorChoice?new ArrayList<>(zhuyinInput.phoneticSyllables()):java.util.Collections.emptyList();
@@ -5905,14 +6041,24 @@ public class SimonIMEService extends InputMethodService {
     @Override
     public void onUpdateSelection(int oldSelStart, int oldSelEnd, int newSelStart, int newSelEnd,
                                   int candidatesStart, int candidatesEnd) {
+        if(retainedTextNeedsReclaim&&reclaimTextComposition(getCurrentInputEditorInfo()))applyZhuyinState(zhuyinInput.state());
         if(textLayoutSelected()&&!protectedInputField&&zhuyinInput!=null&&zhuyinComposingConnection!=null&&zhuyinComposingConnection==getCurrentInputConnection()){
             String value=zhuyinInput.textPreview();
-            if(newSelStart==newSelEnd&&newSelEnd==candidatesEnd&&candidatesStart>=0&&candidatesEnd-candidatesStart==value.length()){
-                retainedTextEnd=candidatesEnd;retainedTextField=textFieldIdentity(getCurrentInputEditorInfo());
-                if(!value.equals(retainedText))retainedTextBefore=value;retainedText=value;
+            if(newSelStart==newSelEnd&&candidatesStart>=0&&candidatesEnd-candidatesStart==value.length()){
+                if(newSelEnd==candidatesEnd){
+                    retainedTextEnd=candidatesEnd;retainedTextField=textFieldIdentity(getCurrentInputEditorInfo());
+                    if(!value.equals(retainedText))retainedTextBefore=value;retainedText=value;
+                }else if(newSelStart>=0&&retainedTextEnd==candidatesEnd
+                        &&retainedText.equals(value)&&retainedTextField.equals(textFieldIdentity(getCurrentInputEditorInfo()))){
+                    // A native editor caret move releases this preedit; preview-row editing keeps the editor caret at its end.
+                    try {getCurrentInputConnection().finishComposingText();}
+                    catch(RuntimeException error){Log.w(TAG,"Text composition finalization unavailable: "+error.getClass().getSimpleName());}
+                    discardRetainedTextComposition();
+                }
             }
         }
         if(sentencePhone!=null)sentencePhone.selection(oldSelStart,oldSelEnd,newSelStart,newSelEnd,candidatesStart,candidatesEnd);
+        deferRankingContext();
         if (touchShadow != null && newSelStart < oldSelStart) touchShadow.invalidate();
         try {
             if (mIgnoreNextUpdateSelection) {
@@ -5937,7 +6083,22 @@ public class SimonIMEService extends InputMethodService {
         if (isWatchService()) return;
         drainPendingVoiceQueue();
         configureTextRows();
-        if(textLayoutSelected()&&zhuyinInput!=null&&!protectedInputField&&!zhuyinInput.previewText().isEmpty()){reclaimTextComposition(info);applyZhuyinState(zhuyinInput.state());}
+        if(protectedInputField&&zhuyinInput!=null&&!zhuyinInput.textPreview().isEmpty()
+                &&zhuyinComposingConnection!=getCurrentInputConnection())discardRetainedTextComposition();
+        if(textLayoutSelected()&&zhuyinInput!=null&&!protectedInputField&&!zhuyinInput.previewText().isEmpty()) {
+            if(reclaimTextComposition(info))applyZhuyinState(zhuyinInput.state());
+            else {
+                // An earlier selection callback may already have cleared the reclaim flag.
+                // Failed range validation on reopen still releases the old controller snapshot.
+                // Finalize only the editor's existing region; never replay old text at a moved caret.
+                InputConnection ic=getCurrentInputConnection();
+                try {if(ic!=null)ic.finishComposingText();}
+                catch(RuntimeException error){Log.w(TAG,"Text composition finalization unavailable: "+error.getClass().getSimpleName());}
+                // A disconnected or rejecting editor cannot retain controller ownership.
+                // Leave its existing text untouched and let fresh input use the current caret.
+                discardRetainedTextComposition();
+            }
+        }
         warmUpConnection();
         if (mainHandler != null) {
             mainHandler.removeCallbacks(connectionWarmUpRunnable);
@@ -5970,6 +6131,8 @@ public class SimonIMEService extends InputMethodService {
         flushPendingVoiceAudio(false);
         dismissSymbolPopup();
         if(textLayoutSelected()&&zhuyinInput!=null)rememberTextComposition(getCurrentInputConnection(),zhuyinInput.textPreview());
+        if(textLayoutSelected()&&!protectedInputField&&zhuyinInput!=null&&!zhuyinInput.textPreview().isEmpty())retainedTextNeedsReclaim=true;
+        clearRankingContext();
         cancelPendingTextCandidates();lastTextKeyUptime=-1;
         if (!isWatchService() && zhuyinInput != null && !textLayoutSelected()) clearBopomofoBuffer();
         if (mainHandler != null) {
@@ -5986,6 +6149,7 @@ public class SimonIMEService extends InputMethodService {
     public void onDestroy() {
         flushPendingVoiceAudio(true);
         dismissSymbolPopup();
+        clearRankingContext();
         cancelPendingTextCandidates();lastTextKeyUptime=-1;
         if(layoutDiagnostics!=null){layoutDiagnostics.close();layoutDiagnostics=null;}
         if (sentencePhone != null) { sentencePhone.close(); sentencePhone = null; }

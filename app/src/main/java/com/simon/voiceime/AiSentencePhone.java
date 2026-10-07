@@ -45,11 +45,17 @@ final class AiSentencePhone {
     private long debounceEnd=-1,receive=-1,validation=-1,wouldRender=-1,phoneRender=-1;
     private int failureCount;
     private boolean correctionShown;
+    // A manual candidate is authoritative for the entire current composition.
+    // Conservative until native scalar/key spans can prove a smaller safe edit.
+    private boolean manualChoice;
+    private final Set<String> protectedWords=new HashSet<>();
+    private boolean legalProtectionReady;
     private int revertedSpans;
     boolean correctionShown(){return correctionShown;}
     int revertedSpans(){return revertedSpans;}
     void resetFeedback(){correctionShown=false;revertedSpans=0;}
     void userTouched(){invalidatePending();}
+    void userSelected(){manualChoice=true;invalidatePending();}
     private String sentenceMode(){return prefs().getString("ai_sentence_mode","suggestions");}
     private int expectedCommitEnd=-1;
     private final Map<JSONObject,Integer> displayedRanks=new IdentityHashMap<>();
@@ -69,6 +75,10 @@ final class AiSentencePhone {
     }
     AiSentencePhone(Context context,Handler handler,Host host)throws IOException {
         this.context=context;this.handler=handler;this.host=host;
+        try(BufferedReader in=new BufferedReader(new InputStreamReader(context.getAssets().open("correction/protected_terms.txt"),StandardCharsets.UTF_8))){
+            for(String word;(word=in.readLine())!=null;){word=word.trim();if(!word.isEmpty()&&!word.startsWith("#"))protectedWords.add(word);}
+            legalProtectionReady=!protectedWords.isEmpty();
+        }catch(IOException unavailable){android.util.Log.w("AiSentencePhone","Legal protection unavailable; automatic correction disabled",unavailable);}
         try(InputStream in=context.getAssets().open("sentence-contract.json")){
             ByteArrayOutputStream bytes=new ByteArrayOutputStream();byte[] buffer=new byte[4096];for(int n;(n=in.read(buffer))!=-1;)bytes.write(buffer,0,n);
             try{sentence=new AiSentence(new JSONObject(bytes.toString("UTF-8")));}catch(Exception invalid){throw new IOException("sentence contract",invalid);}
@@ -112,6 +122,7 @@ final class AiSentencePhone {
         if(host.controller()!=null&&host.controller().previewText().isEmpty())sentence.begin(now(),"",false,()->null);
         debounceEnd=receive=validation=wouldRender=phoneRender=-1;
         expectedApplySelection=false;
+        if(editorChange||host.controller()!=null&&host.controller().previewText().isEmpty())manualChoice=false;
         if(editorChange){compositionStart=compositionEnd=-1;installed.clear();touches.clear();touchKeys="";}
         localOption=null;projections.clear();
         displayedRanks.clear();localRank=-1;
@@ -123,7 +134,7 @@ final class AiSentencePhone {
 
             }catch(JSONException invalid){event("local_invalid");}
         }
-        pause=()->{if(localOption!=null&&autoEnabled())applyLocal(true);send();};handler.postDelayed(pause,450);
+        pause=()->send();handler.postDelayed(pause,"live".equals(sentenceMode())?1000:450);
     }
     /** Called only after the IME has written this composition to its owned editor. */
     void written(){
@@ -224,13 +235,13 @@ final class AiSentencePhone {
         if(clauseKeys.isEmpty()||literal.substring(split).isEmpty())return null;
         if(!clausePrefix.isEmpty()){spans=new JSONArray();alternatives=new JSONArray();}
         JSONObject req=AiSentence.request(sentence.schema,UUID.randomUUID().toString(),sentence.editorGeneration,sentence.compositionGeneration,clauseKeys,literal.substring(split),left+clausePrefix,spans,alternatives);
-        leftWitness=left;req.put("client_auto",prefs().getBoolean("ai_sentence_auto_apply",false));return req;
+        leftWitness=left;req.put("client_auto",legalProtectionReady&&!manualChoice&&"live".equals(sentenceMode())&&prefs().getBoolean("ai_sentence_auto_apply",false)&&literal.substring(split).codePointCount(0,literal.length()-split)>=10);return req;
 
         } catch(Exception invalid){throw new IllegalArgumentException("sentence snapshot",invalid);}
     }
     private void send(){send(false);}
     private void send(boolean eager){
-        if(!predictionEnabled()||!host.allowed()||transaction!=null&&transaction.automatic())return;
+        if(!predictionEnabled()||!host.allowed()||manualChoice&&"live".equals(sentenceMode())||transaction!=null&&transaction.automatic())return;
         try {
             sentence.mode(sentenceMode());
             ZhuyinInputController controller=host.controller();String preview=controller==null?"":controller.previewText();
@@ -265,12 +276,13 @@ final class AiSentencePhone {
                             JSONObject decision=sentence.result.getJSONObject("decision");
                             if(!"none".equals(decision.getString("display"))&&sentence.result.getJSONArray("candidates").length()>0)wouldRender=now();
                             event("validated");
-                            if(autoEnabled()&&"auto".equals(decision.optString("display"))){
+                            if(Boolean.TRUE.equals(req.opt("client_auto"))&&!"auto".equals(decision.optString("display")))event("server_auto_not_ready_suggestions_retained");
+                            if(autoEnabled()){
                                 for(JSONObject option:sentence.visible(request,now(),false))if(option.optString("id").equals(decision.optString("selected_id"))){applyCandidate(option,true);break;}
                             }
                             if(!options(false).isEmpty())host.render();
-                            long delay=Math.max(0,4001-(now()-sentence.lastEdit));
-                            handler.postDelayed(()->{if(request==req){sentence.result=null;host.render();event("expired");}},delay);
+                            // A manual option remains available while its exact input token and editor witness remain current.
+                            // Automatic application and incoming response acceptance retain their existing deadlines.
                         }catch(Exception invalid){failureCount++;sentence.failed(req);sentence.result=null;event("invalid");}
                     });
                 }
@@ -359,13 +371,15 @@ final class AiSentencePhone {
         try {return sentence.result!=null&&!"ok".equals(sentence.result.getJSONObject("decision").getString("jev_status"));
         } catch(Exception invalid){return false;}
     }
-    boolean autoEnabled(){return "live".equals(sentenceMode())&&prefs().getBoolean("ai_sentence_auto_apply",false)
-        &&sentence.result!=null&&Boolean.TRUE.equals(sentence.result.opt("name_protection_ready"));}
+    boolean autoEnabled(){return legalProtectionReady&&!manualChoice&&host.controller()!=null&&host.controller().previewText().codePointCount(0,host.controller().previewText().length())>=10
+        &&now()-sentence.lastEdit>=1000&&"live".equals(sentenceMode())&&prefs().getBoolean("ai_sentence_auto_apply",false)
+        &&AiSentence.autoAuthorized(request,sentence.result);}
     JSONObject localOption(){return host.controller()!=null&&!focused()&&localOption!=null&&!localOption.optString("text").equals(host.controller().previewText())?localOption:null;}
     String optionText(JSONObject candidate){return candidate.optString("text");}
     private boolean protectedChange(String text){
-        return AiComposition.protectedChange(host.controller().previewText(),text,
-            RimeVocabularyInstaller.words(new File(context.getFilesDir(),"rime/user")));
+        Set<String> words=new HashSet<>(protectedWords);
+        words.addAll(RimeVocabularyInstaller.words(new File(context.getFilesDir(),"rime/user")));
+        return AiComposition.protectedChange(host.controller().previewText(),text,words);
     }
     void applyLocal(boolean automatic){
         JSONObject option=localOption;if(option==null||!host.allowed()||focused())return;
@@ -382,7 +396,7 @@ final class AiSentencePhone {
     private void applyCandidate(JSONObject candidate,boolean automatic){
         try {
         boolean local="local".equals(candidate.optString("source"));
-        if(!host.allowed()||!automatic&&!rowOptions().contains(candidate)||!local&&(!sentence.fresh(request,now())||!witness())){event("tap_stale");return;}
+        if(!host.allowed()||!automatic&&!rowOptions().contains(candidate)||!local&&(!(automatic?sentence.fresh(request,now()):sentence.current(request))||!witness())){event("tap_stale");return;}
         int rank=displayedRanks.getOrDefault(candidate,-1);if(!automatic&&rank<=0)return;
         String keys=automatic?clauseKeyPrefix+AiSentence.repairedKeys(request.getJSONArray("key_slots"),candidate.getJSONArray("repairs")):candidate.getString("keys");
         String text=automatic?clausePrefix+candidate.getString("text"):AiSentence.replaceSpan(host.controller().previewText(),candidate);
@@ -390,7 +404,7 @@ final class AiSentencePhone {
         if(automatic&&(now()-sentence.lastEdit>2500||focused()||!autoEnabled()||candidate.optBoolean("protected",true)||protectedChange(text)||revertedSpan!=null&&revertedSpan.blocks(host.controller().sentenceKeys())))return;
         AiComposition tx=new AiComposition(host.controller());ZhuyinInputController after=automatic?tx.applyAuto(keys,text,now(),true,false):tx.apply(keys,text);
         if(after==null){event("tap_unmapped");return;}
-        if(!local&&(!sentence.fresh(request,now())||!witness())){after.close();event("tap_stale");return;}
+        if(!local&&(!(automatic?sentence.fresh(request,now()):sentence.current(request))||!witness())){after.close();event("tap_stale");return;}
         autoSource=local?"local":"ai";install(tx,after,automatic);
         if(!automatic)suggestionEvent("accepted",autoSource,rank,candidate.optString("text").codePointCount(0,candidate.optString("text").length()));
         } catch(Exception invalid){event("tap_invalid");}

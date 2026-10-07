@@ -69,7 +69,7 @@ public class AiSentenceTest {
  @Test public void shadowReceivesAndSuggestionsRequireBothPolicies() throws Exception {
   JSONObject schema=contract(),req=schema.getJSONArray("examples").getJSONObject(0),res=schema.getJSONArray("examples").getJSONObject(1);
   AiSentence c=session(schema);assertNotNull(c.begin(550,()->req));assertTrue(c.receive(req,res.toString(),600,(k,t)->true));assertTrue(c.visible(req,600,false).isEmpty());
-  c.mode("suggestions");assertEquals(1,c.visible(req,600,false).size());assertTrue(c.visible(req,600,true).isEmpty());assertTrue(c.visible(req,4101,false).isEmpty());
+  c.mode("suggestions");assertEquals(1,c.visible(req,600,false).size());assertTrue(c.visible(req,600,true).isEmpty());assertEquals("manual suggestion remains current after auto deadline",1,c.visible(req,4101,false).size());assertFalse("automatic freshness still expires",c.fresh(req,4101));
   c.result.put("mode","shadow");assertTrue(c.visible(req,600,false).isEmpty());
  }
  @Test public void failuresLeaveTypingUntouchedNoRetry() throws Exception {
@@ -271,4 +271,95 @@ public class AiSentenceTest {
   assertEquals("pause",c.trigger());
  }
 
+ @Test public void liveWaitsTenCharactersAndOneSecondBeforeContextRead() throws Exception {
+  AiSentence c=new AiSentence(contract());c.mode("live");c.edit(100,true,true);
+  java.util.function.Supplier<JSONObject> forbidden=()->{throw new AssertionError("auto context read before ten characters/one second");};
+  assertFalse(c.charsDue("多".repeat(10)));
+  assertNull(c.begin(550,"多".repeat(10),true,forbidden));
+  assertNull(c.begin(1099,"多".repeat(10),true,forbidden));
+  assertNull(c.begin(1100,"多".repeat(9),true,forbidden));
+  JSONObject req=c.begin(1100,"多".repeat(10),true,()->AiSentence.request(c.schema,"live-ten",c.editorGeneration,c.compositionGeneration,"ㄉㄨㄛ ".repeat(10),"多".repeat(10),"",new JSONArray(),new JSONArray()));
+  assertNotNull(req);assertEquals("pause",c.trigger());assertNull(c.begin(1101,"多".repeat(10),true,forbidden));
+  c.edit(1102,false,true);assertFalse(c.fresh(req,1103));
+ }
+ @Test public void capturedWrongKeysRespectLiveDeadlineWithoutInventingKeys() throws Exception {
+  JSONObject fixture=new JSONObject(new String(getClass().getResourceAsStream("/real-key-673.json").readAllBytes(),java.nio.charset.StandardCharsets.UTF_8));
+  JSONObject input=fixture.getJSONObject("input");String literal=input.getString("literal");JSONArray keys=input.getJSONArray("keys");StringBuilder reading=new StringBuilder();for(int i=0;i<keys.length();i++)reading.append(keys.getString(i));
+  assertEquals("committed_text_proxy",fixture.getString("truth_status"));
+  AiSentence c=new AiSentence(contract());c.mode("live");c.edit(0,true,true);
+  assertNull(c.begin(450,literal,true,()->{throw new AssertionError("captured wrong-key clause queried before one second");}));
+  JSONObject req=c.begin(1000,literal,true,()->AiSentence.request(c.schema,"captured-673",c.editorGeneration,c.compositionGeneration,reading.toString(),literal,"",new JSONArray(),new JSONArray()));
+  assertNotNull(req);assertEquals(keys.toString(),req.getJSONArray("key_slots").toString());assertEquals(literal,req.getString("literal"));
+ }
+ static JSONObject publicAutoFixture() throws Exception {
+  return new JSONObject(new String(AiSentenceTest.class.getResourceAsStream("/auto-v2-public.json").readAllBytes(),StandardCharsets.UTF_8));
+ }
+ @Test public void officialAutoV2AndServerOffBubbleUseSamePublicContract() throws Exception {
+  JSONObject fixture=publicAutoFixture(),req=fixture.getJSONObject("request"),res=fixture.getJSONObject("response");
+  AiSentence.validateRequest(contract(),req);
+  JSONObject ready=AiSentence.response(contract(),req,res.toString(),(k,t)->true);
+  assertEquals("auto",ready.getJSONObject("decision").getString("display"));
+  res.put("decision",fixture.getJSONObject("actual_policy"));
+  AiSentence client=session(contract());client.mode("suggestions");
+  assertNotNull(client.begin(550,()->req));assertTrue(client.receive(req,res.toString(),600,(k,t)->true));
+  assertEquals(1,client.visible(req,600,false).size());
+  assertEquals("bubble",client.result.getJSONObject("decision").getString("display"));
+ }
+ @Test public void officialLegacyRejectsFakeAutoReadinessMetadata() throws Exception {
+  JSONObject req=contract().getJSONArray("examples").getJSONObject(0),res=new JSONObject(contract().getJSONArray("examples").getJSONObject(1).toString());
+  req.put("client_auto",false);res.put("name_protection_ready",true);
+  res.getJSONArray("candidates").getJSONObject(0).put("protected",false);
+  assertThrows(RuntimeException.class,()->AiSentence.response(contract(),req,res.toString(),(k,t)->true));
+ }
+ @Test public void autoV2RequiresDigestPolicyAndConsistentProtection() throws Exception {
+  JSONObject fixture=publicAutoFixture(),req=fixture.getJSONObject("request"),res=fixture.getJSONObject("response");
+  for(String mutation:java.util.List.of("missing_digest","legacy_policy","protection_mismatch","legacy_request")){
+   JSONObject r=new JSONObject(res.toString()),q=new JSONObject(req.toString());
+   if(mutation.equals("missing_digest"))r.remove("digest");
+   if(mutation.equals("legacy_policy"))r.put("policy_version","sentence-r2-v1");
+   if(mutation.equals("protection_mismatch"))r.getJSONArray("candidates").getJSONObject(0).getJSONArray("protected_categories").put("name");
+   if(mutation.equals("legacy_request"))q.put("client_auto",false);
+   assertThrows(mutation,RuntimeException.class,()->AiSentence.response(contract(),q,r.toString(),(k,t)->true));
+  }
+ }
+ @Test public void automaticAuthorizationRequiresActualAutoNotChipOrBubble() throws Exception {
+  java.lang.reflect.Method authorize=AiSentence.class.getDeclaredMethod("autoAuthorized",JSONObject.class,JSONObject.class);
+  JSONObject fixture=publicAutoFixture(),req=fixture.getJSONObject("request"),res=fixture.getJSONObject("response");
+  assertEquals(true,authorize.invoke(null,req,AiSentence.response(contract(),req,res.toString(),(k,t)->true)));
+  for(String display:java.util.List.of("chip","bubble","none")){
+   JSONObject changed=new JSONObject(res.toString());changed.getJSONObject("decision").put("display",display);
+   assertEquals(display,false,authorize.invoke(null,req,changed));
+  }
+  res.getJSONObject("decision").put("choice_confidence",.98);
+  assertEquals(false,authorize.invoke(null,req,AiSentence.response(contract(),req,res.toString(),(k,t)->true)));
+  res.getJSONObject("decision").put("choice_confidence",.99);
+  assertEquals(false,authorize.invoke(null,req,AiSentence.response(contract(),req,res.toString(),(k,t)->false)));
+ }
+ @Test public void canonicalDigestMatchesOfficialUtf8WithoutNonAsciiEscapes() throws Exception {
+  JSONObject req=publicAutoFixture().getJSONObject("request");req.getJSONObject("left_context").put("text","前\u2028後</段");
+  assertEquals("233c417a24f038f036df10ce4c200aa01a2e1c08163e6a43b1f33439afaae041",AiSentence.digest(req));
+ }
+ @Test public void digestUsesSlotValuesIndependentlyOfJsonSerializer() throws Exception {
+  JSONObject req=publicAutoFixture().getJSONObject("request");req.getJSONObject("left_context").put("text","前\u2028後</段");
+  JSONArray equivalent=new JSONArray(req.getJSONArray("key_slots").toString()) {
+   @Override public String toString(){return super.toString().replace("ㄉ","\\u3109");}
+  };
+  req.put("key_slots",equivalent);
+  assertEquals("233c417a24f038f036df10ce4c200aa01a2e1c08163e6a43b1f33439afaae041",AiSentence.digest(req));
+ }
+
+
+ @Test public void manualSuggestionLifetimeUsesCurrentInputTokenAndPreservesOriginal()throws Exception {
+  JSONObject schema=contract(),req=schema.getJSONArray("examples").getJSONObject(0),res=schema.getJSONArray("examples").getJSONObject(1);AiSentence c=session(schema);c.mode("suggestions");assertNotNull(c.begin(550,()->req));assertTrue(c.receive(req,res.toString(),600,(k,t)->true));
+  assertEquals("舵餘",req.getString("literal"));assertEquals(1,c.visible(req,6000,false).size());assertFalse(c.fresh(req,6000));
+  c.edit(6001,false,true);assertTrue("new physical key rejects old manual result",c.visible(req,6002,false).isEmpty());
+ }
+ @Test public void manualSuggestionOldFieldPrivacyAndDigestNeverRemainSelectable()throws Exception {
+  for(String invalid:new String[]{"field","password","off","digest"}){
+   JSONObject schema=contract(),req=new JSONObject(schema.getJSONArray("examples").getJSONObject(0).toString()),res=schema.getJSONArray("examples").getJSONObject(1);AiSentence c=session(schema);c.mode("suggestions");assertNotNull(c.begin(550,()->req));assertTrue(c.receive(req,res.toString(),600,(k,t)->true));
+   assertEquals(1,c.visible(req,6000,false).size());
+   if(invalid.equals("field"))c.edit(6001,true,true);else if(invalid.equals("password"))c.edit(6001,true,false);else if(invalid.equals("off"))c.mode("off");else req.put("literal","different context");
+   assertTrue(invalid+" invalidates manual authority",c.visible(req,6002,false).isEmpty());
+  }
+ }
 }

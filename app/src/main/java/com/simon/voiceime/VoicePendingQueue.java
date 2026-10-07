@@ -119,8 +119,6 @@ final class VoicePendingQueue {
     static String parseSuccessfulResponse(String raw)throws IOException {
         try {
             JSONObject j=new JSONObject(raw==null?"":raw);
-            if("needs_attention".equals(j.optString("correction_status")))throw new NeedsAttentionException();
-            if("pending".equals(j.optString("correction_status"))||(j.has("ai_corrected")&&!j.optBoolean("ai_corrected")))throw new IOException("audio_correction_rejected");
             if(j.has("error")&&!j.isNull("error"))throw new IOException("transcription error payload");
             if(!j.has("text")||!(j.get("text") instanceof String))throw new IOException("malformed transcription response");
             return j.getString("text");
@@ -162,6 +160,7 @@ final class VoicePendingQueue {
     void append(String id,byte[] bytes,int length)throws IOException {
         try {runIO(() -> {
             if(id==null||length<=0||discarded.contains(id)||!metadata.containsKey(id))return null;
+            metadata.get(id).remove("digital_silence_verified");metadata.get(id).remove("digital_silence_bytes");metadata.get(id).remove("digital_silence_sha256");
             FileOutputStream out=streams.get(id); BufferedOutputStream buffer=buffers.get(id);
             if(out==null) {out=new FileOutputStream(pcm(id),true);buffer=new BufferedOutputStream(out,64*1024);streams.put(id,out);buffers.put(id,buffer);}
             DigestOutputStream digestStream=digestStreams.get(id);
@@ -242,7 +241,17 @@ final class VoicePendingQueue {
     void holdForReceipt(String id) {if(id!=null)receiptWaits.add(id);}
     void releaseReceiptWait(String id) {
         receiptWaits.remove(id);
-        runIO(() -> {JSONObject m=metadata.get(id);if(m!=null&&pcm(id).exists())update(id,"pending","audio_receipt_not_confirmed",0);return null;});
+        runIO(() -> {
+            JSONObject m=metadata.get(id);
+            if(m!=null&&pcm(id).exists())update(id,"pending","audio_receipt_not_confirmed",0);
+            else if(m!=null&&"archived".equals(m.optString("state"))&&!discarded.contains(id)&&m.optBoolean("audio_archived")
+                    &&m.has("audio_receipt")&&((!m.optBoolean("delivered")&&!m.optBoolean("clipboard_written"))||m.optBoolean("server_transcript_pending"))) {
+                // Custody settles audio ownership; undelivered text still belongs to the outbox.
+                // Apply the archived-state subset of cold recovery on the serialized drain path.
+                update(id,"pending","recovered_text_outbox",m.optLong("next_attempt_at"));
+            }
+            return null;
+        });
     }
     void finishRecording(String id) { finishRecording(id,null); }
     void finishRecording(String id,Runnable completion) {
@@ -317,6 +326,44 @@ final class VoicePendingQueue {
             return new JSONObject().put("client_session_id",id).put("byte_count",m.getLong("byte_count")).put("sha256",m.getString("sha256"));
         });
     }
+    private boolean isOriginalDigitalSilence(String id,byte[] pcm) {
+        if(pcm==null)return false;
+        return isOriginalDigitalSilence(id,new ByteArrayInputStream(pcm),pcm.length);
+    }
+    private boolean isOriginalDigitalSilence(String id,InputStream input,long bytes) {
+        if(id==null||discarded.contains(id)||capturing.contains(id)||backupFailures.contains(id)||bytes<=0)return false;
+        JSONObject identity;
+        try {identity=recordingIdentity(id);}catch(Exception e){return false;}
+        if(identity.optLong("byte_count",-1)!=bytes)return false;
+        try {
+            MessageDigest digest=MessageDigest.getInstance("SHA-256");byte[] buffer=new byte[8192];long count=0;
+            for(int n;(n=input.read(buffer))!=-1;){for(int i=0;i<n;i++)if(buffer[i]!=0)return false;digest.update(buffer,0,n);count+=n;}
+            return count==bytes&&hex(digest.digest()).equals(identity.optString("sha256"));
+        }catch(Exception e){return false;}
+    }
+    private boolean storedDigitalSilence(String id) {
+        File file=pcm(id);if(!file.exists())return false;
+        try(InputStream in=new FileInputStream(file)){return isOriginalDigitalSilence(id,in,file.length());}
+        catch(IOException e){return false;}
+    }
+    boolean acknowledgeDigitalSilence(String id,byte[] pcm) {
+        return runIO(() -> {
+            if(!isOriginalDigitalSilence(id,pcm))return false;
+            acknowledgeDelivery(id,false);return true;
+        });
+    }
+    private void requireTranscriptOrDigitalSilence(String id,String text,boolean append)throws IOException {
+        if(!VoiceResultText.isSilence(text)&&!VoiceResultText.isNonSpeech(text,append,-1))return;
+        boolean verified=runIO(() -> {
+            JSONObject m=metadata.get(id);if(m==null)return false;
+            if(!capturing.contains(id)&&!backupFailures.contains(id)&&m.optBoolean("digital_silence_verified")
+                    &&m.optLong("digital_silence_bytes",-1)==m.optLong("byte_count",-2)
+                    &&m.optString("digital_silence_sha256").equals(m.optString("sha256")))return true;
+            if(!storedDigitalSilence(id))return false;
+            m.put("digital_silence_verified",true).put("digital_silence_bytes",m.getLong("byte_count")).put("digital_silence_sha256",m.getString("sha256"));writeMeta(id,m);return true;
+        });
+        if(!verified)throw new IOException("empty transcript for non-silent original audio");
+    }
     boolean acceptReceipt(String id,JSONObject receipt) {
         return runIO(() -> {
             if(id==null||discarded.contains(id)||!durableOriginalPcmReceipt(receipt))return false;
@@ -331,6 +378,7 @@ final class VoicePendingQueue {
             if(pcm(id).exists())flushFile(id);
             if(!m.has("byte_count")||!m.has("sha256")||receipt.optLong("byte_count",-1)!=m.optLong("byte_count",-2)
                     ||!m.getString("sha256").equals(receipt.optString("sha256")))return false;
+            if(storedDigitalSilence(id))m.put("digital_silence_verified",true).put("digital_silence_bytes",m.getLong("byte_count")).put("digital_silence_sha256",m.getString("sha256"));
             m.put("audio_receipt",new JSONObject(receipt.toString())).put("audio_archived",true).put("state","archived");if(!m.has("archived_at"))m.put("archived_at",System.currentTimeMillis());writeMeta(id,m);
             // This is the only ordinary PCM deletion path. Text never authorizes it.
             if(pcm(id).exists()&&!pcm(id).delete())throw new IOException("PCM deletion failed");
@@ -394,7 +442,7 @@ final class VoicePendingQueue {
             boolean archived=!parentCorrectionOwed&&claim.has("audio_receipt")&&acceptReceipt(id,claim.getJSONObject("audio_receipt"));
             String text=claim.has("result_text")?claim.getString("result_text"):null;
             boolean missingText=!claim.optBoolean("delivered")&&!claim.optBoolean("clipboard_written")
-                    &&(text==null||VoiceResultText.clean(text).isEmpty()) && !claim.has("chunk_transcript");
+                    &&(text==null||VoiceResultText.clean(text).isEmpty()||VoiceResultText.isNonSpeech(text,claim.optBoolean("append_result",true),-1)) && !claim.has("chunk_transcript");
             if(!archived||claim.optBoolean("server_transcript_pending")||missingText) {
                 if(archived&&missingText)runIO(() -> {JSONObject m=metadata.get(id);m.put("server_transcript_pending",true);writeMeta(id,m);return null;});
                 boolean chunked = !archived && (pcm(id).length() > CHUNK_BYTES || claim.has("chunk_limit") || claim.has("chunk_receipts"));
@@ -416,6 +464,9 @@ final class VoicePendingQueue {
                 JSONObject response=new JSONObject(raw);
                 String archiveText=parseSuccessfulResponse(raw);
                 if(discarded.contains(id))return;
+                if(!claim.optBoolean("delivered")&&!claim.optBoolean("clipboard_written")
+                        &&(text==null||VoiceResultText.isNonSpeech(text,claim.optBoolean("append_result",true),-1)||VoiceResultText.isSilence(text)))
+                    requireTranscriptOrDigitalSilence(id,archiveText,claim.optBoolean("append_result",true));
                 if((claim.optBoolean("delivered")||claim.optBoolean("clipboard_written"))
                         &&VoiceResultText.clean(archiveText).length()>VoiceResultText.clean(text).length()
                         &&!VoiceResultText.isNonSpeech(archiveText,claim.optBoolean("append_result",true),-1)) {
@@ -434,6 +485,7 @@ final class VoicePendingQueue {
             if(claim.optBoolean("delivered")||claim.optBoolean("clipboard_written"))return;
             if(text==null)throw new IOException("missing archived text");
             if(VoiceResultText.isSilence(text)||VoiceResultText.isNonSpeech(text,claim.optBoolean("append_result",true),-1)) {
+                requireTranscriptOrDigitalSilence(id,text,claim.optBoolean("append_result",true));
                 acknowledgeDelivery(id,false);
                 if(observer!=null)observer.event("silence",id,0,0,attempts(id),"");return;
             }
@@ -522,7 +574,7 @@ final class VoicePendingQueue {
         JSONObject response=new JSONObject(parentResponse);
         if(correctedOpus) {response.put("text",state.getString("result_text")).put("ai_corrected",true);parentResponse=response.toString();}
         String fullText=parseSuccessfulResponse(parentResponse);
-        if(!response.optBoolean("ai_corrected",false))throw new IOException("parent audio_correction_rejected");
+        requireTranscriptOrDigitalSilence(id,fullText,state.optBoolean("append_result",true));
         JSONObject receipt=response.optJSONObject("receipt");
         if(!durableOriginalPcmReceipt(receipt)||!id.equals(receipt.optString("client_session_id"))
                 ||receipt.optLong("byte_count",-1)!=length||!parentIdentity.getString("sha256").equals(receipt.optString("sha256")))

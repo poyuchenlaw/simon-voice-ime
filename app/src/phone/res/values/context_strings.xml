@@ -1,0 +1,1 @@
+<resources><string name="local_conversation_context_description">只在本機讀取明確標示的對方上一則訊息，協助候選排序；不儲存、不上傳，30秒後失效。無法辨識訊息方向時不讀取。</string></resources>

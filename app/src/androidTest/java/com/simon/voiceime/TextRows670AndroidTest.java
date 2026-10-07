@@ -12,6 +12,7 @@ import java.util.*;
 /** Actual emulator window and physical taps; no direct controller edits. */
 public class TextRows670AndroidTest extends TextRows669AndroidTest {
     LinearLayout words,characters;HorizontalScrollView wordScroll,charScroll;
+    int diagnosticBoundary=-1;final JSONArray diagnosticBoundaryTrace=new JSONArray();
     final List<JSONObject> rawDrawFrames=new java.util.concurrent.CopyOnWriteArrayList<>();
     final List<JSONObject> injections=new ArrayList<>();
     final java.util.concurrent.ConcurrentLinkedQueue<String> durableDraws=new java.util.concurrent.ConcurrentLinkedQueue<>();
@@ -220,7 +221,27 @@ public class TextRows670AndroidTest extends TextRows669AndroidTest {
                 if(tag instanceof ZhuyinInputController.TextChoice){ZhuyinInputController.TextChoice choice=(ZhuyinInputController.TextChoice)tag;ready[0]&=choice.keys.equals(actualController().sentenceKeys())&&choice.witness.equals(actualController().previewText());}
             }
         });if(ready[0])return;Thread.sleep(50);}
+        final JSONObject[] timeout={null};inst.runOnMainSync(()->{
+            try {timeout[0]=candidateDiagnostic(items,count).put("timeout_ms",5000).put("ready",ready[0]);}
+            catch(Exception e){throw new RuntimeException(e);}
+        });
+        save("cursor-menu-timeout.json",timeout[0].toString());screenshot("cursor-menu-timeout-screen");
         assertTrue("background menu must become available within 5 seconds",ready[0]);
+    }
+    JSONObject candidateDiagnostic(LinearLayout items,int count)throws Exception {
+        ZhuyinInputController controller=actualController();JSONArray choices=new JSONArray();
+        for(int n=0;n<items.getChildCount();n++){
+            View item=items.getChildAt(n);JSONObject choice=new JSONObject().put("index",n).put("enabled",item.isEnabled()).put("shown",item.isShown())
+                    .put("label",item instanceof TextView?((TextView)item).getText().toString():"");Object tag=item.getTag();
+            if(tag instanceof ZhuyinInputController.TextChoice){ZhuyinInputController.TextChoice c=(ZhuyinInputController.TextChoice)tag;
+                choice.put("choice_keys",c.keys).put("choice_witness",c.witness).put("choice_boundary",c.boundary).put("choice_kind",c.kind)
+                    .put("keys_match",c.keys.equals(controller.sentenceKeys())).put("witness_match",c.witness.equals(controller.previewText()));}
+            else choice.put("tag_class",tag==null?"null":tag.getClass().getName());choices.put(choice);
+        }
+        return new JSONObject().put("uptime_ms",SystemClock.uptimeMillis()).put("row",items==words?"words":items==characters?"characters":"other")
+                .put("required_count",count).put("actual_count",items.getChildCount()).put("requested_boundary",diagnosticBoundary)
+                .put("controller_boundary",controller.previewBoundary()).put("sentence_keys",controller.sentenceKeys()).put("preview_text",controller.previewText())
+                .put("displayed_preview",row1.getText().toString()).put("choices",choices).put("boundary_trace",diagnosticBoundaryTrace);
     }
     void revealIndex(LinearLayout items,HorizontalScrollView scroll,int index)throws Exception {
         awaitCandidateCount(items,index+1);
@@ -266,7 +287,11 @@ public class TextRows670AndroidTest extends TextRows669AndroidTest {
             int[] at=new int[2];row1.getLocationOnScreen(at);
             int x=Math.round(at[0]+row1.getPaddingLeft()+layout.getPrimaryHorizontal(utf)),y=at[1]+row1.getTotalPaddingTop()+(layout.getLineTop(line)+layout.getLineBottom(line))/2;
             r.set(x-1,y-1,x+1,y+1);
-        });tap(r);Thread.sleep(200);
+        });diagnosticBoundary=boundary;tap(r);Thread.sleep(200);
+        final JSONObject[] snapshot={null};inst.runOnMainSync(()->{try{snapshot[0]=candidateDiagnostic(words,10);}catch(Exception e){throw new RuntimeException(e);}});
+        diagnosticBoundaryTrace.put(new JSONObject().put("requested_boundary",boundary).put("uptime_ms",SystemClock.uptimeMillis())
+                .put("controller_boundary",snapshot[0].getInt("controller_boundary")).put("word_count",words.getChildCount()).put("character_count",characters.getChildCount()));
+        save("cursor-boundary-trace.json",diagnosticBoundaryTrace.toString());
     }
     public void testTwentyPhysicalDeletions()throws Exception{
         begin();for(int n=0;n<10;n++)typeToday();JSONArray results=new JSONArray();
@@ -299,8 +324,16 @@ public class TextRows670AndroidTest extends TextRows669AndroidTest {
         save("ten-compositions-memory.json",samples.toString());
     }
 
+    void typeFortyFiveToneYi()throws Exception {
+        // Public key input with twelve dictionary-backed word alternatives at the endpoints.
+        for(int n=0;n<45;n++){tap("ㄧ");tap("ˋ");}
+        inst.runOnMainSync(()->{
+            assertEquals("exact ninety physical phonetic keys","ㄧˋ".repeat(45),actualController().sentenceKeys());
+            assertEquals("forty-five complete tone syllables",java.util.Collections.nCopies(45,"ㄧˋ"),actualController().phoneticSyllables());
+        });
+    }
     public void testFortyFiveCursorCharacters()throws Exception{
-        begin();for(int n=0;n<22;n++)typeToday();for(String k:new String[]{"ㄐ","ㄧ","ㄣ","空白"})tap(k);
+        begin();typeFortyFiveToneYi();
         assertEquals(45,shown().codePointCount(0,shown().length()));JSONArray checks=new JSONArray();
         for(int boundary:new int[]{0,22,45}){
             tapBoundary(boundary);String before=shown();revealTenth(words,wordScroll);revealTenth(characters,charScroll);
@@ -333,9 +366,10 @@ public class TextRows670AndroidTest extends TextRows669AndroidTest {
     }
 
     public void testFortyFiveCursorWords()throws Exception{
-        begin();for(int n=0;n<11;n++)typeToday();for(String k:new String[]{"ㄨ","ㄛ","ˇ"})tap(k);for(int n=0;n<11;n++)typeToday();assertEquals("45-character known-word fixture",45,shown().codePointCount(0,shown().length()));JSONArray checks=new JSONArray();
+        begin();typeFortyFiveToneYi();assertEquals("45-character known-word fixture",45,shown().codePointCount(0,shown().length()));JSONArray checks=new JSONArray();
         for(int boundary:new int[]{0,22,45}){
-            tapBoundary(boundary);String before=shown();int from=boundary==0?0:boundary-2;String oldWord=before.substring(before.offsetByCodePoints(0,from),before.offsetByCodePoints(0,from+2));int index=-1;assertEquals("each selected word is independently known", "今天", oldWord);
+            tapBoundary(boundary);String before=shown();int from=boundary==0?0:boundary-2;String oldWord=before.substring(before.offsetByCodePoints(0,from),before.offsetByCodePoints(0,from+2));int index=-1;assertEquals("each selected word is independently known", "意義", oldWord);
+            revealTenth(words,wordScroll);
             for(int i=0;i<words.getChildCount();i++){String label=((TextView)words.getChildAt(i)).getText().toString();if(label.codePointCount(0,label.length())==2&&!label.equals(oldWord)){index=i;break;}}
             assertTrue("two-character alternative at each cursor",index>=0);revealIndex(words,wordScroll,index);TextView choice=(TextView)words.getChildAt(index);String label=choice.getText().toString();Rect r=new Rect();
             inst.runOnMainSync(()->{int[] a=new int[2];choice.getLocationOnScreen(a);r.set(a[0],a[1],a[0]+choice.getWidth(),a[1]+choice.getHeight());});tap(r);Thread.sleep(200);
