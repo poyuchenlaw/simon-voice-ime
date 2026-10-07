@@ -294,12 +294,12 @@ extern "C" JNIEXPORT void JNICALL Java_com_simon_voiceime_RimeZhuyinNative_nativ
                 size_t start=previous_stops[edit_start],end=previous_stops[edit_end]+delta;
                 if(ctx&&end>=start&&end<=raw.size()){
                     ctx->set_input(raw.substr(0,end));rime::Composition prefix;prefix.Reset(ctx->input());
-                    pin_text(prefix,0,start,cp_slice(previous_text,0,edit_start));prefix.Forward();ctx->set_composition(std::move(prefix));ctx->set_caret_pos(end);
+                    pin_aligned_text(prefix,0,start,cp_slice(previous_text,0,edit_start),ctx->input(),aligned_slice(previous_stops,0,edit_start));prefix.Forward();ctx->set_composition(std::move(prefix));ctx->set_caret_pos(end);
                     std::vector<rime::an<rime::Candidate>> changed;
                     for(const auto& seg:ctx->composition())if(seg.start>=start&&seg.end<=end&&seg.end>seg.start)if(auto candidate=seg.GetSelectedCandidate())changed.push_back(candidate);
                     if(changed.empty()&&end>start)changed.push_back(rime::New<rime::SimpleCandidate>("key_edit",start,end,raw.substr(start,end-start)));
                     ctx->set_input(raw);rime::Composition fixed;fixed.Reset(raw);
-                    for(int i=0;i<edit_start;i++)pin_text(fixed,previous_stops[i],previous_stops[i+1],cp_slice(previous_text,i,i+1));
+                    for(int i=0;i<edit_start;i++)pin_aligned_text(fixed,previous_stops[i],previous_stops[i+1],cp_slice(previous_text,i,i+1),raw,aligned_slice(previous_stops,i,i+1));
                     std::vector<size_t> stops(previous_stops.begin(),previous_stops.begin()+edit_start+1);
                     bool mapped=true;
                     for(const auto& candidate:changed){
@@ -312,7 +312,7 @@ extern "C" JNIEXPORT void JNICALL Java_com_simon_voiceime_RimeZhuyinNative_nativ
                         stops.insert(stops.end(),local.begin(),local.end());
                     }
                     for(size_t i=edit_end;i+1<previous_stops.size();i++){
-                        pin_text(fixed,previous_stops[i]+delta,previous_stops[i+1]+delta,cp_slice(previous_text,i,i+1));stops.push_back(previous_stops[i+1]+delta);
+                        pin_aligned_text(fixed,previous_stops[i]+delta,previous_stops[i+1]+delta,cp_slice(previous_text,i,i+1),raw,aligned_slice(previous_stops,i,i+1,delta));stops.push_back(previous_stops[i+1]+delta);
                     }
                     if(mapped){
                         fixed.Forward();ctx->set_composition(std::move(fixed));ctx->set_caret_pos(raw.size());
@@ -725,7 +725,7 @@ extern "C" JNIEXPORT void JNICALL Java_com_simon_voiceime_RimeZhuyinNative_nativ
     auto raw=jstr(env,keys),shown=jstr(env,text);int n=env->GetArrayLength(stops);std::vector<jint> boundaries(n);env->GetIntArrayRegion(stops,0,n,boundaries.data());
     if(n!=cp_count(shown)+1||boundaries.empty()||boundaries.front()!=0||boundaries.back()!=static_cast<int>(raw.size()))return;
     ctx->Clear();ctx->set_input(raw);rime::Composition fixed;fixed.Reset(raw);
-    for(int i=1;i<n;i++)pin_text(fixed,boundaries[i-1],boundaries[i],cp_slice(shown,i-1,i));
+    for(int i=1;i<n;i++)pin_aligned_text(fixed,boundaries[i-1],boundaries[i],cp_slice(shown,i-1,i),raw,{static_cast<size_t>(boundaries[i-1]),static_cast<size_t>(boundaries[i])});
     fixed.Forward();ctx->set_composition(std::move(fixed));ctx->set_caret_pos(raw.size());
     s->regroup.input=raw;s->regroup.stops.assign(boundaries.begin(),boundaries.end());s->regroup.cache.clear();
 }

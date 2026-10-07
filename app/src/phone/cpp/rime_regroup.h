@@ -125,6 +125,35 @@ static void pin(rime::Composition& comp, size_t start,size_t end,rime::an<rime::
 static void pin_text(rime::Composition& comp,size_t start,size_t end,const std::string& text) {
     pin(comp,start,end,rime::New<rime::SimpleCandidate>("regroup_context",start,end,text));
 }
+// Literal context retains the alignment already supplied by native decoding.
+// Candidate type/text/rank stay unchanged; no reading boundaries are guessed.
+struct AlignedTextCandidate : rime::SimpleCandidate {
+    const std::vector<size_t> syllable_stops;
+    const std::string source_keys;
+    AlignedTextCandidate(size_t start,size_t end,const std::string& text,
+                         std::vector<size_t> stops,std::string keys)
+        : rime::SimpleCandidate("regroup_context",start,end,text),
+          syllable_stops(std::move(stops)),source_keys(std::move(keys)) {}
+};
+static bool valid_alignment(const std::vector<size_t>& stops,size_t start,size_t end,
+                            const std::string& text,const std::string& raw) {
+    if(end<=start||end>raw.size()||stops.size()!=static_cast<size_t>(cp_count(text)+1)||
+       stops.empty()||stops.front()!=start||stops.back()!=end)return false;
+    for(size_t i=1;i<stops.size();++i)if(stops[i]<=stops[i-1])return false;
+    return true;
+}
+static std::vector<size_t> aligned_slice(const std::vector<size_t>& stops,size_t first,size_t last,int delta=0) {
+    if(first>last||last>=stops.size())return {};
+    std::vector<size_t> result;
+    for(size_t i=first;i<=last;++i){long long at=static_cast<long long>(stops[i])+delta;if(at<0)return {};result.push_back(static_cast<size_t>(at));}
+    return result;
+}
+static void pin_aligned_text(rime::Composition& comp,size_t start,size_t end,const std::string& text,
+                             const std::string& raw,std::vector<size_t> stops) {
+    if(end<=start)return;
+    if(!valid_alignment(stops,start,end,text,raw)){pin_text(comp,start,end,text);return;}
+    pin(comp,start,end,rime::New<AlignedTextCandidate>(start,end,text,std::move(stops),raw.substr(start,end-start)));
+}
 // Rime's own PhraseSyllabifier supplies all raw-key boundaries, including untoned input.
 static bool capture(RegroupState& r,RimeSessionId id) {
     auto* ctx=context(id);if(!ctx||ctx->input().empty())return false;
@@ -140,7 +169,12 @@ static bool capture(RegroupState& r,RimeSessionId id) {
             auto phrase=cand?native_phrase(cand):nullptr;
             if(!cand){r.stops.clear();return false;}
             std::vector<size_t> ends;
-            if(phrase){auto spans=phrase->spans();size_t at=spans.start();
+            auto genuine=genuine_candidate(cand);
+            if(auto* aligned=dynamic_cast<AlignedTextCandidate*>(genuine.get())) {
+                if(!valid_alignment(aligned->syllable_stops,cand->start(),cand->end(),cand->text(),r.input)||
+                   r.input.substr(cand->start(),cand->end()-cand->start())!=aligned->source_keys){r.stops.clear();return false;}
+                ends.assign(aligned->syllable_stops.begin()+1,aligned->syllable_stops.end());
+            }else if(phrase){auto spans=phrase->spans();size_t at=spans.start();
                 while(at<spans.end()){size_t next=spans.NextStop(at);if(next<=at)break;ends.push_back(next);at=next;}
             }
             if(ends.size()!=static_cast<size_t>(cp_count(cand->text()))||ends.empty()||ends.back()!=cand->end()) {
@@ -419,10 +453,10 @@ static bool select_regroup(RegroupState& r,RimeSessionId id,int index) {
     if(!option.repaired_input.empty())ctx->set_input(option.repaired_input);
     const int delta=option.repaired_input.empty()?0:static_cast<int>(option.repaired_input.size())-static_cast<int>(r.input.size());
     rime::Composition fixed;fixed.Reset(ctx->input());
-    pin_text(fixed,0,r.stops[option.start],cp_slice(r.original,0,option.start));
+    pin_aligned_text(fixed,0,r.stops[option.start],cp_slice(r.original,0,option.start),ctx->input(),aligned_slice(r.stops,0,option.start));
     if(option.pieces.empty())pin(fixed,r.stops[option.start],r.stops[option.end]+delta,option.candidate);
     else for(const auto& piece:option.pieces)pin(fixed,piece->start(),piece->end(),piece);
-    pin_text(fixed,r.stops[option.end]+delta,r.input.size()+delta,cp_slice(r.original,option.end,cp_count(r.original)));
+    pin_aligned_text(fixed,r.stops[option.end]+delta,r.input.size()+delta,cp_slice(r.original,option.end,cp_count(r.original)),ctx->input(),aligned_slice(r.stops,option.end,r.stops.size()-1,delta));
     ctx->set_composition(std::move(fixed));ctx->set_caret_pos(ctx->input().size());
     // Preserve known outside alignment even though those words are pinned as
     // SimpleCandidates. Re-syllabify only the accepted native candidate span.
