@@ -53,27 +53,29 @@ public class VoiceChunkQueueTest {
   assertEquals("use saved splitting decision after restart",Arrays.asList(64000L),sizes);
   assertTrue(text.isEmpty());assertTrue(restarted.pcmFile(id).exists());assertFalse(restarted.receiptConfirmed(id));
  }
- @Test public void firstVersionStartDiscardsOnlyAboveSixtyMinutes()throws Exception {
+ @Test public void firstVersionStartRetainsOversizeForManualReview()throws Exception {
   File dir=new File(temp.getRoot(),"voice_pending");assertTrue(dir.mkdir());
   for(String id:Arrays.asList("giant","border","normal"))try(RandomAccessFile out=new RandomAccessFile(new File(dir,id+".pcm"),"rw")){
    out.setLength(id.equals("giant")?316_867_840L:id.equals("border")?115_200_000L:64000L);
   }
   VoicePendingQueue q=new VoicePendingQueue(temp.getRoot(),16000);
-  assertFalse("approved pre-cap giant discarded at first start",new File(dir,"giant.pcm").exists());
+  assertTrue("unverified giant must remain",new File(dir,"giant.pcm").exists());
+  assertTrue(q.needsAttention("giant"));
   assertTrue(new File(dir,"border.pcm").exists());assertTrue(new File(dir,"normal.pcm").exists());
   List<String> uploads=new ArrayList<>();q.uploadOne("giant",(f,id,r)->{uploads.add(id);return response(f,id,"不可上傳");},(t,a)->fail(),null);
   assertTrue(uploads.isEmpty());
  }
 
- @Test public void oversizeAuditHasOnlyApprovedMetadataAndRunsOnce()throws Exception {
+ @Test public void oversizeAttentionAndIdentitySurviveRestart()throws Exception {
   File dir=new File(temp.getRoot(),"voice_pending");assertTrue(dir.mkdir());
   try(RandomAccessFile out=new RandomAccessFile(new File(dir,"giant.pcm"),"rw")){out.setLength(316_867_840);}
-  VoicePendingQueue q=new VoicePendingQueue(temp.getRoot(),16000);
-  File audit=new File(dir,"oversize-discard-events.jsonl");
-  JSONObject event=new JSONObject(new String(Files.readAllBytes(audit.toPath()),java.nio.charset.StandardCharsets.UTF_8).trim());
-  assertEquals(3,event.length());assertEquals("pending_discarded_oversize",event.getString("phase"));
-  assertEquals(9_902_120,event.getLong("audio_ms"));assertEquals(316_867_840,event.getLong("bytes"));
-  long before=audit.length();new VoicePendingQueue(temp.getRoot(),16000);assertEquals(before,audit.length());
+  VoicePendingQueue q=new VoicePendingQueue(temp.getRoot(),16000);assertTrue(q.needsAttention("giant"));
+  File meta=new File(dir,"giant.json");
+  JSONObject before=new JSONObject(new String(Files.readAllBytes(meta.toPath()),java.nio.charset.StandardCharsets.UTF_8));
+  assertTrue(before.getBoolean("automatic_retry_stopped"));assertEquals("legacy_oversize_retained_manual_review",before.getString("last_error"));
+  new VoicePendingQueue(temp.getRoot(),16000);
+  JSONObject after=new JSONObject(new String(Files.readAllBytes(meta.toPath()),java.nio.charset.StandardCharsets.UTF_8));
+  assertEquals(before.getString("sha256"),after.getString("sha256"));assertEquals(316_867_840L,new File(dir,"giant.pcm").length());
  }
  @Test public void childSilenceWaitsForWholeParentWithoutReuploadingStoredChunks()throws Exception {
   VoicePendingQueue q=new VoicePendingQueue(temp.getRoot(),16000);String id=recording(q,3_840_002);

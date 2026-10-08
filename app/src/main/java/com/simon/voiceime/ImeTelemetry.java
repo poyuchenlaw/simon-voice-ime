@@ -67,6 +67,15 @@ final class ImeTelemetry {
     void noteInput(){lastInputElapsed=android.os.SystemClock.elapsedRealtime();}
     private String punctuationDestination;
     void punctuationDestination(String into){punctuationDestination=into;}
+    void recordKeyTiming(long duration,long queueMs,long dispatchMs,boolean consumed) {
+        noteInput();
+        Handler target=handler;
+        if(target==null||!target.post(()->{
+            try {record("key_outcome","bopomofo",new JSONObject().put("step","touch_timing").put("key","")
+                    .put("down_to_complete_ms",duration).put("up_queue_ms",queueMs).put("dispatch_ms",dispatchMs).put("ok",consumed),false);}
+            catch(org.json.JSONException failure){droppedEvents.incrementAndGet();Log.w("ImeTelemetry","Key timing unavailable",failure);}
+        }))droppedEvents.incrementAndGet();
+    }
     void record(String type,String page,JSONObject fields,boolean protectedField) {
         if("key".equals(type)||"key_outcome".equals(type)||"candidate".equals(type)||"commit".equals(type)||"correction".equals(type)||"key_outcome".equals(type))noteInput();
         if(!context.getSharedPreferences("simon_ime_prefs",Context.MODE_PRIVATE).getBoolean("ime_auto_upload",true))return;

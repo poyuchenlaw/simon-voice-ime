@@ -16,10 +16,35 @@ final class VoicePendingQueue {
     }
 
     static final class UploadFailure extends IOException {
-        final int status; final String code;
+        final int status; final String code; final boolean retryable;
         UploadFailure(int status,String body) {
-            super("HTTP "+status+(body!=null&&body.contains("audio_correction_")?" audio_correction_rejected":""));
-            this.status=status;this.code=body!=null&&body.contains("correction_rejected")?"audio_correction_rejected":"http_"+status;
+            this(status, failureDetail(status,body));
+        }
+        private UploadFailure(int status,JSONObject detail) {
+            super("HTTP "+status+" "+detail.optString("code")+" retryable="+canRetry(detail));
+            this.status=status;this.code=detail.optString("code");
+            this.retryable=canRetry(detail);
+        }
+        private static boolean canRetry(JSONObject detail) {
+            Object value=detail.opt("retryable");
+            if(Boolean.FALSE.equals(value)||"false".equalsIgnoreCase(String.valueOf(value)))return false;
+            String code=detail.optString("code",detail.optString("error_code"));
+            return detail.has("retryable")||!("asr_empty_retained".equals(code)||"asr_failed_retained".equals(code));
+        }
+        private static JSONObject failureDetail(int status,String body) {
+            JSONObject detail=new JSONObject();
+            try {
+                JSONObject response=new JSONObject(body==null?"":body);
+                JSONObject nested=response.optJSONObject("detail");
+                if(nested!=null)detail=nested;
+                else if(response.has("retryable")||response.has("code")||response.has("error_code"))detail=response;
+                else if(response.opt("detail") instanceof String)detail.put("code",response.getString("detail"));
+            } catch(org.json.JSONException malformed) { /* Legacy/plain HTTP errors remain retryable. */ }
+            try {
+                if(!detail.has("code"))detail.put("code",detail.has("error_code")?detail.getString("error_code"):
+                    body!=null&&body.contains("audio_correction_")?"audio_correction_rejected":"http_"+status);
+            }catch(org.json.JSONException malformed){throw new IllegalArgumentException("invalid HTTP error detail",malformed);}
+            return detail;
         }
     }
     static final class NeedsAttentionException extends IOException {
@@ -38,7 +63,7 @@ final class VoicePendingQueue {
         for(Map.Entry<String,Snapshot> e:snapshots.entrySet())if(!discarded.contains(e.getKey())&&"needs_attention".equals(e.getValue().state))ids.add(e.getKey());
         return ids;
     }
-    void retryForUser(String id) {runIO(() -> {JSONObject m=metadata.get(id);if(m!=null&&!discarded.contains(id)){m.put("attempts",0).put("correction_rejections",0);update(id,"pending","manual_retry",0);}return null;});}
+    void retryForUser(String id) {runIO(() -> {JSONObject m=metadata.get(id);if(m!=null&&!discarded.contains(id)){m.remove("automatic_retry_stopped");m.put("attempts",0).put("correction_rejections",0);update(id,"pending","manual_retry",0);}return null;});}
 
     interface Uploader {
         String transcribe(File pcm,String sessionId,int sampleRate)throws Exception;
@@ -91,6 +116,8 @@ final class VoicePendingQueue {
     private final Map<String, MessageDigest> digests = new HashMap<>();
     private final Set<String> backupFailures = ConcurrentHashMap.newKeySet();
     private volatile long cachedTotalBytes;
+    private volatile java.util.function.BooleanSupplier foregroundBusy=()->false;
+    void foregroundBusy(java.util.function.BooleanSupplier busy){foregroundBusy=busy;}
     private final Map<String, Snapshot> snapshots = new ConcurrentHashMap<>();
     private static final Map<String, VoicePendingQueue> INSTANCES = new ConcurrentHashMap<>();
     private static final class Snapshot {
@@ -437,7 +464,7 @@ final class VoicePendingQueue {
         try {
             JSONObject claim=runIO(() -> {
                 JSONObject m=metadata.get(id);
-                if(m==null||m.optBoolean("directive_only")||!"pending".equals(m.optString("state"))||capturing.contains(id)||discarded.contains(id))return null;
+                if(!capturing.isEmpty()||foregroundBusy.getAsBoolean()||m==null||m.optBoolean("directive_only")||!"pending".equals(m.optString("state"))||capturing.contains(id)||discarded.contains(id))return null;
                 if(pcm(id).exists())flushFile(id);
                 if(discardEmpty(id))return null;
                 if(!m.has("result_text")&&!m.optBoolean("ignore_legacy_result")) {String legacy=readResult(id);if(legacy!=null)m.put("result_text",legacy);}
@@ -506,7 +533,9 @@ final class VoicePendingQueue {
                 JSONObject m=metadata.get(id);if(m==null||discarded.contains(id))return null;
                 int rejections=m.optInt("correction_rejections")+(rejected?1:0);
                 m.put("correction_rejections",rejections);
-                update(id,"pending",reason,System.currentTimeMillis()+backoff);
+                boolean stopped=e instanceof UploadFailure&&!((UploadFailure)e).retryable;
+                if(stopped)m.put("automatic_retry_stopped",true).put("server_error_code",((UploadFailure)e).code);
+                update(id,stopped?"needs_attention":"pending",reason,stopped?0:System.currentTimeMillis()+backoff);
                 return null;
             });
             if(observer!=null)observer.event("pending_failed",id,audioMs(id),audioMs(id)*sampleRate*2/1000,attempts(id),reason);
@@ -600,43 +629,26 @@ final class VoicePendingQueue {
         return parentResponse;
     }
     private void migratePreCapOversize() {
-        File marker = new File(dir, ".v656-migrated");
-        try {
-            if (!marker.exists()) {
-                File[] files = dir.listFiles((d,n) -> n.endsWith(".pcm"));
-                if (files == null) throw new IOException("pending directory unavailable");
-                for (File file : files) {
-                    String id=file.getName().substring(0,file.getName().length()-4);
-                    JSONObject m=readMeta(id);
-                    long rate=m==null?sampleRate:m.optLong("sample_rate",sampleRate);
-                    if (rate<=0) rate=sampleRate;
-                    long ms=file.length()*1000/(rate*2);
-                    if (m!=null) ms=Math.max(ms,m.optLong("audio_ms"));
-                    if (ms<=3_600_000L) continue;
-                    // Tombstone is fsynced before removal and retried after a crash. No remote call.
-                    try(FileOutputStream out=new FileOutputStream(new File(dir,id+".oversize"))) {
-                        out.write(new JSONObject().put("audio_ms",ms).put("bytes",file.length()).toString().getBytes(java.nio.charset.StandardCharsets.UTF_8));
-                        out.getFD().sync();
-                    }
-                }
-            }
-            File[] tombstones=dir.listFiles((d,n) -> n.endsWith(".oversize"));
-            if (tombstones==null) throw new IOException("pending directory unavailable");
-            for (File tombstone:tombstones) {
-                String id=tombstone.getName().substring(0,tombstone.getName().length()-9);
-                JSONObject event=new JSONObject(new String(Files.readAllBytes(tombstone.toPath()),java.nio.charset.StandardCharsets.UTF_8));
-                for (File file:new File[]{pcm(id),resultFile(id),meta(id)})
-                    if (file.exists()&&!file.delete()) throw new IOException("approved oversize deletion failed");
-                // Append metadata-only audit, then notify service telemetry after recovery.
-                try(FileOutputStream out=new FileOutputStream(new File(dir,"oversize-discard-events.jsonl"),true)) {
-                    out.write((new JSONObject().put("phase","pending_discarded_oversize").put("audio_ms",event.getLong("audio_ms")).put("bytes",event.getLong("bytes")).toString()+"\n").getBytes(java.nio.charset.StandardCharsets.UTF_8));
-                    out.getFD().sync();
-                }
-                oversizeDiscardEvents.add(new long[]{event.getLong("audio_ms"),event.getLong("bytes")});
-                if(!tombstone.delete())throw new IOException("oversize tombstone removal failed");
-            }
-            if(!marker.exists())try(FileOutputStream out=new FileOutputStream(marker)){out.write(1);out.getFD().sync();}
-        } catch(Exception e) {throw new IllegalStateException("oversize migration incomplete; uploads blocked",e);}
+        // Keep even legacy tombstoned PCM: size alone is never custody proof.
+        File[] files=dir.listFiles((d,n)->n.endsWith(".pcm"));
+        if(files==null)throw new IllegalStateException("pending directory unavailable");
+        for(File file:files) {
+            String id=file.getName().substring(0,file.getName().length()-4);
+            JSONObject m=readMeta(id);
+            long rate=m==null?sampleRate:m.optLong("sample_rate",sampleRate);
+            if(rate<=0)rate=sampleRate;
+            long ms=(file.length()*1000+rate*2-1)/(rate*2);
+            if(m!=null)ms=Math.max(ms,m.optLong("audio_ms"));
+            if(ms<=3_600_000L&&!new File(dir,id+".oversize").exists())continue;
+            try {
+                if(m==null)m=new JSONObject().put("schema_version",6).put("started_at",file.lastModified()).put("sample_rate",rate);
+                m.put("audio_ms",ms).put("bytes",file.length());
+                m.put("state","needs_attention").put("automatic_retry_stopped",true)
+                    .put("last_error","legacy_oversize_retained_manual_review").put("next_attempt_at",0);
+                writeMeta(id,m);
+                Files.deleteIfExists(new File(dir,id+".oversize").toPath());
+            }catch(Exception e){throw new IllegalStateException("oversize retention marker failed",e);}
+        }
     }
     private void recover() {
         if(!dir.exists()&&!dir.mkdirs())throw new IllegalStateException("queue directory creation failed");
@@ -667,10 +679,16 @@ final class VoicePendingQueue {
                         }
                         m.put("schema_version",6);writeMeta(id,m);
                     }
-                    if("needs_attention".equals(m.optString("state"))) {
-                        m.put("state","pending").put("next_attempt_at",0).put("last_error","automatic_recovery_migration");writeMeta(id,m);
+                    if("needs_attention".equals(m.optString("state"))&&!m.optBoolean("automatic_retry_stopped")) {
+                        String reason=m.optString("last_error").toLowerCase(Locale.ROOT);
+                        boolean retained=reason.contains("oversize")||reason.contains("retryable=false")
+                            ||reason.contains("asr_empty_retained")||reason.contains("asr_failed_retained")
+                            ||!UploadFailure.canRetry(m)||"asr_empty_retained".equals(m.optString("server_error_code"))||"asr_failed_retained".equals(m.optString("server_error_code"));
+                        if(retained)m.put("automatic_retry_stopped",true).put("next_attempt_at",0);
+                        else m.put("state","pending").put("next_attempt_at",0).put("last_error","automatic_recovery_migration");
+                        writeMeta(id,m);
                     }
-                    if(m.has("chunk_receipts")&&!m.optBoolean("chunk_parent_corrected")) {
+                    if(!m.optBoolean("automatic_retry_stopped")&&m.has("chunk_receipts")&&!m.optBoolean("chunk_parent_corrected")) {
                         m.put("state","pending").put("server_transcript_pending",true);writeMeta(id,m);
                     }
                     if(m.optBoolean("directive_only")) {
@@ -721,6 +739,9 @@ final class VoicePendingQueue {
         JSONObject m=metadata.get(id);if(m==null||discarded.contains(id))return;
         if(m.optBoolean("directive_only") && ("pending".equals(state)||"uploading".equals(state))) {
             state="needs_attention";error="ghostwriter_re_record_required";next=0;
+        }
+        if(m.optBoolean("automatic_retry_stopped")&&"pending".equals(state)) {
+            state="needs_attention";error=m.optString("last_error");next=0;
         }
         if("pending".equals(state)&&!capturing.contains(id)&&discardEmpty(id))return;
         try {m.put("state",state).put("last_error",error==null?"":error).put("next_attempt_at",next);writeMeta(id,m);publish(id);}

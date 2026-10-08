@@ -81,14 +81,28 @@ public class KeyboardTouchLayout extends LinearLayout {
         // Offset only the local frame; raw screen coordinates remain physical touches.
         local.offsetLocation(keyX - screenX, keyY - screenY);
         try {
+            long dispatchStarted=android.os.SystemClock.uptimeMillis();
             boolean consumed = target.key.dispatchTouchEvent(local);
             long delay = Math.max(0L, android.os.SystemClock.uptimeMillis()-event.getEventTime());
+            if(action==MotionEvent.ACTION_UP) {
+                long completed=android.os.SystemClock.uptimeMillis();
+                long duration=Math.max(0L,completed-target.downTime);
+                if(sampleKeyTiming(duration)) {
+                    ImeTelemetry telemetry=ImeTelemetry.get();
+                    if(telemetry!=null)telemetry.recordKeyTiming(duration,Math.max(0L,dispatchStarted-event.getEventTime()),Math.max(0L,completed-dispatchStarted),consumed);
+                }
+            }
             if (!consumed) touchEvent("touch_not_consumed", delay, false);
             else if (action == MotionEvent.ACTION_UP && delay >= 197) touchEvent("touch_delay", delay, true);
             else if (action == MotionEvent.ACTION_CANCEL) touchEvent("touch_cancelled", delay, false);
         } finally {
             local.recycle();
         }
+    }
+
+    private int keyTimingCount;
+    private boolean sampleKeyTiming(long duration) {
+        return ++keyTimingCount%20==0||duration>150L;
     }
 
     private void touchEvent(String step, long ms, boolean ok) {

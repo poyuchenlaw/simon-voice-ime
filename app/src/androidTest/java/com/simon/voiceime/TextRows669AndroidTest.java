@@ -11,7 +11,7 @@ public class TextRows669AndroidTest extends Layout668AndroidTest {
   long end=SystemClock.uptimeMillis()+30000;while(SystemClock.uptimeMillis()<end){if(node("ㄗ")!=null)break;android.view.accessibility.AccessibilityNodeInfo switcher=node("注");if(switcher!=null)switcher.performAction(android.view.accessibility.AccessibilityNodeInfo.ACTION_CLICK);else {android.view.accessibility.AccessibilityNodeInfo input=node("test_input");if(input!=null){input.performAction(android.view.accessibility.AccessibilityNodeInfo.ACTION_FOCUS);input.performAction(android.view.accessibility.AccessibilityNodeInfo.ACTION_CLICK);}}Thread.sleep(300);}await("ㄗ");
  }
  void preparePreferences(){
-  inst.getTargetContext().getSharedPreferences("simon_ime_prefs",0).edit().putString("server_url","http://127.0.0.1:8181").putString("auth_password","sandbox").putString("ai_sentence_mode","shadow").putBoolean("auto_correction",false).putBoolean("ime_auto_upload",false).putString("layout_mode","text_word_char").commit();
+  inst.getTargetContext().getSharedPreferences("simon_ime_prefs",0).edit().putString("server_url","http://127.0.0.1:8181").putString("auth_password","sandbox").putString("ai_sentence_mode","shadow").putBoolean("auto_correction",false).putBoolean("ime_auto_upload",Boolean.parseBoolean(InstrumentationRegistry.getArguments().getString("diagnostics","false"))).putString("layout_mode","text_word_char").commit();
  }
  public void testNoPhoneticRow()throws Exception{
   ready();for(String k:new String[]{"ㄐ","ㄧ","ㄣ","空白","ㄊ"})tap(k);

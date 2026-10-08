@@ -20,6 +20,8 @@ def block(start,text=None):
     raise ValueError('unclosed block')
 names=['fetchServerArchiveText','commitFinalText','pasteClipboardText','copyToSystemClipboard','reserveUtteranceGeneration','completeReservedUtteranceWithText','completeReservedUtteranceWithoutText','collectReadyUtteranceCommitsLocked','handleWTIResponse','sendFullAudioHttpFallback','finalizeStreamingSession','drainPendingVoiceQueue','schedulePendingDrain','markPendingGeneration','handleAiCommandResponse','sendAiCommand','sendAiCommandAudio','commitReadyUtterance','consumeSilentResult','voiceAudioDurationMs','keepPendingModeResult','showNoVoiceStatus','deliverVoiceResult','isDiscardedVoiceGeneration','persistRecordingRead','finishDurableRecording','discardProtectedRecording','readAndPersistRecordingAudio','pcmWavBody','durableOrMemoryAudioBody','rescueReplaceAudio']
 names.extend(['recordVoiceStage','cancelVoiceFinalDeadline','armVoiceFinalDeadline','recoverUnfinishedVoiceGeneration','recoverLateVoiceFinal','receiveAudioReceipt','sendAudioEndOfStream','finishWhenRecorderStopped','sendToWTI','notePendingGeneration','httpFallbackFullAudio','runOfflineFullAudioFallback','sendTextProcess','completeAppendProcessTextFailureWithOfflineFallback'])
+for helper in ['foregroundVoiceBusy','foregroundSessionBusy']:
+    if re.search(r'private boolean '+helper+r'\(',src):names.append(helper)
 parts=[]
 counts={}
 # These production APIs do not exist in the work order's requested old revision.
@@ -61,7 +63,7 @@ record_slice=src[record_start:record_end]
 # A break is the production nonpositive-read exit. This wrapper returns zero in
 # that case; positive reads use the exact original statements, including the tail.
 assert not re.search(r'\bcontinue\s*;',record_slice), 'recorder slice gained continue; wrapper semantics need review'
-parts.append('int readAndPersistRecordingAudio(AudioRecord audioRecord,byte[] buffer,String recordingSessionId){do {\n'+record_slice+'return read;}while(false);return 0;}')
+parts.append('int readAndPersistRecordingAudio(AudioRecord audioRecord,byte[] buffer,String recordingSessionId){int myGen=activeUtteranceGeneration;do {\n'+record_slice+'return read;}while(false);return 0;}')
 # Exact PCM stream write range, including the old skipped prefix branch.
 stream_start=src.index('                if (read > 0) {',record_end)
 stream_end=src.index('                    // v6.1: APPEND',stream_start)

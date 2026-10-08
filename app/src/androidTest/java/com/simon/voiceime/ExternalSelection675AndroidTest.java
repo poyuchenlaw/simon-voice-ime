@@ -49,7 +49,7 @@ public class ExternalSelection675AndroidTest extends TextRows670AndroidTest {
   });if(ready[0])return;Thread.sleep(50);}
   fail("external selection candidates must appear within 5 seconds");
  }
- static String editorText(AccessibilityNodeInfo input){return input.isShowingHintText()||input.getText()==null?"":input.getText().toString();}
+ static String editorText(AccessibilityNodeInfo input){if(input.isPassword()){String actual=input.getExtras().getString("fixture_text");assertNotNull("password fixture must report actual text",actual);return actual;}return input.isShowingHintText()||input.getText()==null?"":input.getText().toString();}
  void text(String value)throws Exception{
   Bundle args=new Bundle();args.putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE,value);
   assertTrue(await("test_input").performAction(AccessibilityNodeInfo.ACTION_SET_TEXT,args));inst.waitForIdleSync();

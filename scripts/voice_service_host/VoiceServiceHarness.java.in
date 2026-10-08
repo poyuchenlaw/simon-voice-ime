@@ -69,6 +69,8 @@ public class VoiceServiceHarness {
     final ConcurrentHashMap<Integer,String> recoverySessionByGeneration=new ConcurrentHashMap<>();
     final Set<Integer> audibleVoiceGenerations=ConcurrentHashMap.newKeySet();
     VoicePendingQueue voicePendingQueue;
+    static class TouchLearningStore {void close(){}}
+    TouchLearningStore touchLearning;
     final AtomicBoolean pendingDrainRunning=new AtomicBoolean();
     final ScheduledExecutorService pendingVoiceExecutor=Executors.newSingleThreadScheduledExecutor(r->{Thread t=new Thread(r,"host-uploader");t.setDaemon(true);return t;});
     volatile ScheduledFuture<?> pendingDrainTask;
@@ -92,11 +94,16 @@ public class VoiceServiceHarness {
     void queueRecordingInChunks(int gen,String id,String reason){voicePendingQueue.markPendingAsync(id,reason,null);}
     int activeUtteranceGeneration=1,nextGenToCommit=1,fieldGeneration=1,replaceShortChars=6,rescueExtraChars=10;
     long replaceLongAudioMs=5000;double rescueRatio=1.5;
+    @Before public void resetForegroundClock(){SystemClock.elapsed=2000;}
+    private static final long FOREGROUND_VOICE_IDLE_MS=120_000L;
+    private volatile long lastForegroundAudioMs;
+    private final ConcurrentHashMap<Integer,Long> foregroundActivityByGeneration=new ConcurrentHashMap<>();
+    private long foregroundDrainBackoffMs=1000L;
     volatile boolean isRecording,protectedInputField,lastCommitInsertedOrCopied,lastCommitClipboardWritten;
     volatile String activePendingSessionId,lastCommitMethod,status="",lastVoiceCommitOutcome="not_attempted";
     final ImeTelemetry imeTelemetry=new ImeTelemetry();
     static class ImeTelemetry {final List<JSONObject> events=new CopyOnWriteArrayList<>();void record(String t,String p,JSONObject j,boolean guard){events.add(j);}}
-    static class SystemClock {static long elapsedRealtime(){return 2000;}static long uptimeMillis(){return 1800;}}
+    static class SystemClock {static long elapsed=2000;static long elapsedRealtime(){return elapsed;}static long uptimeMillis(){return 1800;}}
     boolean missingInputConnection;
     long noVoiceStatusUntil;int silenceStatusGeneration;
     final FakeHandler mainHandler=new FakeHandler();
@@ -807,7 +814,7 @@ public class VoiceServiceHarness {
         String id=voicePendingQueue.beginAsync();pendingSessionByGeneration.put(1,id);voicePendingQueue.appendAsync(id,new byte[]{1,2},2);isRecording=true;wsFinal(new JSONObject().put("text",""),1);barrier();assertTrue(httpClient.callbacks.isEmpty());voicePendingQueue.appendAsync(id,new byte[]{3,4},2);voicePendingQueue.finishRecording(id);barrier();assertArrayEquals(new byte[]{1,2,3,4},voicePendingQueue.pcmBytes(id));
     }
     @Test public void beginFileFailureSurfacesAndStillDeliversLiveText()throws Exception {
-        File dir=new File(temp.getRoot(),"voice_pending");assertTrue(new File(dir,".v656-migrated").delete());assertTrue(dir.delete());java.nio.file.Files.write(dir.toPath(),new byte[]{1});
+        File dir=new File(temp.getRoot(),"voice_pending");File marker=new File(dir,".v656-migrated");if(marker.exists())assertTrue(marker.delete());assertTrue(dir.delete());java.nio.file.Files.write(dir.toPath(),new byte[]{1});
         try {
             beginRecordingSession();String id=activePendingSessionId;pendingSessionByGeneration.put(1,id);
             voicePendingQueue.runIO(()->null);assertTrue(status.contains("備份失敗"));
@@ -1080,5 +1087,19 @@ public class VoiceServiceHarness {
             wsFinal(new JSONObject().put("text",""),gen);barrier();
             assertTrue(recoverySessionByGeneration.containsKey(gen));assertFalse(voiceFinalDeadlines.containsKey(gen));assertFalse(voicePendingQueue.delivered(id));files(id,true);
         }
+    }
+    @Test public void leakedForegroundResumesRealPendingUploadAfterIdleLimit()throws Exception {
+        String old=session(1);pendingSessionByGeneration.clear();voicePendingQueue.markPending(old,"fixture");
+        pendingSessionByGeneration.put(2,"phantom");isRecording=true;recordingFinalizing=true;lastForegroundAudioMs=2000;
+        drainPendingVoiceQueue();waitFor(()->!pendingDrainRunning.get());assertEquals(0,httpClient.calls.get());files(old,true);
+        SystemClock.elapsed=122001;httpClient.code=200;
+        drainPendingVoiceQueue();waitFor(()->!pendingDrainRunning.get());barrier();
+        assertEquals(1,httpClient.calls.get());assertEquals(Arrays.asList("queued words"),clipboardHelper.history);
+    }
+    @Test public void normalGenerationCompletionImmediatelyWakesPendingUpload()throws Exception {
+        String old=session(1);httpClient.code=200;
+        assertTrue(foregroundVoiceBusy());
+        markPendingGeneration(1,"normal_finish");barrier();waitFor(()->httpClient.calls.get()>0);waitFor(()->!pendingDrainRunning.get());barrier();
+        assertEquals(2000,SystemClock.elapsed);assertEquals(1,httpClient.calls.get());assertFalse(pendingSessionByGeneration.containsKey(1));
     }
 }

@@ -395,8 +395,26 @@ public class SimonIMEService extends InputMethodService {
         }
     }
 
+    private static final long FOREGROUND_VOICE_IDLE_MS=120_000L;
+    private volatile long lastForegroundAudioMs;
+    private final java.util.concurrent.ConcurrentHashMap<Integer,Long> foregroundActivityByGeneration=new java.util.concurrent.ConcurrentHashMap<>();
+    private long foregroundDrainBackoffMs=1000L;
+    private boolean foregroundSessionBusy(String id) {
+        long now=SystemClock.elapsedRealtime();
+        for(java.util.Map.Entry<Integer,String> e:pendingSessionByGeneration.entrySet())
+            if(e.getValue().equals(id)&&now-foregroundActivityByGeneration.computeIfAbsent(e.getKey(),g->now)<FOREGROUND_VOICE_IDLE_MS)return true;
+        return false;
+    }
+    private boolean foregroundVoiceBusy() {
+        long now=SystemClock.elapsedRealtime();
+        foregroundActivityByGeneration.keySet().retainAll(pendingSessionByGeneration.keySet());
+        boolean busy=false;
+        for(String id:pendingSessionByGeneration.values())busy|=foregroundSessionBusy(id);
+        return busy||((isRecording||recordingFinalizing)&&now-lastForegroundAudioMs<FOREGROUND_VOICE_IDLE_MS);
+    }
     private void drainPendingVoiceQueue() {
         VoicePendingQueue queue=voicePendingQueue;if(queue==null)return;
+        queue.foregroundBusy(this::foregroundVoiceBusy);
         if(!pendingDrainRunning.compareAndSet(false,true))return;
         if(pendingVoiceExecutor.isShutdown()){pendingDrainRunning.set(false);return;}
         pendingVoiceExecutor.execute(()->{
@@ -421,7 +439,8 @@ public class SimonIMEService extends InputMethodService {
                 }catch(Exception e) {queue.serverDiscardFailed(id);Log.w(TAG,"Server audio discard pending; will retry",e);}
             }
             for(String id:queue.pendingOldestFirst()){
-                if(id.equals(activePendingSessionId)||pendingSessionByGeneration.containsValue(id)||!queue.due(id,System.currentTimeMillis()))continue;
+                if(foregroundVoiceBusy())break;
+                if(id.equals(activePendingSessionId)||foregroundSessionBusy(id)||!queue.due(id,System.currentTimeMillis()))continue;
                 queue.uploadOne(id,new VoicePendingQueue.Uploader() {
                   @Override public String transcribe(java.io.File pcm,String sessionId,int sampleRate)throws Exception {return upload(pcm,sessionId,sampleRate,false);}
                   @Override public String archiveChunk(java.io.File pcm,String sessionId,int sampleRate)throws Exception {return upload(pcm,sessionId,sampleRate,true);}
@@ -509,8 +528,12 @@ public class SimonIMEService extends InputMethodService {
         VoicePendingQueue q=voicePendingQueue;if(q==null||pendingVoiceExecutor.isShutdown())return;
         if(pendingDrainTask!=null){pendingDrainTask.cancel(false);pendingDrainTask=null;}
         long wait=Long.MAX_VALUE;
-        for(String id:q.pendingOldestFirst())if(!id.equals(activePendingSessionId)&&!pendingSessionByGeneration.containsValue(id))wait=Math.min(wait,q.retryDelayMs(id));
+        for(String id:q.pendingOldestFirst())if(!id.equals(activePendingSessionId))wait=Math.min(wait,q.retryDelayMs(id));
         for(String id:q.pendingServerDiscards())wait=Math.min(wait,q.serverDiscardDelayMs(id));
+        if(wait!=Long.MAX_VALUE&&foregroundVoiceBusy()) {
+            wait=Math.max(wait,foregroundDrainBackoffMs);
+            foregroundDrainBackoffMs=Math.min(30_000L,foregroundDrainBackoffMs*2);
+        } else foregroundDrainBackoffMs=1000L;
         if(wait!=Long.MAX_VALUE)pendingDrainTask=pendingVoiceExecutor.schedule(this::drainPendingVoiceQueue,wait,TimeUnit.MILLISECONDS);
     }
 
@@ -1568,21 +1591,25 @@ public class SimonIMEService extends InputMethodService {
         return true;
     }
 
-    private OpusStreamEncoder.Sink opusSink(WebSocket ws) {
+    private final java.util.Set<String> firstAudioSentSessions=java.util.concurrent.ConcurrentHashMap.newKeySet();
+    private void noteFirstAudioSent(String id) {
+        if(id!=null&&firstAudioSentSessions.add(id))recordVoiceStage("first_audio_sent",audioStreamGeneration,id,"websocket_enqueue");
+    }
+    private OpusStreamEncoder.Sink opusSink(WebSocket ws,String id) {
         return new OpusStreamEncoder.Sink() {
             @Override public boolean configure(int delay) {
                 try{return ws.send(AppVersion.withAppVersion(new JSONObject().put("type","opus_config").put("encoder_delay_samples",delay)).toString());}
                 catch(Exception failure){return false;}
             }
-            @Override public boolean send(byte[] packet){return ws.send(ByteString.of(packet,0,packet.length));}
+            @Override public boolean send(byte[] packet){boolean sent=ws.send(ByteString.of(packet,0,packet.length));if(sent)noteFirstAudioSent(id);return sent;}
         };
     }
 
     private void sendStreamAudio(WebSocket ws,byte[] pcm,String id) {
         try {
             OpusStreamEncoder encoder=id==null?null:opusEncoders.get(id);
-            if(encoder!=null)encoder.write(pcm,pcm.length,opusSink(ws));
-            else if(!ws.send(ByteString.of(pcm,0,pcm.length)))throw new IOException("PCM transport rejected");
+            if(encoder!=null)encoder.write(pcm,pcm.length,opusSink(ws,id));
+            else {if(!ws.send(ByteString.of(pcm,0,pcm.length)))throw new IOException("PCM transport rejected");noteFirstAudioSent(id);}
             if(voicePendingQueue!=null)voicePendingQueue.noteStreamedBytes(id,pcm.length);
         }catch(Exception failure) {
             if(id!=null&&opusEncoders.containsKey(id))opusDisabledForProcess=true;
@@ -1675,6 +1702,7 @@ public class SimonIMEService extends InputMethodService {
 
     private void markPendingGeneration(int gen,String reason){
         String id=pendingSessionByGeneration.remove(gen);
+        foregroundActivityByGeneration.remove(gen);
         if(id!=null&&voicePendingQueue!=null)voicePendingQueue.markPendingAsync(id,reason,this::drainPendingVoiceQueue);
     }
 
@@ -2686,7 +2714,8 @@ public class SimonIMEService extends InputMethodService {
             new Thread(capture,"LINE-Visible-Context").start();
         }
         activePendingSessionId=(voicePendingQueue==null||protectedInputField)?null:voicePendingQueue.beginAsync(() -> mainHandler.post(() -> updateStatus("錄音備份失敗，仍可即時辨識")));
-        if(activePendingSessionId!=null)pendingSessionByGeneration.put(myGen,activePendingSessionId);
+        if(activePendingSessionId!=null){pendingSessionByGeneration.put(myGen,activePendingSessionId);foregroundActivityByGeneration.put(myGen,SystemClock.elapsedRealtime());}
+        lastForegroundAudioMs=SystemClock.elapsedRealtime();
         if(lineGenerations.contains(myGen)&&activePendingSessionId!=null&&voicePendingQueue!=null) {
             final String directiveId=activePendingSessionId;
             voicePendingQueue.execute(()->voicePendingQueue.retainDirective(directiveId));
@@ -2766,6 +2795,7 @@ public class SimonIMEService extends InputMethodService {
                 // stopRecordingAndSend may race with read(): persist and process a final positive
                 // read before the loop exits so it cannot fall between the server final and queue deletion.
                 if (!isRecording && read <= 0) break;
+                if(read>0){lastForegroundAudioMs=SystemClock.elapsedRealtime();foregroundActivityByGeneration.put(myGen,lastForegroundAudioMs);}
                 if(read>0 && voicePendingQueue!=null && recordingSessionId!=null && !discardedProtectedSessions.contains(recordingSessionId)){
                     persistRecordingRead(recordingSessionId,buffer,read);
                     if(voicePendingQueue.totalBytes()>500L*1024*1024)showPendingVoiceQuotaWarning();
@@ -2855,7 +2885,7 @@ public class SimonIMEService extends InputMethodService {
                     if(!streamFailed&&audioStreamActive&&audioStreamGeneration==myGen&&audioStreamWs!=null) {
                         byte[] tail=pcmBuffer.toByteArray();pcmBuffer.reset();
                         if(tail.length>0){sendStreamAudio(audioStreamWs,tail,recordingSessionId);streamChunkTotal++;}
-                        if(!streamFailed)encoder.finish(opusSink(audioStreamWs));
+                        if(!streamFailed)encoder.finish(opusSink(audioStreamWs,recordingSessionId));
                     }
                 }catch(Exception failure) {
                     opusDisabledForProcess=true;streamFailed=true;audioStreamActive=false;if(audioStreamWs!=null)audioStreamWs.cancel();
@@ -2904,12 +2934,20 @@ public class SimonIMEService extends InputMethodService {
         String wsUrl = serverUrl.replace("http://", "ws://").replace("https://", "wss://") + "/ws/stream-audio";
 
         Request wsReq = new Request.Builder().url(AppVersion.withAppVersion(wsUrl)).build();
+        firstAudioSentSessions.clear();
         audioStreamGeneration=myGen;
         audioStreamActive=false;
-        audioStreamWs = httpClient.newWebSocket(wsReq, new WebSocketListener() {
+        OkHttpClient voiceClient=httpClient.newBuilder().eventListener(new okhttp3.EventListener() {
+            @Override public void connectStart(Call call,java.net.InetSocketAddress address,java.net.Proxy proxy){recordVoiceStage("connectStart",myGen,custodySessionId,null);}
+            @Override public void connectEnd(Call call,java.net.InetSocketAddress address,java.net.Proxy proxy,okhttp3.Protocol protocol){recordVoiceStage("connectEnd",myGen,custodySessionId,null);}
+            @Override public void secureConnectStart(Call call){recordVoiceStage("secureConnectStart",myGen,custodySessionId,null);}
+            @Override public void secureConnectEnd(Call call,okhttp3.Handshake handshake){recordVoiceStage("secureConnectEnd",myGen,custodySessionId,null);}
+        }).build();
+        audioStreamWs = voiceClient.newWebSocket(wsReq, new WebSocketListener() {
             private boolean capabilityProbeClosed;
             @Override
             public void onOpen(WebSocket ws, Response response) {
+                recordVoiceStage("ws_open",myGen,custodySessionId,null);
                 // Send auth + context
                 String auth = getAuthPassword();
                 try {
@@ -3263,6 +3301,7 @@ public class SimonIMEService extends InputMethodService {
         if (!isRecording) return;
         isRecording = false;
         recordingFinalizing=true;
+        lastForegroundAudioMs=SystemClock.elapsedRealtime();
         final Thread stoppedThread=recordingThread;
         final String stoppedSessionId=activePendingSessionId;
         onDeviceAppendPreviewEnabled = false;
@@ -3320,6 +3359,8 @@ public class SimonIMEService extends InputMethodService {
     private void finishStoppedRecordingAndSend(boolean wasStreaming,int myGen,String stoppedSessionId) {
         if(stoppedSessionId!=null&&stoppedSessionId.equals(activePendingSessionId))activePendingSessionId=null;
         recordingFinalizing=false;
+        foregroundActivityByGeneration.put(myGen,SystemClock.elapsedRealtime());
+        drainPendingVoiceQueue();
         if (!isWatchService()) appendRescueCandidates.put(myGen, appendRescueCandidate(myGen));
         byte[] pcmData = pcmBuffer.toByteArray();
         boolean memoryTruncated = pcmBuffer instanceof BoundedPcmBuffer && ((BoundedPcmBuffer)pcmBuffer).truncated();
@@ -5141,8 +5182,12 @@ public class SimonIMEService extends InputMethodService {
             renderTextCandidateRows();
         },100);
     }
-    private void chooseExternalTextCandidate(ZhuyinInputController.TextChoice choice){
-        if(!externalTextChoices.contains(choice)||!externalSelectionCurrent()){clearExternalSelection();renderTextCandidateRows();return;}
+    private boolean chooseExternalTextCandidate(ZhuyinInputController.TextChoice choice){
+        candidateReplacementStage="external_validation";
+        if(!externalTextChoices.contains(choice)||!externalSelectionCurrent()){
+            candidateReplacementReason=externalConnection==null?"selection_cleared":"selection_expired";
+            clearExternalSelection();renderTextCandidateRows();return false;
+        }
         InputConnection connection=externalConnection;final String snapshot=externalText;final int offset=externalOffset;
         final int originalStart=selectionStart,originalEnd=selectionEnd;
         boolean restoreCaret=false;
@@ -5152,16 +5197,20 @@ public class SimonIMEService extends InputMethodService {
             // Only a tap transaction selects its separate word/character target, after fresh validation.
             if(originalStart==originalEnd){
                 int start=choice.start,end=choice.end;
-                if(start<0||end>snapshot.length()||start>=end||!choice.witness.equals(snapshot.substring(start,end)))return;
+                candidateReplacementStage="range_validation";
+                if(start<0||end>snapshot.length()||start>=end||!choice.witness.equals(snapshot.substring(start,end))){candidateReplacementReason="range_mismatch";return false;}
                 restoreCaret=true;
-                if(!connection.setSelection(offset+start,offset+end))return;
+                candidateReplacementStage="set_selection";
+                if(!connection.setSelection(offset+start,offset+end)){candidateReplacementReason="selection_rejected";return false;}
                 android.view.inputmethod.ExtractedText selected=readExternalText(connection);
                 if(selected==null||selected.text==null||selected.startOffset!=offset
-                        ||!snapshot.contentEquals(selected.text)||selected.selectionStart!=start||selected.selectionEnd!=end)return;
+                        ||!snapshot.contentEquals(selected.text)||selected.selectionStart!=start||selected.selectionEnd!=end){candidateReplacementReason="selection_readback_mismatch";return false;}
             }
             restoreCaret=false;
-            connection.commitText(choice.label,1);
-        }catch(RuntimeException unavailable){Log.w(TAG,"Selected text replacement unavailable: "+unavailable.getClass().getSimpleName());}
+            candidateReplacementStage="commit_text";
+            boolean accepted=connection.commitText(choice.label,1);
+            candidateReplacementReason=accepted?"":"commit_rejected";return accepted;
+        }catch(RuntimeException unavailable){candidateReplacementReason="replacement_exception";Log.w(TAG,"Selected text replacement unavailable: "+unavailable.getClass().getSimpleName());return false;}
         finally{
             try{if(restoreCaret&&!connection.setSelection(originalStart,originalEnd))Log.w(TAG,"Selected text caret restoration rejected");}
             catch(RuntimeException unavailable){Log.w(TAG,"Selected text caret restoration unavailable: "+unavailable.getClass().getSimpleName());}
@@ -5187,13 +5236,69 @@ public class SimonIMEService extends InputMethodService {
         };
         mainHandler.postDelayed(pendingTextCandidates,100);
     }
+    private static class CandidateChoiceView extends TextView {
+        final long[] times={0,0,0,0,0,0};
+        String touchLabel="",candidateSource="preview";
+        boolean pointerDown,bindingChanged,replacementRunning;
+        CandidateChoiceView(android.content.Context context){super(context);}
+    }
+    private String candidateReplacementStage="",candidateReplacementReason="";
     private TextView pooledTextChoice(List<TextView> pool,int index,ZhuyinInputController.TextChoice choice){
         if(index==pool.size()){
-            TextView item=new TextView(this);item.setTextSize(18);item.setGravity(Gravity.CENTER);item.setPadding(dp(12),0,dp(12),0);
-            item.setOnClickListener(v->{ZhuyinInputController.TextChoice selected=(ZhuyinInputController.TextChoice)v.getTag();if(externalTextChoices.contains(selected)){chooseExternalTextCandidate(selected);return;}textCandidateTaps++;if(sentencePhone!=null)sentencePhone.userSelected();applyZhuyinState(zhuyinInput.chooseTextCandidate(selected));});pool.add(item);
+            CandidateChoiceView item=new CandidateChoiceView(this);item.setTextSize(18);item.setGravity(Gravity.CENTER);item.setPadding(dp(12),0,dp(12),0);
+            final long[] times=item.times;
+            item.setOnTouchListener((v,e)->{
+                int action=e.getActionMasked();
+                if(action==MotionEvent.ACTION_DOWN){item.pointerDown=true;item.bindingChanged=false;item.candidateSource=externalTextChoices.contains(item.getTag())?"external":"preview";times[0]=e.getEventTime();times[1]=times[2]=0;times[3]=item.getParent()==boWordCandidateItems?2:3;times[4]=((ViewGroup)item.getParent()).indexOfChild(item);times[5]=boStreamPreview.length();item.touchLabel=((ZhuyinInputController.TextChoice)item.getTag()).label;}
+                else if(action==MotionEvent.ACTION_UP){times[1]=e.getEventTime();}
+                else if(action==MotionEvent.ACTION_CANCEL){times[2]=e.getEventTime();item.pointerDown=false;}
+                if(action==MotionEvent.ACTION_DOWN||action==MotionEvent.ACTION_UP||action==MotionEvent.ACTION_CANCEL)
+                    recordCandidateTouch(item,times,item.touchLabel,action==MotionEvent.ACTION_DOWN?"down":action==MotionEvent.ACTION_UP?"up":"cancel",false,boStreamPreview.length());
+                return false;
+            });
+            item.setOnClickListener(v->{
+                ZhuyinInputController.TextChoice selected=(ZhuyinInputController.TextChoice)v.getTag();
+                int before=boStreamPreview.length();boolean accepted=false;
+                candidateReplacementStage="binding_validation";candidateReplacementReason="";
+                item.replacementRunning=true;
+                try {
+                    if(item.bindingChanged){candidateReplacementReason="binding_changed";return;}
+                    if("external".equals(item.candidateSource)){accepted=chooseExternalTextCandidate(selected);return;}
+                    candidateReplacementStage="local_selection";
+                    textCandidateTaps++;if(sentencePhone!=null)sentencePhone.userSelected();
+                    ZhuyinInputController.State state=zhuyinInput.chooseTextCandidate(selected);accepted=state.accepted;
+                    candidateReplacementReason=accepted?"":"local_candidate_rejected";applyZhuyinState(state);
+                    candidateReplacementStage="local_applied";
+                }finally{recordCandidateTouch(item,times,item.bindingChanged?item.touchLabel:selected.label,"replacement",accepted,before);item.replacementRunning=false;item.pointerDown=false;}
+            });pool.add(item);
         }
-        TextView item=pool.get(index);if(!choice.label.contentEquals(item.getText()))item.setText(choice.label);
+        CandidateChoiceView item=(CandidateChoiceView)pool.get(index);
+        if(item.getTag()!=choice&&!item.replacementRunning){
+            if(item.pointerDown)item.bindingChanged=true;
+            else {java.util.Arrays.fill(item.times,0L);item.touchLabel=choice.label;item.bindingChanged=false;item.candidateSource=externalTextChoices.contains(choice)?"external":"preview";}
+        }
+        if(!choice.label.contentEquals(item.getText()))item.setText(choice.label);
         item.setTag(choice);item.setEnabled(true);item.setTextColor(boStreamPreview.getCurrentTextColor());return item;
+    }
+    private void recordCandidateTouch(TextView item,long[] times,String label,String phase,boolean accepted,int before) {
+        if(imeTelemetry==null||protectedInputField)return;
+        try {
+            EditorInfo editor=getCurrentInputEditorInfo();
+            JSONObject event=new JSONObject().put("phase",phase)
+                .put("row",times[3])
+                .put("rank",times[4])
+                .put("candidate_length",label.length())
+                .put("character_class",label.codePoints().allMatch(c->Character.UnicodeScript.of(c)==Character.UnicodeScript.HAN)?"han":"mixed")
+                .put("candidate_source",item instanceof CandidateChoiceView?((CandidateChoiceView)item).candidateSource:"unknown")
+                .put("replacement_stage",phase.equals("replacement")?candidateReplacementStage:"touch")
+                .put("abandon_reason",phase.equals("replacement")?candidateReplacementReason:phase.equals("cancel")?"touch_cancelled":"")
+                .put("down_uptime_ms",times[0])
+                .put("up_uptime_ms",times[1]).put("cancel_uptime_ms",times[2])
+                .put("replacement_success",phase.equals("replacement")?accepted:JSONObject.NULL)
+                .put("preview_before_length",times[0]>0?times[5]:before).put("preview_after_length",boStreamPreview.length())
+                .put("package_name",editor==null?"":editor.packageName);
+            imeTelemetry.record("candidate_touch","bopomofo",event,false);
+        }catch(Exception failure){Log.w(TAG,"Candidate diagnostic unavailable",failure);}
     }
     private void reconcileTextRow(LinearLayout row,List<View> desired){
         for(int n=0;n<desired.size();n++){
@@ -6417,6 +6522,8 @@ public class SimonIMEService extends InputMethodService {
 
     @Override
     public void onDestroy() {
+        TouchLearningStore oldTouch=touchLearning;touchLearning=null;
+        if(oldTouch!=null)new Thread(oldTouch::close,"TouchLearningClose").start();
         invalidateLineGhostwriter(); fieldGeneration++;
         flushPendingVoiceAudio(true);
         dismissSymbolPopup();
