@@ -26,7 +26,7 @@ final class AiSentencePhone {
     private final AiSentence sentence;
     private final OkHttpClient http=new OkHttpClient.Builder().retryOnConnectionFailure(false)
         .followRedirects(false).followSslRedirects(false).connectTimeout(2800,TimeUnit.MILLISECONDS)
-        .readTimeout(2800,TimeUnit.MILLISECONDS).callTimeout(2800,TimeUnit.MILLISECONDS).build();
+        .readTimeout(30,TimeUnit.SECONDS).callTimeout(30,TimeUnit.SECONDS).build();
     private Call call;
     private Runnable pause;
     private JSONObject request,localOption;
@@ -88,17 +88,17 @@ final class AiSentencePhone {
     // Native preedit may still be phonetic while the text-only editor shows glyphs.
     private String composingText(ZhuyinInputController controller){return controller.textLayout()?controller.textPreview():controller.state().composingText;}
     private long now(){return SystemClock.elapsedRealtime();}
-    // Persist both switches and the marker atomically before any input can mutate.
+    // Owner-requested one-time activation. Later UI opt-out persists.
+    // v671 forcibly-OFF and genuine manual-OFF are indistinguishable in existing prefs.
     static synchronized void migrateAutoApply(Context context){
         SharedPreferences p=context.getSharedPreferences("simon_ime_prefs",Context.MODE_PRIVATE);
-        if(p.getInt("ai_auto_apply_migration_version",0)>=671)return;
-        SharedPreferences.Editor edit=p.edit().putBoolean("auto_correction",false)
-            .putBoolean("ai_sentence_auto_apply",false).putInt("ai_auto_apply_migration_version",671);
-        if("shadow".equals(p.getString("ai_sentence_mode","suggestions")))edit.putString("ai_sentence_mode","suggestions");
-        if(!edit.commit())throw new IllegalStateException("AI safety migration not persisted");
+        if(p.getInt("ai_auto_apply_migration_version",0)>=675)return;
+        if(!p.edit().putBoolean("auto_correction",false).putBoolean("ai_sentence_auto_apply",true)
+            .putString("ai_sentence_mode","live").putInt("ai_auto_apply_migration_version",675).commit())
+            throw new IllegalStateException("AI activation migration not persisted");
         try{ImeTelemetry.install(context).record("ai_sentence","bopomofo",new JSONObject()
-            .put("outcome","mode_migrated").put("client_mode",p.getString("ai_sentence_mode","suggestions"))
-            .put("migration_version",671).put("client_auto",false),false);}
+            .put("outcome","mode_migrated").put("client_mode","live")
+            .put("migration_version",675).put("client_auto",true),false);}
         catch(Exception failure){android.util.Log.w("AiSentencePhone","Mode migration telemetry failed",failure);}
     }
     private SharedPreferences prefs(){return context.getSharedPreferences("simon_ime_prefs",Context.MODE_PRIVATE);}
@@ -282,7 +282,7 @@ final class AiSentencePhone {
                             }
                             if(!options(false).isEmpty())host.render();
                             // A manual option remains available while its exact input token and editor witness remain current.
-                            // Automatic application and incoming response acceptance retain their existing deadlines.
+                            // Automatic application and response acceptance use editing identity; HTTP remains bounded.
                         }catch(Exception invalid){failureCount++;sentence.failed(req);sentence.result=null;event("invalid");}
                     });
                 }
@@ -401,7 +401,7 @@ final class AiSentencePhone {
         String keys=automatic?clauseKeyPrefix+AiSentence.repairedKeys(request.getJSONArray("key_slots"),candidate.getJSONArray("repairs")):candidate.getString("keys");
         String text=automatic?clausePrefix+candidate.getString("text"):AiSentence.replaceSpan(host.controller().previewText(),candidate);
         if(!automatic&&!host.controller().previewText().equals(candidate.getString("preview"))){event("tap_stale");return;}
-        if(automatic&&(now()-sentence.lastEdit>2500||focused()||!autoEnabled()||candidate.optBoolean("protected",true)||protectedChange(text)||revertedSpan!=null&&revertedSpan.blocks(host.controller().sentenceKeys())))return;
+        if(automatic&&(focused()||!autoEnabled()||candidate.optBoolean("protected",true)||protectedChange(text)||revertedSpan!=null&&revertedSpan.blocks(host.controller().sentenceKeys())))return;
         AiComposition tx=new AiComposition(host.controller());ZhuyinInputController after=automatic?tx.applyAuto(keys,text,now(),true,false):tx.apply(keys,text);
         if(after==null){event("tap_unmapped");return;}
         if(!local&&(!(automatic?sentence.fresh(request,now()):sentence.current(request))||!witness())){after.close();event("tap_stale");return;}
@@ -442,7 +442,6 @@ final class AiSentencePhone {
     boolean beforeKey(String key){
         if(!host.controller().textLayout()&&"backspace".equals(key)&&host.controller().keyCaret()<0&&canUndo()&&transaction.automatic()){undo("backspace");return true;}
         if("enter".equals(key)){
-            if(!host.controller().textLayout()&&canUndo()&&transaction.automatic()&&transaction.tooRecent(now()))undo("enter_dwell");
             invalidatePending();
         }
         return false;

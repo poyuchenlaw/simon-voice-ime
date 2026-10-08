@@ -19,7 +19,7 @@ def block(start,text=None):
             if level==0:return text[start:m.end()]
     raise ValueError('unclosed block')
 names=['fetchServerArchiveText','commitFinalText','pasteClipboardText','copyToSystemClipboard','reserveUtteranceGeneration','completeReservedUtteranceWithText','completeReservedUtteranceWithoutText','collectReadyUtteranceCommitsLocked','handleWTIResponse','sendFullAudioHttpFallback','finalizeStreamingSession','drainPendingVoiceQueue','schedulePendingDrain','markPendingGeneration','handleAiCommandResponse','sendAiCommand','sendAiCommandAudio','commitReadyUtterance','consumeSilentResult','voiceAudioDurationMs','keepPendingModeResult','showNoVoiceStatus','deliverVoiceResult','isDiscardedVoiceGeneration','persistRecordingRead','finishDurableRecording','discardProtectedRecording','readAndPersistRecordingAudio','pcmWavBody','durableOrMemoryAudioBody','rescueReplaceAudio']
-names.extend(['cancelVoiceFinalDeadline','armVoiceFinalDeadline','recoverUnfinishedVoiceGeneration','recoverLateVoiceFinal','receiveAudioReceipt','sendAudioEndOfStream','finishWhenRecorderStopped','sendToWTI','notePendingGeneration','httpFallbackFullAudio','runOfflineFullAudioFallback','sendTextProcess','completeAppendProcessTextFailureWithOfflineFallback'])
+names.extend(['recordVoiceStage','cancelVoiceFinalDeadline','armVoiceFinalDeadline','recoverUnfinishedVoiceGeneration','recoverLateVoiceFinal','receiveAudioReceipt','sendAudioEndOfStream','finishWhenRecorderStopped','sendToWTI','notePendingGeneration','httpFallbackFullAudio','runOfflineFullAudioFallback','sendTextProcess','completeAppendProcessTextFailureWithOfflineFallback'])
 parts=[]
 counts={}
 # These production APIs do not exist in the work order's requested old revision.
@@ -46,7 +46,8 @@ ready=re.search(r'private static final class ReadyUtterance\s*',src)
 assert ready or args.baseline_applicable, 'production ReadyUtterance class missing'
 if ready:parts.append(block(ready.start()))
 # Execute the actual WS final lambda, selected by its explicit callback boundary.
-start=src.index('String finalText = json.optString("text", "");',src.index('} else if ("final".equals(type))'))
+final_branch=src.index('} else if ("final".equals(type))')
+start=final_branch+re.search(r'(?:final )?String finalText\b',src[final_branch:]).start()
 end=src.index('Log.i(TAG, "[AudioStream] 最終文字:',start)
 parts.append('void wsFinal(JSONObject json,int myGen) {\n'+src[start:end]+'\n}')
 # Execute the real onOpen callback with explicit captured context and a transport fake.

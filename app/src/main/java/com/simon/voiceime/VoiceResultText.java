@@ -4,6 +4,8 @@ import java.util.regex.Pattern;
 final class VoiceResultText {
     private static final Pattern SIL=Pattern.compile("(?iu)[<\\[({〈《【（＜]\\s*s\\s*i\\s*l\\s*[>\\])}〉》】）＞]");
     static String clean(String text) {return text==null?"":SIL.matcher(text).replaceAll("").trim();}
+    /** A successful transport final is opaque text, including literal recognizer markers. */
+    static boolean isEmptyFinal(String text) {return text==null||text.codePoints().allMatch(c -> Character.isWhitespace(c)||Character.isSpaceChar(c));}
     static boolean isSilence(String text) {return clean(text).codePoints().allMatch(c -> Character.isWhitespace(c)||Character.isSpaceChar(c));}
     // Explicit recognizer control markers, not phrases a speaker may genuinely dictate.
     static boolean isHallucinationMarker(String text) {

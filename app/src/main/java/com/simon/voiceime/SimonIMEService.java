@@ -333,6 +333,21 @@ public class SimonIMEService extends InputMethodService {
     // Phone memory holds only bounded previews; complete recording stays in file custody.
     private static final int MAX_FULL_PCM_BYTES = 256 * 1024; // Bounded preview; complete PCM streams to file.
 
+    // Metadata only; the existing telemetry HandlerThread owns disk and upload work.
+    private void recordVoiceStage(String stage,int gen,String id,String outcome) {
+        try {
+            if(imeTelemetry==null||protectedInputField||gen<=0||id==null||id.isEmpty()||discardedProtectedSessions.contains(id))return;
+            JSONObject event=new JSONObject().put("phase","voice_stage").put("stage",stage)
+                    .put("client_session_id",id).put("generation",gen)
+                    .put("elapsed_ms",SystemClock.elapsedRealtime()).put("uptime_ms",SystemClock.uptimeMillis())
+                    .put("ms_since_start",0).put("audio_ms",0).put("chars",0).put("close_code",0)
+                    .put("close_reason","").put("insert_method","").put("bytes",0).put("attempts",0);
+            if("release".equals(stage))event.put("next_generation",nextGenToCommit);
+            if("commit".equals(stage)){event.put("commit_outcome",outcome);event.put("insert_method",lastCommitMethod);}
+            imeTelemetry.record("voice","voice",event,false);
+        } catch(Exception e) {Log.w(TAG,"Voice stage telemetry dropped",e);}
+    }
+
     private void recordVoiceEvent(String phase, String id, long audioMs, int chars, int closeCode,
                                   String closeReason, String insertMethod, long bytes, int attempts) {
         if (imeTelemetry == null || protectedInputField) return;
@@ -468,7 +483,7 @@ public class SimonIMEService extends InputMethodService {
                     clipboardHelper.addToHistory(text);
                   }
                   @Override public void deliver(String text,String startedAt) {
-                    if(!VoiceResultText.isSilence(text)){
+                    if(!VoiceResultText.isEmptyFinal(text)){
                         if(clipboardHelper==null)throw new IllegalStateException("clipboard history unavailable");
                         if(!copyToSystemClipboard(text))throw new IllegalStateException("clipboard unavailable; retry delivery");
                         clipboardHelper.addToHistory(text);
@@ -1158,14 +1173,15 @@ public class SimonIMEService extends InputMethodService {
      *   - ic == null: text already on clipboard, show hint.
      * Small single-char / punctuation / space commits should NOT use this method.
      */
+    private String lastVoiceCommitOutcome="not_attempted";
     protected void commitFinalText(String text) {
+        lastVoiceCommitOutcome="not_attempted";
+        boolean icCallInProgress=false;
         lastCommitInsertedOrCopied=false;
         lastCommitClipboardWritten=false;
         lastCommitMethod="clipboard";
         try {
-            if(VoiceResultText.isHallucinationMarker(text)) {updateStatus("辨識結果無效，音訊保留待重試");return;}
-            if(VoiceResultText.isSilence(text)) {showNoVoiceStatus();return;}
-            text=VoiceResultText.clean(text);
+            if(VoiceResultText.isEmptyFinal(text)) {showNoVoiceStatus();return;}
             settlePendingCorrectionCapture();
             TextSnapshot beforeSnapshot = getCurrentTextSnapshotSafely();
 
@@ -1193,6 +1209,7 @@ public class SimonIMEService extends InputMethodService {
             // Step 3: Get input connection.
             InputConnection ic = getCurrentInputConnection();
             if (ic == null) {
+                lastVoiceCommitOutcome="no_ic";
                 Log.w(TAG, "commitFinalText: ic == null, text on clipboard");
                 updateStatus("已複製，可長按貼上");
                 return;
@@ -1201,7 +1218,10 @@ public class SimonIMEService extends InputMethodService {
             // Step 4: Normal path.
             if (!problematic) {
                 markProgrammaticTextChange();
+                icCallInProgress=true;
                 boolean ok = ic.commitText(text, 1);
+                icCallInProgress=false;
+                lastVoiceCommitOutcome=ok?"ic_api_true":"ic_api_false";
                 if (ok) {
                     lastCommitInsertedOrCopied=true;
                     lastCommitMethod="commit";
@@ -1213,12 +1233,19 @@ public class SimonIMEService extends InputMethodService {
 
             // Step 5: Paste fallback (text already on clipboard).
             markProgrammaticTextChange();
-            if(lastCommitClipboardWritten&&ic.performContextMenuAction(android.R.id.paste))lastCommitInsertedOrCopied=true;
+            if(lastCommitClipboardWritten){
+                icCallInProgress=true;
+                boolean pasted=ic.performContextMenuAction(android.R.id.paste);
+                icCallInProgress=false;
+                lastVoiceCommitOutcome=pasted?"ic_api_true":"ic_api_false";
+                if(pasted)lastCommitInsertedOrCopied=true;
+            }
             lastCommitMethod="paste";
             recordVoiceCommit(text, beforeSnapshot);
             updateStatus("已複製，可長按貼上");
 
         } catch (Exception e) {
+            if(icCallInProgress)lastVoiceCommitOutcome="ic_api_exception";
             Log.e(TAG, "commitFinalText: unexpected exception, text should be on clipboard", e);
             updateStatus("已複製，可長按貼上");
         }
@@ -1281,9 +1308,11 @@ public class SimonIMEService extends InputMethodService {
 
     private void commitReadyUtterance(ReadyUtterance ready) {
         if(isDiscardedVoiceGeneration(ready.generation))return;
+        recordVoiceStage("release",ready.generation,ready.clientSessionId,null);
         deliverVoiceResult(ready.generation,ready.text,() -> {
-            commitFinalText(VoiceResultText.clean(ready.text));
-            if("commit".equals(lastCommitMethod))updateStatus("完成: " + truncate(VoiceResultText.clean(ready.text),20));
+            commitFinalText(ready.text);
+            recordVoiceStage("commit",ready.generation,ready.clientSessionId,lastVoiceCommitOutcome);
+            if("commit".equals(lastCommitMethod))updateStatus("完成: " + truncate(ready.text,20));
             else if(lastCommitClipboardWritten) {
                 updateStatus("文字已保留剪貼簿，可長按貼上");
                 showPendingVoiceNotice("文字已保留剪貼簿，可長按貼上");
@@ -1327,7 +1356,7 @@ public class SimonIMEService extends InputMethodService {
     private boolean consumeSilentResult(int gen,String text,boolean append) {return consumeSilentResult(gen,text,append,"non_append");}
     private boolean consumeSilentResult(int gen,String text,boolean append,String mode) {
         if(isDiscardedVoiceGeneration(gen)||deliveredVoiceGenerations.contains(gen))return true;
-        if(!VoiceResultText.isSilence(text)&&!VoiceResultText.isNonSpeech(text,append,-1))return false;
+        if(!VoiceResultText.isEmptyFinal(text))return false;
         // Only delivery semantics: no text, duration or mode can authorize audio deletion.
         if(gen>0)deliveredVoiceGenerations.add(gen);
         markPendingGeneration(gen,"live_silence_waiting_receipt");
@@ -1371,12 +1400,15 @@ public class SimonIMEService extends InputMethodService {
             });
         };
         if(id==null||voicePendingQueue==null) {deliver.accept(false);return;}
+        recordVoiceStage("io_begin",gen,id,null);
         voicePendingQueue.execute(() -> {
             boolean failed=false;
             try {voicePendingQueue.persistResult(id,text,full,append);}
             catch(Exception e) {failed=true;Log.e(TAG,"Voice result backup failed",e);}
+            recordVoiceStage("io_end",gen,id,null);
             final boolean backupFailed=failed;
-            mainHandler.post(() -> deliver.accept(backupFailed));
+            recordVoiceStage("io_main_post",gen,id,null);
+            mainHandler.post(() -> {recordVoiceStage("io_main_run",gen,id,null);deliver.accept(backupFailed);});
         });
     }
 
@@ -1451,7 +1483,8 @@ public class SimonIMEService extends InputMethodService {
     private void armVoiceFinalDeadline(int gen) {
         if(gen<=0||isWatchService())return;
         cancelVoiceFinalDeadline(gen);
-        Runnable callback=() -> recoverUnfinishedVoiceGeneration(gen,"final_deadline");
+        final String deadlineSessionId=pendingSessionByGeneration.get(gen);
+        Runnable callback=() -> {recordVoiceStage("deadline",gen,deadlineSessionId,null);recoverUnfinishedVoiceGeneration(gen,"final_deadline");};
         voiceFinalDeadlines.put(gen,callback);
         mainHandler.postDelayed(callback,VOICE_FINAL_DEADLINE_MS);
     }
@@ -1479,7 +1512,7 @@ public class SimonIMEService extends InputMethodService {
     private boolean recoverLateVoiceFinal(int gen,String text) {
         String id=recoverySessionByGeneration.get(gen);
         if(id==null)return false;
-        if(voicePendingQueue!=null&&!VoiceResultText.isSilence(text)&&!isDiscardedVoiceGeneration(gen)) {
+        if(voicePendingQueue!=null&&!VoiceResultText.isEmptyFinal(text)&&!isDiscardedVoiceGeneration(gen)) {
             voicePendingQueue.execute(() -> {
                 if(!voicePendingQueue.delivered(id))voicePendingQueue.persistResult(id,text,true,true);
                 drainPendingVoiceQueue();
@@ -1558,13 +1591,13 @@ public class SimonIMEService extends InputMethodService {
         cancelVoiceFinalDeadline(gen);
         if(recoverLateVoiceFinal(gen,text))return;
         if(consumeSilentResult(gen,text))return;
-        final String cleanedText=VoiceResultText.clean(text);
         List<ReadyUtterance> readyTexts = new ArrayList<>();
         synchronized (utteranceCommitLock) {
             if (gen < nextGenToCommit) return;
             completedGenerations.add(gen);
-            pendingCommits.put(gen, cleanedText);
-            if (!isWatchService()) acceptedTextLengths.put(gen, cleanedText.length());
+            pendingCommits.put(gen, text);
+            recordVoiceStage("admit",gen,pendingSessionByGeneration.get(gen),null);
+            if (!isWatchService()) acceptedTextLengths.put(gen, text.length());
             collectReadyUtteranceCommitsLocked(readyTexts);
         }
         for (ReadyUtterance ready : readyTexts) {
@@ -2912,18 +2945,26 @@ public class SimonIMEService extends InputMethodService {
                     } else if ("receipt".equals(type)) {
                         receiveAudioReceipt(custodySessionId,json);
                     } else if ("final".equals(type)) {
-                        String finalText = json.optString("text", "");
+                        final String finalText;
+                        try {finalText=VoicePendingQueue.parseSuccessfulResponse(json.toString());}
+                        catch(java.io.IOException malformed) {
+                            mainHandler.post(() -> recoverUnfinishedVoiceGeneration(myGen,"ws_unfinished"));
+                            return;
+                        }
                         if (guardStoppedGenerations.contains(myGen)) return;
                         String sessionId=pendingSessionByGeneration.get(myGen);
                         recordVoiceEvent("final",sessionId,sessionId==null?0:voicePendingQueue.audioMs(sessionId),finalText.length(),0,"","",0,0);
+                        final String traceSessionId=sessionId!=null?sessionId:recoverySessionByGeneration.get(myGen);
+                        recordVoiceStage("ws_main_post",myGen,traceSessionId,null);
                         mainHandler.post(() -> {
-                            if(!VoiceResultText.isSilence(finalText))cancelVoiceFinalDeadline(myGen);
+                            recordVoiceStage("ws_main_run",myGen,traceSessionId,null);
+                            if(!VoiceResultText.isEmptyFinal(finalText))cancelVoiceFinalDeadline(myGen);
                             if(recoverLateVoiceFinal(myGen,finalText)){cancelVoiceFinalDeadline(myGen);return;}
-                            if(VoiceResultText.isSilence(finalText)&&audibleVoiceGenerations.contains(myGen)) {
+                            if(VoiceResultText.isEmptyFinal(finalText)&&audibleVoiceGenerations.contains(myGen)) {
                                 cancelVoiceFinalDeadline(myGen);
                                 recoverUnfinishedVoiceGeneration(myGen,"audible_empty_final");return;
                             }
-                            if(VoiceResultText.isSilence(finalText)) {
+                            if(VoiceResultText.isEmptyFinal(finalText)) {
                                 // A rolling zero tail is not proof of complete digital silence.
                                 final byte[] completePcm=fullPcmByGeneration.get(myGen);
                                 final String silenceId=pendingSessionByGeneration.get(myGen);
@@ -3164,6 +3205,7 @@ public class SimonIMEService extends InputMethodService {
 
         final boolean wasStreaming = streamingMode;
         final int myGen = activeUtteranceGeneration;
+        recordVoiceStage("stop",myGen,stoppedSessionId,null);
         if (!isWatchService()) {
             recordingDurationMs.put(myGen, android.os.SystemClock.elapsedRealtime() - activeRecordingStartedMs);
         }
@@ -4009,7 +4051,7 @@ public class SimonIMEService extends InputMethodService {
             try {
                 String text=VoicePendingQueue.parseSuccessfulResponse(json.toString());
                 String result=mode==Mode.REPLACE?json.optString("insert",text):text;
-                boolean deleteOnly=mode==Mode.REPLACE&&VoiceResultText.isSilence(result)
+                boolean deleteOnly=mode==Mode.REPLACE&&VoiceResultText.isEmptyFinal(result)
                         &&(json.optInt("delete_before",0)>0||json.optInt("delete_after",0)>0);
                 if(!deleteOnly&&consumeSilentResult(gen,result,mode==Mode.APPEND,mode.name()))return;
                 if(mode!=Mode.APPEND)serverFinalGenerations.add(gen);
@@ -4034,8 +4076,8 @@ public class SimonIMEService extends InputMethodService {
                             if(deleteOnly) {lastCommitInsertedOrCopied=true;updateStatus("🔄 已刪除指定文字");return;}
                         }
                     }
-                    commitFinalText(VoiceResultText.clean(result));
-                    updateStatus((mode==Mode.REPLACE?"🔄 替換: ":mode==Mode.SPELL?"✏️ 拼字: ":"🌐 翻譯: ")+truncate(VoiceResultText.clean(result),25));
+                    commitFinalText(result);
+                    updateStatus((mode==Mode.REPLACE?"🔄 替換: ":mode==Mode.SPELL?"✏️ 拼字: ":"🌐 翻譯: ")+truncate(result,25));
                 });
             } catch(Exception e) {
                 markPendingGeneration(gen,"mode_response_failure:"+e.getClass().getSimpleName());
@@ -5471,7 +5513,7 @@ public class SimonIMEService extends InputMethodService {
      */
     private void sendAiCommand(String instruction,String context) {sendAiCommand(instruction,context,-1);}
     private void sendAiCommand(String instruction, String context,int audioGeneration) {
-        if(consumeSilentResult(audioGeneration,instruction,false,"AI_COMMAND"))return;
+        if(consumeSilentResult(audioGeneration,VoiceResultText.isNonSpeech(instruction,false,-1)?"":instruction,false,"AI_COMMAND"))return;
         if (instruction == null || instruction.trim().isEmpty()) {
             updateStatus("未辨識到指令");
             return;
@@ -5567,8 +5609,8 @@ public class SimonIMEService extends InputMethodService {
                 return;
             }
             deliverVoiceResult(audioGeneration,text,false,false,() -> {
-                commitFinalText(VoiceResultText.clean(text));
-                updateStatus("🤖 " + truncate(VoiceResultText.clean(text),20));
+                commitFinalText(text);
+                updateStatus("🤖 " + truncate(text,20));
                 if(lastCommitInsertedOrCopied)clearAiState();
             });
         });

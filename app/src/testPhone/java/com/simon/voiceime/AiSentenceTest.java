@@ -5,6 +5,19 @@ import static org.junit.Assert.*;
 import java.nio.charset.StandardCharsets;
 
 public class AiSentenceTest {
+ @Test public void unchangedPreviewReceivesSuccessfulReplyAfterOldClockWindow() throws Exception {
+  JSONObject req=contract().getJSONArray("examples").getJSONObject(0);
+  JSONObject response=contract().getJSONArray("examples").getJSONObject(1);
+  AiSentence c=session(contract());c.mode("suggestions");assertNotNull(c.begin(550,()->req));
+  assertTrue("same current input must retain a successful correction while request is technically bounded",c.receive(req,response.toString(),5100,(k,t)->true));
+ }
+ @Test public void changedPreviewRejectsLateSuccessfulReplyIndependentlyOfClock() throws Exception {
+  JSONObject req=contract().getJSONArray("examples").getJSONObject(0);
+  JSONObject response=contract().getJSONArray("examples").getJSONObject(1);
+  AiSentence c=session(contract());c.mode("suggestions");assertNotNull(c.begin(550,()->req));
+  c.edit(800,false,true);assertFalse(c.receive(req,response.toString(),5100,(k,t)->true));
+ }
+
  static JSONObject contract() throws Exception {
   return new JSONObject(new String(AiSentenceTest.class.getResourceAsStream("/sentence-contract.json").readAllBytes(),StandardCharsets.UTF_8));
  }
@@ -69,7 +82,7 @@ public class AiSentenceTest {
  @Test public void shadowReceivesAndSuggestionsRequireBothPolicies() throws Exception {
   JSONObject schema=contract(),req=schema.getJSONArray("examples").getJSONObject(0),res=schema.getJSONArray("examples").getJSONObject(1);
   AiSentence c=session(schema);assertNotNull(c.begin(550,()->req));assertTrue(c.receive(req,res.toString(),600,(k,t)->true));assertTrue(c.visible(req,600,false).isEmpty());
-  c.mode("suggestions");assertEquals(1,c.visible(req,600,false).size());assertTrue(c.visible(req,600,true).isEmpty());assertEquals("manual suggestion remains current after auto deadline",1,c.visible(req,4101,false).size());assertFalse("automatic freshness still expires",c.fresh(req,4101));
+  c.mode("suggestions");assertEquals(1,c.visible(req,600,false).size());assertTrue(c.visible(req,600,true).isEmpty());assertEquals("manual suggestion remains current after auto deadline",1,c.visible(req,4101,false).size());assertTrue("same current input retains successful correction while HTTP/server resource lifetime is bounded",c.fresh(req,4101));
   c.result.put("mode","shadow");assertTrue(c.visible(req,600,false).isEmpty());
  }
  @Test public void failuresLeaveTypingUntouchedNoRetry() throws Exception {
@@ -330,8 +343,15 @@ public class AiSentenceTest {
    JSONObject changed=new JSONObject(res.toString());changed.getJSONObject("decision").put("display",display);
    assertEquals(display,false,authorize.invoke(null,req,changed));
   }
-  res.getJSONObject("decision").put("choice_confidence",.98);
-  assertEquals(false,authorize.invoke(null,req,AiSentence.response(contract(),req,res.toString(),(k,t)->true)));
+  // User direct-success authority supersedes the former .98 quality veto; display/digest/protection/unmapped controls remain.
+  for(double confidence:new double[]{0,.92,.98,.99,1}){
+   res.getJSONObject("decision").put("choice_confidence",confidence);
+   assertEquals("selected successful correction must not be vetoed by an extra score",true,authorize.invoke(null,req,AiSentence.response(contract(),req,res.toString(),(k,t)->true)));
+  }
+  for(Object invalid:new Object[]{-.01,1.01,JSONObject.NULL,"NaN","Infinity","0.92"}){
+   JSONObject malformed=new JSONObject(res.toString());malformed.getJSONObject("decision").put("choice_confidence",invalid);
+   assertThrows("finite numeric 0..1 protocol shape: "+String.valueOf(invalid),RuntimeException.class,()->AiSentence.response(contract(),req,malformed.toString(),(k,t)->true));
+  }
   res.getJSONObject("decision").put("choice_confidence",.99);
   assertEquals(false,authorize.invoke(null,req,AiSentence.response(contract(),req,res.toString(),(k,t)->false)));
  }
@@ -351,7 +371,7 @@ public class AiSentenceTest {
 
  @Test public void manualSuggestionLifetimeUsesCurrentInputTokenAndPreservesOriginal()throws Exception {
   JSONObject schema=contract(),req=schema.getJSONArray("examples").getJSONObject(0),res=schema.getJSONArray("examples").getJSONObject(1);AiSentence c=session(schema);c.mode("suggestions");assertNotNull(c.begin(550,()->req));assertTrue(c.receive(req,res.toString(),600,(k,t)->true));
-  assertEquals("舵餘",req.getString("literal"));assertEquals(1,c.visible(req,6000,false).size());assertFalse(c.fresh(req,6000));
+  assertEquals("舵餘",req.getString("literal"));assertEquals(1,c.visible(req,6000,false).size());assertTrue("same current input retains correction; new input below invalidates it",c.fresh(req,6000));
   c.edit(6001,false,true);assertTrue("new physical key rejects old manual result",c.visible(req,6002,false).isEmpty());
  }
  @Test public void manualSuggestionOldFieldPrivacyAndDigestNeverRemainSelectable()throws Exception {

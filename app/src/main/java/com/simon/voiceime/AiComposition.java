@@ -19,14 +19,13 @@ final class AiComposition {
     }
     private ZhuyinInputController before,after;
     private long appliedAt=-1;
-    boolean tooRecent(long now){return automatic()&&now-appliedAt<800;}
     boolean automatic(){return appliedAt>=0;}
     ZhuyinInputController applyAuto(String keys,String text,long now,boolean enabled,boolean protectedToken){
         if(!enabled||protectedToken)return null;
         ZhuyinInputController result=apply(keys,text);if(result!=null)appliedAt=now;return result;
     }
     ZhuyinInputController beforeEnter(ZhuyinInputController current,long now){
-        return automatic()&&now-appliedAt<800?undo(current):current;
+        return current;
     }
     AiComposition(ZhuyinInputController before){this.before=before;}
     ZhuyinInputController apply(String keys,String text){

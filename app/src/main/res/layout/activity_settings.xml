@@ -367,7 +367,7 @@
         <View android:layout_width="match_parent" android:layout_height="1dp" android:background="#333333" android:layout_marginBottom="16dp" />
         <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="注音九宮格" android:textSize="18sp" android:textColor="#e0e0e0" android:layout_marginBottom="6dp" />
         <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:text="AI 注音選項" android:textColor="#cccccc" />
-        <CheckBox android:id="@+id/checkAutoCorrection" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="AI 自動套用（需伺服器姓名保護；預設關閉）"/>
+        <CheckBox android:id="@+id/checkAutoCorrection" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="AI 自動套用（預覽整句校正）"/>
         <Button android:id="@+id/btnResetZhuyinLearning" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="重置注音選字學習"/>
         <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:text="輸入預覽版面" />
         <Spinner android:id="@+id/textLayoutMode" android:layout_width="match_parent" android:layout_height="48dp" />

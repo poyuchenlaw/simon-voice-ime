@@ -48,7 +48,8 @@ final class AiSentence {
         try {return eligible&&!"off".equals(mode)&&req!=null&&req.getLong("editor_generation")==editorGeneration&&req.getLong("composition_generation")==compositionGeneration&&recordedGeneration==compositionGeneration&&req.getString("request_id").equals(recordedId)&&digest(req).equals(recordedDigest);
         } catch(Exception invalid){throw new IllegalArgumentException("sentence contract",invalid);}
     }
-    boolean fresh(JSONObject req,long now){return current(req)&&now>=lastEdit&&now-lastEdit<=4000;}
+    // Resource lifetime is bounded by HTTP/server; editing identity owns staleness.
+    boolean fresh(JSONObject req,long now){return current(req);}
     boolean receive(JSONObject req,String body,long now,java.util.function.BiPredicate<String,String> reading){
         if(pending!=req||!fresh(req,now))return false;pending=null;result=response(schema,req,body,reading);return true;
     }
@@ -193,7 +194,9 @@ final class AiSentence {
         try{
             if(request==null||result==null||!Boolean.TRUE.equals(request.opt("client_auto"))||!"sentence-auto-v2".equals(result.optString("policy_version"))||!digest(request).equals(result.optString("digest")))return false;
             JSONObject decision=result.getJSONObject("decision");
-            if(!"suggestions".equals(result.getString("mode"))||!"auto".equals(decision.getString("display"))||!"not_called".equals(decision.getString("jev_status"))||!decision.isNull("meaning_probability")||decision.getDouble("choice_confidence")<.99)return false;
+            double confidence=decision.getDouble("choice_confidence");
+            if(!Double.isFinite(confidence)||confidence<0||confidence>1)return false;
+            if(!"suggestions".equals(result.getString("mode"))||!"auto".equals(decision.getString("display"))||!"not_called".equals(decision.getString("jev_status"))||!decision.isNull("meaning_probability"))return false;
             JSONArray candidates=result.getJSONArray("candidates");
             for(int i=0;i<candidates.length();i++){
                 JSONObject candidate=candidates.getJSONObject(i);
@@ -229,7 +232,9 @@ final class AiSentence {
         SentenceContract.require("keep".equals(selected)||"none".equals(selected)||ids.contains(selected));
         if("auto".equals(decision.getString("display"))){
             JSONObject chosen=null;for(int i=0;i<candidates.length();i++)if(selected.equals(candidates.getJSONObject(i).getString("id")))chosen=candidates.getJSONObject(i);
-            SentenceContract.require(extended&&"suggestions".equals(result.getString("mode"))&&chosen!=null&&!chosen.getBoolean("protected")&&decision.getDouble("choice_confidence")>=.98);
+            Object confidence=decision.opt("choice_confidence");
+            SentenceContract.require(confidence instanceof Number&&Double.isFinite(((Number)confidence).doubleValue())&&((Number)confidence).doubleValue()>=0&&((Number)confidence).doubleValue()<=1);
+            SentenceContract.require(extended&&"suggestions".equals(result.getString("mode"))&&chosen!=null&&!chosen.getBoolean("protected"));
         }
         result.put("candidates",valid);
         return result;

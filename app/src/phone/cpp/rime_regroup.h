@@ -316,7 +316,8 @@ static void regroup_repair(RegroupState& r,rime::Context* probe,RegroupOption& o
             auto found=menus.find(key);
             if(found==menus.end()) {
                 std::vector<rime::an<rime::Candidate>> candidates;
-                probe->Clear();probe->set_input(option.repaired_input.substr(0,r.stops[b]));
+                const auto probe_input=option.repaired_input.substr(0,r.stops[b]);
+                if(probe->input()!=probe_input){probe->Clear();probe->set_input(probe_input);}
                 rime::Composition prefix;prefix.Reset(probe->input());
                 pin_text(prefix,0,r.stops[a],cp_slice(r.original,0,a));
                 prefix.Forward();probe->set_composition(std::move(prefix));probe->set_caret_pos(r.stops[b]);
@@ -367,7 +368,8 @@ static bool regroup(RegroupState& r,const RimeApi* api,RimeSessionId id,int boun
     for(int a=std::max(0,boundary-2);a<=std::min(boundary,count-1);++a) {
         for(int b=std::max(a+1,boundary);b<=std::min(count,boundary+2);++b) {
             if(b-a>3||splits_toned(r,r.stops[a])||splits_toned(r,r.stops[b]))continue;
-            probe->Clear();probe->set_input(r.input.substr(0,r.stops[b]));
+            const auto probe_input=r.input.substr(0,r.stops[b]);
+            if(probe->input()!=probe_input){probe->Clear();probe->set_input(probe_input);}
             rime::Composition prefix;prefix.Reset(probe->input());
             pin_text(prefix,0,r.stops[a],cp_slice(r.original,0,a));
             prefix.Forward();probe->set_composition(std::move(prefix));probe->set_caret_pos(r.stops[b]);

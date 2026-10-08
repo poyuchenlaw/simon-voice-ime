@@ -20,6 +20,23 @@ public class VoicePendingQueueTest {
         return new JSONObject().put("client_session_id",id).put("byte_count",pcm.length()).put("sha256",hex.toString());
     }
     private String response(File pcm,String id,String text)throws Exception {return new JSONObject().put("receipt",receipt(pcm,id)).put("text",text).toString();}
+    @Test public void authoritativeOutboxReplayKeepsExactFinalPlaintext()throws Exception {
+        for(String expected:new String[]{"請保留 <sil> 這個字串，供工程日誌比對。","<hallucination>","　 [BLANK_AUDIO] 　"}){
+            VoicePendingQueue q=queue();String id=session(q,32000);q.persistResult(id,expected);JSONObject r=receipt(q.pcmFile(id),id);assertTrue(q.acceptReceipt(id,r));q.markPending(id,"outbox_replay");
+            List<String> delivered=new ArrayList<>();q.uploadOne(id,(pcm,sid,rate)->{throw new AssertionError("saved nonempty final must not be re-recognized");},(text,stamp)->delivered.add(text),null);
+            assertEquals(List.of(expected),delivered);
+        }
+    }
+    @Test public void chunkCustodyCannotOverwriteSavedCompleteFinalWithRawFallback()throws Exception {
+        VoicePendingQueue q=queue();String id=session(q,(int)VoicePendingQueue.CHUNK_BYTES+8);JSONObject original=receipt(q.pcmFile(id),id);
+        String expected="　 完整最終文字 <sil>，時間確實有節省到。 　";q.persistResult(id,expected);List<String> delivered=new ArrayList<>();
+        q.uploadOne(id,new VoicePendingQueue.Uploader(){
+            public String transcribe(File pcm,String sid,int rate)throws Exception{return new JSONObject().put("receipt",receipt(pcm,sid)).toString();}
+            public String finalizeParent(JSONObject identity,org.json.JSONArray children,int rate)throws Exception{return new JSONObject().put("text","世間確實有節省道").put("ai_corrected",false).put("correction_applied",false).put("correction_status","pending").put("receipt",original).toString();}
+            public String archiveParent(JSONObject identity,org.json.JSONArray children,int rate)throws Exception{return new JSONObject().put("receipt",original).toString();}
+        },(text,start)->delivered.add(text),null);
+        assertEquals(List.of(expected),delivered);assertTrue(q.receiptConfirmed(id));
+    }
     @Test public void releaseReceiptCannotReclaimUploadingServerCustody()throws Exception {
         VoicePendingQueue q=queue();String id=session(q,8);JSONObject original=receipt(q.pcmFile(id),id);assertTrue(q.acceptReceipt(id,original));q.markPending(id,"test");
         java.util.concurrent.CountDownLatch started=new java.util.concurrent.CountDownLatch(1),finish=new java.util.concurrent.CountDownLatch(1);
@@ -298,7 +315,7 @@ public class VoicePendingQueueTest {
         assertEquals(Arrays.asList("ordinary recovered"),delivered);assertTrue(recovered.delivered(id));
     }
     @Test public void legacyArchivedMarkersKeepCustodyAndDoNotBlockLaterVoice()throws Exception {
-        for(String legacyText:Arrays.asList("[BLANK_AUDIO]","")) {
+        for(String legacyText:Arrays.asList("　","")) {
             VoicePendingQueue q=queue();String id=q.begin();q.append(id,new byte[]{10,0},2);q.markPending(id,"legacy");JSONObject r=receipt(q.pcmFile(id),id);
             q.persistResult(id,legacyText);assertTrue(q.acceptReceipt(id,r));
             File file=new File(temp.getRoot(),"voice_pending/"+id+".json");JSONObject m=new JSONObject(new String(Files.readAllBytes(file.toPath()),java.nio.charset.StandardCharsets.UTF_8));
@@ -422,8 +439,8 @@ public class VoicePendingQueueTest {
         q.uploadOne(id,(pcm,sid,rate)->{fail("durable receipt already accepted");return "";},(t,start)->delivery.add(t),null);
         assertEquals(List.of("saved result"),delivery);assertTrue(q.delivered(id));
     }
-    @Test public void silenceAndMarkersWithReceiptOnlyShowStatus()throws Exception {
-        for(String text:new String[]{" ","< SIL >","[BLANK_AUDIO]","<hallucination>"}) {
+    @Test public void blankFinalWithReceiptOnlyShowsStatus()throws Exception {
+        for(String text:new String[]{" ","　","\t\n",""}) {
             VoicePendingQueue q=queue();String id=session(q,32000);List<String> events=new ArrayList<>();
             q.uploadOne(id,(pcm,sid,rate)->response(pcm,sid,text),(t,start)->fail("silence reaches clipboard"),(phase,sid,ms,bytes,n,error)->events.add(phase));
             assertEquals(List.of("silence"),events);assertFalse(q.pcmFile(id).exists());

@@ -9,6 +9,54 @@ import org.junit.rules.TemporaryFolder;
 import static org.junit.Assert.*;
 
 public class VoiceServiceHarness {
+    @Test public void voiceStageTraceLinksDeliveryWithoutContent() throws Exception {
+        String id=session(1);voicePendingQueue.holdForReceipt(id);
+        wsFinal(new JSONObject().put("text","正確文字"),1);barrier();
+        List<String> stages=new ArrayList<>();
+        for(JSONObject e:imeTelemetry.events){stages.add(e.getString("stage"));assertEquals(id,e.getString("client_session_id"));assertEquals(1,e.getInt("generation"));assertEquals(2000,e.getLong("elapsed_ms"));assertEquals(1800,e.getLong("uptime_ms"));assertFalse(e.has("text"));assertFalse(e.has("package"));assertEquals("release".equals(e.getString("stage")),e.has("next_generation"));}
+        assertEquals(Arrays.asList("ws_main_post","ws_main_run","admit","release","io_begin","io_end","io_main_post","io_main_run","commit"),stages);
+        assertEquals("ic_api_true",imeTelemetry.events.get(8).getString("commit_outcome"));assertEquals("commit",imeTelemetry.events.get(8).getString("insert_method"));
+        imeTelemetry.events.clear();protectedInputField=true;recordVoiceStage("stop",1,id,null);assertTrue(imeTelemetry.events.isEmpty());protectedInputField=false;
+        recordVoiceStage("stop",1,id,null);assertEquals("stop",imeTelemetry.events.get(0).getString("stage"));imeTelemetry.events.clear();
+        for(boolean absent:new boolean[]{true,false}){imeTelemetry.events.clear();int gen=absent?2:3;String sid=session(gen);voicePendingQueue.holdForReceipt(sid);missingInputConnection=absent;connection.fail=true;connection.pasteFails=true;wsFinal(new JSONObject().put("text","保留文字"),gen);barrier();JSONObject e=imeTelemetry.events.get(imeTelemetry.events.size()-1);assertEquals("commit",e.getString("stage"));assertEquals(absent?"no_ic":"ic_api_false",e.getString("commit_outcome"));}
+        imeTelemetry.events.clear();String deadlineId=session(4);isRecording=true;activeUtteranceGeneration=4;armVoiceFinalDeadline(4);voiceFinalDeadlines.get(4).run();assertEquals("deadline",imeTelemetry.events.get(0).getString("stage"));assertEquals(deadlineId,imeTelemetry.events.get(0).getString("client_session_id"));assertEquals(1,afterRecordingFinalization.size());isRecording=false;
+        connection.fail=true;connection.pasteFails=false;commitFinalText("貼上成功");assertEquals("ic_api_true",lastVoiceCommitOutcome);assertEquals("paste",lastCommitMethod);
+        commitFinalText("");assertEquals("not_attempted",lastVoiceCommitOutcome);
+        connection.throwsCommit=true;missingInputConnection=false;imeTelemetry.events.clear();wsFinal(new JSONObject().put("text","仍應保留"),4);barrier();assertEquals("ic_api_exception",imeTelemetry.events.get(imeTelemetry.events.size()-1).getString("commit_outcome"));assertTrue(clipboard.values.contains("仍應保留"));
+    }
+
+    @Test public void voiceStageEmitterExceptionNeverSkipsDelivery() throws Exception {
+        String id=session(1);voicePendingQueue.holdForReceipt(id);((GuardSet)discardedProtectedSessions).throwOnce=true;
+        wsFinal(new JSONObject().put("text","診斷不得擋出字"),1);barrier();assertEquals(Arrays.asList("診斷不得擋出字"),connection.inserted);
+    }
+
+    @Test public void voiceStageCommitFalsePasteTrueIsReported() throws Exception {
+        String id=session(1);voicePendingQueue.holdForReceipt(id);connection.fail=true;connection.pasteFails=false;
+        wsFinal(new JSONObject().put("text","貼上仍應出字"),1);barrier();JSONObject e=imeTelemetry.events.get(imeTelemetry.events.size()-1);
+        assertEquals("commit",e.getString("stage"));assertEquals("ic_api_true",e.getString("commit_outcome"));assertEquals("paste",e.getString("insert_method"));assertEquals(1,connection.pastes);
+    }
+
+    @Test public void voiceStageInterleavedHandoffsStayDistinct() throws Exception {
+        String id=session(1);voicePendingQueue.holdForReceipt(id);CountDownLatch entered=new CountDownLatch(1),release=new CountDownLatch(1);
+        voicePendingQueue.execute(()->{entered.countDown();try{release.await();}catch(InterruptedException e){Thread.currentThread().interrupt();}});assertTrue(entered.await(2,TimeUnit.SECONDS));
+        try {
+            wsFinal(new JSONObject().put("text","一次交付"),1);wsFinal(new JSONObject().put("text","一次交付"),1);
+            List<String> stages=new ArrayList<>();for(JSONObject e:imeTelemetry.events)stages.add(e.getString("stage"));
+            assertEquals(Arrays.asList("ws_main_post","ws_main_run","admit","release","io_begin","ws_main_post","ws_main_run"),stages);
+        }finally{release.countDown();}barrier();
+        List<String> tail=new ArrayList<>();for(int n=7;n<imeTelemetry.events.size();n++)tail.add(imeTelemetry.events.get(n).getString("stage"));assertEquals(Arrays.asList("io_end","io_main_post","io_main_run","commit"),tail);assertEquals(Arrays.asList("一次交付"),connection.inserted);
+    }
+
+    @Test public void authoritativeFinalPlaintextIsDeliveredVerbatim() throws Exception {
+        String[] texts={"請保留 <sil> 這個字串，供工程日誌比對。","<hallucination>","　 保留前後空白與 [BLANK_AUDIO] 　"};
+        for(int n=0;n<texts.length;n++){String id=session(n+1);voicePendingQueue.holdForReceipt(id);wsFinal(new JSONObject().put("text",texts[n]).put("asr_complete",true),n+1);barrier();assertEquals(Arrays.asList(Arrays.copyOf(texts,n+1)),connection.inserted);assertEquals(texts[n],clipboard.values.get(n));}
+    }
+
+    @Test public void malformedWsFinalNeverInventsTextAndRetainsAudio() throws Exception {
+        String id=session(1);voicePendingQueue.holdForReceipt(id);wsFinal(new JSONObject().put("text",new JSONObject().put("bad","object")),1);barrier();
+        assertTrue("malformed transport must not stringify object into App",connection.inserted.isEmpty());assertTrue(clipboard.values.isEmpty());files(id,true);
+    }
+
     @Rule public TemporaryFolder temp=new TemporaryFolder();
     static final long VOICE_FINAL_DEADLINE_MS=35000;
     final ConcurrentHashMap<Integer,Runnable> voiceFinalDeadlines=new ConcurrentHashMap<>();
@@ -23,7 +71,8 @@ public class VoiceServiceHarness {
     final Set<Integer> serverFullAudioGenerations=ConcurrentHashMap.newKeySet();
     final Set<Integer> fullAudioRequests=ConcurrentHashMap.newKeySet();
     final Set<Integer> discardedVoiceGenerations=ConcurrentHashMap.newKeySet();
-    final Set<String> discardedProtectedSessions=ConcurrentHashMap.newKeySet();
+    final Set<String> discardedProtectedSessions=new GuardSet();
+    static class GuardSet extends HashSet<String> {boolean throwOnce;@Override public boolean contains(Object key){if(throwOnce){throwOnce=false;throw new IllegalStateException("host observer guard failure");}return super.contains(key);}}
     final ConcurrentHashMap<Integer,String> pendingSessionByGeneration=new ConcurrentHashMap<>();
     final ConcurrentHashMap<Integer,Boolean> committedGenerations=new ConcurrentHashMap<>();
     final ConcurrentHashMap<Integer,Integer> acceptedTextLengths=new ConcurrentHashMap<>();
@@ -38,7 +87,11 @@ public class VoiceServiceHarness {
     int activeUtteranceGeneration=1,nextGenToCommit=1,fieldGeneration=1,replaceShortChars=6,rescueExtraChars=10;
     long replaceLongAudioMs=5000;double rescueRatio=1.5;
     volatile boolean isRecording,protectedInputField,lastCommitInsertedOrCopied,lastCommitClipboardWritten;
-    volatile String activePendingSessionId,lastCommitMethod,status="";
+    volatile String activePendingSessionId,lastCommitMethod,status="",lastVoiceCommitOutcome="not_attempted";
+    final ImeTelemetry imeTelemetry=new ImeTelemetry();
+    static class ImeTelemetry {final List<JSONObject> events=new CopyOnWriteArrayList<>();void record(String t,String p,JSONObject j,boolean guard){events.add(j);}}
+    static class SystemClock {static long elapsedRealtime(){return 2000;}static long uptimeMillis(){return 1800;}}
+    boolean missingInputConnection;
     long noVoiceStatusUntil;int silenceStatusGeneration;
     final FakeHandler mainHandler=new FakeHandler();
     final ClipboardManager clipboard=new ClipboardManager();
@@ -58,7 +111,7 @@ public class VoiceServiceHarness {
     enum Mode {APPEND,REPLACE,SPELL,TRANSLATE}
     static class Context {static final String CLIPBOARD_SERVICE="clipboard";}
     Object getSystemService(String name){return clipboard;}
-    InputConnection getCurrentInputConnection(){return connection;}
+    InputConnection getCurrentInputConnection(){return missingInputConnection?null:connection;}
     EditorInfo getCurrentInputEditorInfo(){return new EditorInfo();}
     boolean isWatchService(){return false;}
     void pruneUtteranceGenerationState(){}
@@ -99,12 +152,12 @@ public class VoiceServiceHarness {
     }
     static class ClipData {final String text;ClipData(String t){text=t;}static ClipData newPlainText(String label,String t){return new ClipData(t);}}
     static void assertNoSilenceToken(String text){assertFalse("silence token escaped into a user text sink",java.util.regex.Pattern.compile("(?iu)[<\\[({〈《【（＜]\\s*s\\s*i\\s*l\\s*[>\\])}〉》】）＞]").matcher(text).find());}
-    static class ClipboardManager {boolean fail;final List<String> values=new CopyOnWriteArrayList<>();void setPrimaryClip(ClipData c){assertNoSilenceToken(c.text);if(fail)throw new IllegalStateException("clipboard unavailable");values.add(c.text);}}
+    static class ClipboardManager {boolean fail;final List<String> values=new CopyOnWriteArrayList<>();void setPrimaryClip(ClipData c){if(fail)throw new IllegalStateException("clipboard unavailable");values.add(c.text);}}
     static class ClipboardHelper {final List<String> history=new CopyOnWriteArrayList<>();void addToHistory(String s){history.remove(s);history.add(s);}}
     interface InputConnection {boolean commitText(String t,int n);boolean performContextMenuAction(int n);boolean deleteSurroundingText(int b,int a);CharSequence getTextBeforeCursor(int n,int f);CharSequence getTextAfterCursor(int n,int f);}
     static class FakeConnection implements InputConnection {
-        boolean fail,pasteFails;int deletes,pastes;final List<String> inserted=new CopyOnWriteArrayList<>();
-        public boolean commitText(String s,int n){assertNoSilenceToken(s);if(fail)return false;inserted.add(s);return true;}
+        boolean fail,pasteFails,throwsCommit;int deletes,pastes;final List<String> inserted=new CopyOnWriteArrayList<>();
+        public boolean commitText(String s,int n){if(throwsCommit)throw new IllegalStateException("host IC API throw");if(fail)return false;inserted.add(s);return true;}
         public boolean performContextMenuAction(int n){pastes++;return !pasteFails;}
         public boolean deleteSurroundingText(int b,int a){deletes++;return true;}
         public CharSequence getTextBeforeCursor(int n,int f){return "before";}public CharSequence getTextAfterCursor(int n,int f){return "after";}
@@ -293,10 +346,10 @@ public class VoiceServiceHarness {
         String older=session(1),newer=session(2);voicePendingQueue.holdForReceipt(older);voicePendingQueue.holdForReceipt(newer);wtiResponse(new JSONObject().put("text","second"),Mode.APPEND,2);completeReservedUtteranceWithoutText(1);barrier();files(older,true);files(newer,true);assertEquals(Arrays.asList("second"),connection.inserted);
     }
     @Test public void allModeSilenceAvoidsInsertionAndReplaceDeletion()throws Exception {
-        for(Mode mode:Mode.values()) {int gen=mode.ordinal()+1;String id=session(gen);voicePendingQueue.holdForReceipt(id);wtiResponse(new JSONObject().put("text","<sil>"),mode,gen);barrier();files(id,true);assertEquals("沒有錄到聲音",status);}assertTrue(clipboard.values.isEmpty());assertTrue(connection.inserted.isEmpty());assertEquals(0,connection.deletes);
+        for(Mode mode:Mode.values()) {int gen=mode.ordinal()+1;String id=session(gen);voicePendingQueue.holdForReceipt(id);wtiResponse(new JSONObject().put("text",""),mode,gen);barrier();files(id,true);assertEquals("沒有錄到聲音",status);}assertTrue(clipboard.values.isEmpty());assertTrue(connection.inserted.isEmpty());assertEquals(0,connection.deletes);
     }
     @Test public void wsSilenceWaitsForCustodyReceiptWithoutTextFallback()throws Exception {
-        String id=session(1);voicePendingQueue.holdForReceipt(id);wsFinal(new JSONObject().put("text","<sil>"),1);barrier();files(id,true);assertTrue(httpClient.callbacks.isEmpty());assertTrue(clipboard.values.isEmpty());receiveAudioReceipt(id,identity(id));barrier();files(id,false);assertEquals("沒有錄到聲音",status);assertEquals(0,httpClient.calls.get());
+        String id=session(1);voicePendingQueue.holdForReceipt(id);wsFinal(new JSONObject().put("text",""),1);barrier();files(id,true);assertTrue(httpClient.callbacks.isEmpty());assertTrue(clipboard.values.isEmpty());receiveAudioReceipt(id,identity(id));barrier();files(id,false);assertEquals("沒有錄到聲音",status);assertEquals(0,httpClient.calls.get());
     }
 
     @Test public void wsDigitalSilenceSettlesTextButPreservesCustody()throws Exception {
@@ -369,19 +422,19 @@ public class VoiceServiceHarness {
     }
 
     @Test public void httpTextSilenceDoesNotAuthorizeDeletionOrInsert()throws Exception {
-        String id=session(1);sendFullAudioHttpFallback(1,new byte[]{1,2},new byte[]{1,2});assertEquals(1,httpClient.callbacks.size());httpClient.callbacks.get(0).onResponse(new Call(httpClient),new Response(200,"{\"text\":\"<sil>\"}"));barrier();files(id,true);assertEquals("沒有錄到聲音",status);assertEquals(0,offlineCalls);assertTrue(clipboard.values.isEmpty());assertTrue(clipboardHelper.history.isEmpty());assertTrue(connection.inserted.isEmpty());assertEquals(0,notifications);
+        String id=session(1);sendFullAudioHttpFallback(1,new byte[]{1,2},new byte[]{1,2});assertEquals(1,httpClient.callbacks.size());httpClient.callbacks.get(0).onResponse(new Call(httpClient),new Response(200,"{\"text\":\"\"}"));barrier();files(id,true);assertEquals("沒有錄到聲音",status);assertEquals(0,offlineCalls);assertTrue(clipboard.values.isEmpty());assertTrue(clipboardHelper.history.isEmpty());assertTrue(connection.inserted.isEmpty());assertEquals(0,notifications);
     }
     @Test public void aiSuccessAndFailureKeepTheCorrectAudio()throws Exception {
         String success=session(1);handleAiCommandResponse(new Response(200,"{\"text\":\"answer\"}"),1,1);barrier();files(success,true);
         String failure=session(2);clipboard.fail=true;connection.fail=true;connection.pasteFails=true;handleAiCommandResponse(new Response(200,"{\"text\":\"answer\"}"),1,2);barrier();files(failure,true);
     }
     @Test public void aiSilenceDoesNotInsertOrWriteHistory()throws Exception {
-        String id=session(1);handleAiCommandResponse(new Response(200,"{\"text\":\"<sil>\"}"),1,1);barrier();files(id,true);
+        String id=session(1);handleAiCommandResponse(new Response(200,"{\"text\":\"\"}"),1,1);barrier();files(id,true);
         assertTrue(httpClient.callbacks.isEmpty());files(id,true);assertTrue(clipboard.values.isEmpty());assertTrue(connection.inserted.isEmpty());assertTrue(clipboardHelper.history.isEmpty());assertEquals(0,notifications);
     }
-    @Test public void finalInsertionNeverContainsSilenceToken()throws Exception {
+    @Test public void finalInsertionPreservesLiteralControlTokens()throws Exception {
         commitFinalText("<sil>");commitFinalText("real words <sIl> continue");
-        assertEquals(Arrays.asList("real words  continue"),connection.inserted);assertEquals(Arrays.asList("real words  continue"),clipboard.values);
+        assertEquals(Arrays.asList("<sil>","real words <sIl> continue"),connection.inserted);assertEquals(Arrays.asList("<sil>","real words <sIl> continue"),clipboard.values);
     }
     @Test public void protectedSessionLateModesNeverReachClipboard()throws Exception {
         String id=session(1);sendFullAudioHttpFallback(1,new byte[]{1,2},new byte[]{1,2});finalizeStreamingSession(new byte[]{1,2},1);waitFor(()->streamingUpload.callback!=null);discardedVoiceGenerations.add(1);discardedProtectedSessions.add(id);voicePendingQueue.discard(id);
@@ -393,7 +446,7 @@ public class VoiceServiceHarness {
         files(id,false);assertEquals(1,httpClient.calls.get());assertEquals(1,notifications);assertEquals(Arrays.asList("queued words"),clipboardHelper.history);assertEquals("automatic recovery updates primary clipboard once",clipboardHelper.history,clipboard.values);
     }
     @Test public void queuedSilenceOnlyShowsStatus()throws Exception {
-        String id=session(1);pendingSessionByGeneration.remove(1);httpClient.code=200;httpClient.raw="{\"text\":\"[ SIL ]\"}";
+        String id=session(1);pendingSessionByGeneration.remove(1);httpClient.code=200;httpClient.raw="{\"text\":\"\"}";
         drainPendingVoiceQueue();waitFor(()->!pendingDrainRunning.get());barrier();files(id,false);assertEquals("沒有錄到聲音",status);assertTrue(clipboard.values.isEmpty());assertTrue(clipboardHelper.history.isEmpty());assertEquals(0,notifications);
     }
     @Test public void imeReentrySharesTheSameDiskQueue()throws Exception {
@@ -440,8 +493,8 @@ public class VoiceServiceHarness {
         }
     }
     @Test public void silenceStatusExpiresWithoutClearingNewerStatus()throws Exception {
-        commitFinalText("<sil>");assertEquals("沒有錄到聲音",status);Runnable expiry=mainHandler.delayed.get(mainHandler.delayed.size()-1);expiry.run();assertEquals("就緒",status);
-        commitFinalText("<sil>");expiry=mainHandler.delayed.get(mainHandler.delayed.size()-1);updateStatus("new recording");expiry.run();assertEquals("new recording",status);
+        commitFinalText("");assertEquals("沒有錄到聲音",status);Runnable expiry=mainHandler.delayed.get(mainHandler.delayed.size()-1);expiry.run();assertEquals("就緒",status);
+        commitFinalText("");expiry=mainHandler.delayed.get(mainHandler.delayed.size()-1);updateStatus("new recording");expiry.run();assertEquals("new recording",status);
     }
 
     @Test public void successfulInsertionCompletesDespiteClipboardFailure()throws Exception {
@@ -681,7 +734,7 @@ public class VoiceServiceHarness {
         assertTrue(voicePendingQueue.pcmFile(id).length()>19_200_000);
     }
     @Test public void queuedShortHallucinationNeverWritesClipboardOrNotifies()throws Exception {
-        String id=session(1);pendingSessionByGeneration.clear();httpClient.code=200;httpClient.raw="{\"text\":\"<hallucination>\"}";
+        String id=session(1);pendingSessionByGeneration.clear();httpClient.code=200;httpClient.raw="{\"text\":\"\"}";
         drainPendingVoiceQueue();waitFor(()->!pendingDrainRunning.get());barrier();files(id,false);assertEquals("沒有錄到聲音",status);
         assertTrue(clipboard.values.isEmpty());assertEquals(0,notifications);
     }
@@ -765,7 +818,7 @@ public class VoiceServiceHarness {
         for(String id:ids)files(id,false);assertEquals(3,httpClient.calls.get());assertTrue(connection.inserted.isEmpty());
     }
     @Test public void fullFileSilenceTextCannotEndCustodyRetries()throws Exception {
-        for(String marker:new String[]{"[BLANK_AUDIO]","[no_speech]","<hallucination>","<|nospeech|>"}) {
+        for(String marker:new String[]{""," ","　","\t\n"}) {
             int gen=nextGenToCommit;String id=session(gen);wtiResponse(new JSONObject().put("text",marker),Mode.APPEND,gen);barrier();files(id,true);
             assertEquals("沒有錄到聲音",status);
         }
@@ -806,15 +859,15 @@ public class VoiceServiceHarness {
     }
     @Test public void legacyCustodyMissingTextShowsVisibleAutomaticRetryNotice()throws Exception {
         String id=voicePendingQueue.begin();voicePendingQueue.append(id,new byte[]{10,0},2);voicePendingQueue.markPending(id,"legacy");JSONObject original=identity(id);
-        voicePendingQueue.persistResult(id,"[BLANK_AUDIO]");assertTrue(voicePendingQueue.acceptReceipt(id,original));voicePendingQueue.markPending(id,"legacy_marker");pendingSessionByGeneration.clear();
-        httpClient.code=200;httpClient.raw=new JSONObject().put("text","[BLANK_AUDIO]").put("receipt",original).toString();
+        voicePendingQueue.persistResult(id,"");assertTrue(voicePendingQueue.acceptReceipt(id,original));voicePendingQueue.markPending(id,"legacy_marker");pendingSessionByGeneration.clear();
+        httpClient.code=200;httpClient.raw=new JSONObject().put("text","").put("receipt",original).toString();
         drainPendingVoiceQueue();waitFor(()->!pendingDrainRunning.get());barrier();
         assertEquals(Arrays.asList("尚未取得辨識文字；原音已保留，會自動重試"),pendingNotices);assertTrue(voicePendingQueue.pendingOldestFirst().contains(id));assertFalse(voicePendingQueue.delivered(id));assertTrue(clipboard.values.isEmpty());
     }
 
     @Test public void blankMarkersKeepAudioInAllModes()throws Exception {
         for(Mode mode:new Mode[]{Mode.REPLACE,Mode.SPELL,Mode.TRANSLATE}) {
-            int gen=mode.ordinal();String id=session(gen);wtiResponse(new JSONObject().put("text","[BLANK_AUDIO]"),mode,gen);barrier();files(id,true);assertEquals("沒有錄到聲音",status);
+            int gen=mode.ordinal();String id=session(gen);wtiResponse(new JSONObject().put("text",""),mode,gen);barrier();files(id,true);assertEquals("沒有錄到聲音",status);
         }
         assertTrue(clipboard.values.isEmpty());assertEquals(0,connection.deletes);
     }

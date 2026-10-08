@@ -313,7 +313,7 @@ final class VoicePendingQueue {
             if(discarded.contains(id))return null;
             JSONObject m=metadata.get(id);if(m==null)throw new IOException("missing session metadata");
             if(m.optBoolean("delivered")||m.optBoolean("clipboard_written"))return null;
-            m.put("result_text",VoiceResultText.clean(text)).put("append_result",append);
+            m.put("result_text",text==null?"":text).put("append_result",append);
             if(!m.has("delivered"))m.put("delivered",false);
             if(!m.has("clipboard_written"))m.put("clipboard_written",false);
             writeMeta(id,m);publish(id);return null;
@@ -353,7 +353,7 @@ final class VoicePendingQueue {
         });
     }
     private void requireTranscriptOrDigitalSilence(String id,String text,boolean append)throws IOException {
-        if(!VoiceResultText.isSilence(text)&&!VoiceResultText.isNonSpeech(text,append,-1))return;
+        if(!VoiceResultText.isEmptyFinal(text))return;
         boolean verified=runIO(() -> {
             JSONObject m=metadata.get(id);if(m==null)return false;
             if(!capturing.contains(id)&&!backupFailures.contains(id)&&m.optBoolean("digital_silence_verified")
@@ -442,7 +442,7 @@ final class VoicePendingQueue {
             boolean archived=!parentCorrectionOwed&&claim.has("audio_receipt")&&acceptReceipt(id,claim.getJSONObject("audio_receipt"));
             String text=claim.has("result_text")?claim.getString("result_text"):null;
             boolean missingText=!claim.optBoolean("delivered")&&!claim.optBoolean("clipboard_written")
-                    &&(text==null||VoiceResultText.clean(text).isEmpty()||VoiceResultText.isNonSpeech(text,claim.optBoolean("append_result",true),-1)) && !claim.has("chunk_transcript");
+                    &&VoiceResultText.isEmptyFinal(text) && !claim.has("chunk_transcript");
             if(!archived||claim.optBoolean("server_transcript_pending")||missingText) {
                 if(archived&&missingText)runIO(() -> {JSONObject m=metadata.get(id);m.put("server_transcript_pending",true);writeMeta(id,m);return null;});
                 boolean chunked = !archived && (pcm(id).length() > CHUNK_BYTES || claim.has("chunk_limit") || claim.has("chunk_receipts"));
@@ -450,7 +450,7 @@ final class VoicePendingQueue {
                 if (chunked) raw = uploadChunks(id, uploader, observer, CHUNK_BYTES);
                 else {
                     try {
-                        if(claim.optBoolean("opus_final_corrected") && text!=null && !VoiceResultText.clean(text).isEmpty())
+                        if(claim.optBoolean("opus_final_corrected") && text!=null && !VoiceResultText.isEmptyFinal(text))
                             raw=new JSONObject(uploader.archiveChunk(pcm(id),id,sampleRate)).put("text",text).put("ai_corrected",true).toString();
                         else raw = uploader.transcribe(pcm(id),id,sampleRate);
                     }
@@ -465,15 +465,15 @@ final class VoicePendingQueue {
                 String archiveText=parseSuccessfulResponse(raw);
                 if(discarded.contains(id))return;
                 if(!claim.optBoolean("delivered")&&!claim.optBoolean("clipboard_written")
-                        &&(text==null||VoiceResultText.isNonSpeech(text,claim.optBoolean("append_result",true),-1)||VoiceResultText.isSilence(text)))
+                        &&VoiceResultText.isEmptyFinal(text))
                     requireTranscriptOrDigitalSilence(id,archiveText,claim.optBoolean("append_result",true));
                 if((claim.optBoolean("delivered")||claim.optBoolean("clipboard_written"))
-                        &&VoiceResultText.clean(archiveText).length()>VoiceResultText.clean(text).length()
-                        &&!VoiceResultText.isNonSpeech(archiveText,claim.optBoolean("append_result",true),-1)) {
-                    runIO(() -> {JSONObject m=metadata.get(id);m.put("archive_history_text",VoiceResultText.clean(archiveText)).put("archive_history_written",false);writeMeta(id,m);return null;});
-                    claim.put("archive_history_text",VoiceResultText.clean(archiveText)).put("archive_history_written",false);
+                        &&archiveText.length()>(text==null?"":text).length()
+                        &&!VoiceResultText.isEmptyFinal(archiveText)) {
+                    runIO(() -> {JSONObject m=metadata.get(id);m.put("archive_history_text",archiveText).put("archive_history_written",false);writeMeta(id,m);return null;});
+                    claim.put("archive_history_text",archiveText).put("archive_history_written",false);
                 }
-                if(chunked && !claim.optBoolean("delivered") && !claim.optBoolean("clipboard_written") || text==null||VoiceResultText.isSilence(text)||VoiceResultText.isNonSpeech(text,claim.optBoolean("append_result",true),-1)) {text=archiveText;persistResult(id,text);}
+                if(chunked && !claim.optBoolean("delivered") && !claim.optBoolean("clipboard_written") || VoiceResultText.isEmptyFinal(text)) {text=archiveText;persistResult(id,text);}
                 if(!chunked && !acceptReceipt(id,response.optJSONObject("receipt")))throw new IOException("audio receipt missing or mismatched");
                 runIO(() -> {JSONObject m=metadata.get(id);if(m!=null){m.put("server_transcript_pending",false);writeMeta(id,m);}return null;});
             }
@@ -484,12 +484,12 @@ final class VoicePendingQueue {
             }
             if(claim.optBoolean("delivered")||claim.optBoolean("clipboard_written"))return;
             if(text==null)throw new IOException("missing archived text");
-            if(VoiceResultText.isSilence(text)||VoiceResultText.isNonSpeech(text,claim.optBoolean("append_result",true),-1)) {
+            if(VoiceResultText.isEmptyFinal(text)) {
                 requireTranscriptOrDigitalSilence(id,text,claim.optBoolean("append_result",true));
                 acknowledgeDelivery(id,false);
                 if(observer!=null)observer.event("silence",id,0,0,attempts(id),"");return;
             }
-            delivery.deliver(VoiceResultText.clean(text),String.valueOf(claim.optLong("started_at")));
+            delivery.deliver(text,String.valueOf(claim.optLong("started_at")));
             acknowledgeDelivery(id,true);
         } catch(Exception e) {
             String reason=e.getClass().getSimpleName()+": "+String.valueOf(e.getMessage());
@@ -569,10 +569,16 @@ final class VoicePendingQueue {
             if (!scratch.delete()) throw new IOException("upload copy deletion failed");
             offset += size;
         }
-        boolean correctedOpus=state.optBoolean("opus_final_corrected") && !VoiceResultText.clean(state.optString("result_text")).isEmpty();
-        String parentResponse=correctedOpus?uploader.archiveParent(parentIdentity,chunks,sampleRate):uploader.finalizeParent(parentIdentity,chunks,sampleRate);
+        // A saved final already owns its text. Legacy child concatenation explicitly
+        // carries chunk_transcript and still needs whole-utterance finalization.
+        boolean savedFinal=!state.has("chunk_transcript") && !VoiceResultText.isEmptyFinal(state.optString("result_text"));
+        String parentResponse=savedFinal?uploader.archiveParent(parentIdentity,chunks,sampleRate):uploader.finalizeParent(parentIdentity,chunks,sampleRate);
         JSONObject response=new JSONObject(parentResponse);
-        if(correctedOpus) {response.put("text",state.getString("result_text")).put("ai_corrected",true);parentResponse=response.toString();}
+        if(savedFinal) {
+            response.put("text",state.getString("result_text"));
+            if(state.optBoolean("opus_final_corrected"))response.put("ai_corrected",true);
+            parentResponse=response.toString();
+        }
         String fullText=parseSuccessfulResponse(parentResponse);
         requireTranscriptOrDigitalSilence(id,fullText,state.optBoolean("append_result",true));
         JSONObject receipt=response.optJSONObject("receipt");

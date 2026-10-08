@@ -16,6 +16,9 @@ import org.json.*;
  * All network fixtures are guest loopback; no production endpoints. */
 public class VoicePhone671AndroidTest extends VoiceGuardsAndroidTest {
     long lastMicTap;
+    SimonIMEService actualImeService;
+    volatile String authoritativeFinalFixture;
+    volatile boolean malformedFinalFixture;
     final JSONArray micCoordinateAudit=new JSONArray();
     @Override void tap(String id)throws Exception {
         if(id.endsWith("btnMic")) {
@@ -49,6 +52,7 @@ public class VoicePhone671AndroidTest extends VoiceGuardsAndroidTest {
                 if(!(context instanceof SimonIMEService))continue;mic=candidate;owner=(SimonIMEService)context;matches++;
             }
             if(matches!=1)throw new IllegalStateException("Expected exactly one shown, attached IME microphone: "+matches);
+            actualImeService=owner;
             int[] screen=new int[2];mic.getLocationOnScreen(screen);android.graphics.Rect visible=new android.graphics.Rect();
             if(!mic.getLocalVisibleRect(visible)||visible.isEmpty())throw new IllegalStateException("Current microphone has no visible tap area");
             android.graphics.Rect physical=new android.graphics.Rect(screen[0]+visible.left,screen[1]+visible.top,screen[0]+visible.right,screen[1]+visible.bottom);
@@ -155,7 +159,7 @@ public class VoicePhone671AndroidTest extends VoiceGuardsAndroidTest {
                         return;
                     }
                     if(normalFinalReady!=null){normalFinalReady.countDown();assertTrue(normalFinalRelease.await(10,TimeUnit.SECONDS));}
-                    if(!((omitFirst||closeFirst)&&seq==1))sendFrame(output,new JSONObject().put("type","final").put("text",emptyFirst&&seq==1?"":"段"+seq));
+                    if(!((omitFirst||closeFirst)&&seq==1))sendFrame(output,new JSONObject().put("type","final").put("text",malformedFinalFixture?new JSONObject().put("bad","object"):authoritativeFinalFixture!=null?authoritativeFinalFixture:emptyFirst&&seq==1?"":"段"+seq));
                     sendFrame(output,new JSONObject(receipt.toString()).put("type","receipt"));
                     if(closeFirst&&seq==1) {
                         synchronized(output){output.write(new byte[]{(byte)0x88,2,3,(byte)0xe8});output.flush();}
@@ -257,9 +261,16 @@ public class VoicePhone671AndroidTest extends VoiceGuardsAndroidTest {
         while(SystemClock.elapsedRealtime()<until&&!"🎤".contentEquals(await("com.simon.voiceime:id/btnMic").getText()))Thread.sleep(50);
         assertEquals("recording finished before next public tap","🎤",await("com.simon.voiceime:id/btnMic").getText().toString());
     }
+    final JSONArray editorNodeAudit=new JSONArray();
     String editor()throws Exception{
         for(android.view.accessibility.AccessibilityWindowInfo w:ui.getWindows()){
-            AccessibilityNodeInfo n=editable(w.getRoot());if(n!=null)return String.valueOf(n.getText());
+            AccessibilityNodeInfo n=editable(w.getRoot());if(n!=null){
+                boolean hint=n.isShowingHintText();String raw=n.getText()==null?"":n.getText().toString();
+                String value=hint?"":raw;
+                if(editorNodeAudit.length()<64)editorNodeAudit.put(new JSONObject().put("showing_hint_text",hint).put("accessibility_text",raw).put("editor_value",value).put("resource_id",n.getViewIdResourceName()));
+                save("editor-node-readback",new JSONObject().put("events",editorNodeAudit));
+                return value;
+            }
         }return "";
     }
     AccessibilityNodeInfo textNode(AccessibilityNodeInfo n,String text) {
@@ -294,6 +305,48 @@ public class VoicePhone671AndroidTest extends VoiceGuardsAndroidTest {
         save(scenario,new JSONObject().put("verdict","PASS").put("pid",android.os.Process.myPid()).put("editor",editor()).put("protocol",new JSONArray(protocol))
             .put("http_audit",new JSONArray(httpAudit)).put("recovered",new JSONArray(recovered)).put("peaks",new JSONArray(peaks)).put("sessions",new JSONObject(sessions)).put("custody",custodyEvidence));
     }
+    public void testAuthoritativeFinalLiteralWhitespaceAndProtectedTrace()throws Exception {
+        startVoice();String expected="";
+        for(String text:new String[]{"請保留 <sil> 這個字串，供工程日誌比對。","<hallucination>","　 前後空白與 [BLANK_AUDIO] 　"}){
+            authoritativeFinalFixture=text;record(1600);expected+=text;waitEditor(expected,10000);
+            android.content.ClipboardManager cm=(android.content.ClipboardManager)getInstrumentation().getTargetContext().getSystemService(Context.CLIPBOARD_SERVICE);assertEquals(text,cm.getPrimaryClip().getItemAt(0).getText().toString());
+        }
+        assertNotNull(actualImeService);String probe=UUID.randomUUID().toString();final Exception[] error={null};
+        getInstrumentation().runOnMainSync(()->{try{
+            java.lang.reflect.Field field=SimonIMEService.class.getDeclaredField("protectedInputField");field.setAccessible(true);boolean before=field.getBoolean(actualImeService);
+            try{field.setBoolean(actualImeService,true);java.lang.reflect.Method m=SimonIMEService.class.getDeclaredMethod("recordVoiceStage",String.class,int.class,String.class,String.class);m.setAccessible(true);m.invoke(actualImeService,"stop",1,probe,null);}finally{field.setBoolean(actualImeService,before);}
+        }catch(Exception e){error[0]=e;}});if(error[0]!=null)throw error[0];
+        java.lang.reflect.Field telemetry=SimonIMEService.class.getDeclaredField("imeTelemetry");telemetry.setAccessible(true);Object carrier=telemetry.get(actualImeService);java.lang.reflect.Field handler=ImeTelemetry.class.getDeclaredField("handler");handler.setAccessible(true);CountDownLatch flushed=new CountDownLatch(1);assertTrue(((Handler)handler.get(carrier)).post(flushed::countDown));assertTrue(flushed.await(5,TimeUnit.SECONDS));
+        String spool=new String(java.nio.file.Files.readAllBytes(new File(getInstrumentation().getTargetContext().getFilesDir(),"ime-diagnostics.jsonl").toPath()),StandardCharsets.UTF_8);assertFalse("protected helper emits no event",spool.contains(probe));
+        Set<String> stages=new HashSet<>();for(String line:spool.split("\n")){if(line.isEmpty())continue;JSONObject e=new JSONObject(line);if("voice_stage".equals(e.optString("phase"))&&lastRecordedId.equals(e.optString("client_session_id"))){stages.add(e.getString("stage"));assertTrue(e.getLong("elapsed_ms")>=e.getLong("uptime_ms"));assertTrue(e.getLong("dropped_events")>=0);assertFalse(e.has("text"));assertFalse(e.has("package"));}}
+        assertTrue(stages.containsAll(Arrays.asList("stop","ws_main_post","ws_main_run","admit","release","io_begin","io_end","io_main_post","io_main_run","commit")));receipt("authoritative-final-literal-whitespace-protected-trace");
+    }
+    public void testMalformedFinalWithMatchingCustodyNeverInventsAppText()throws Exception {
+        malformedFinalFixture=true;startVoice();String before=editor();record(1600);String id=lastRecordedId;long until=SystemClock.elapsedRealtime()+10000;
+        VoicePendingQueue q=VoicePendingQueue.getInstance(getInstrumentation().getTargetContext().getFilesDir(),16000);while((!receipts.containsKey(id)||!q.receiptConfirmed(id))&&SystemClock.elapsedRealtime()<until)Thread.sleep(100);
+        assertEquals(before,editor());assertNotNull("fixture keeps actual matching server audio receipt",receipts.get(id));assertTrue("audio retains local file or accepted server custody",q.pcmFile(id).exists()||q.receiptConfirmed(id));
+        save("malformed-final-custody",new JSONObject().put("editor",editor()).put("local_audio_retained",q.pcmFile(id).exists()).put("server_custody_accepted",q.receiptConfirmed(id)).put("matching_receipt",receipts.get(id)));assertProtocol();
+    }
+    public void testDurableAuthoritativeOutboxReplayAndEditorPaste()throws Exception {
+        startVoice();String expected="　 請保留 <sil> 與 <hallucination> 原文 　";Context c=getInstrumentation().getTargetContext();VoicePendingQueue q=VoicePendingQueue.getInstance(c.getFilesDir(),16000);
+        String id=q.begin();byte[] pcm=new byte[]{10,0,20,0};q.append(id,pcm,pcm.length);q.markPending(id,"fixture");q.persistResult(id,expected);JSONObject custody=custody(id,pcm);assertTrue(q.acceptReceipt(id,custody));q.markPending(id,"fixture_replay");
+        android.content.ClipboardManager cm=(android.content.ClipboardManager)c.getSystemService(Context.CLIPBOARD_SERVICE);String before=editor();q.uploadOne(id,(file,sid,rate)->{throw new AssertionError("saved final cannot be re-recognized");},(text,time)->{cm.setPrimaryClip(ClipData.newPlainText("fixture",text));new ClipboardHelper(c).addToHistory(text);},null);
+        assertEquals(expected,cm.getPrimaryClip().getItemAt(0).getText().toString());assertEquals("outbox clipboard is not automatic App ACK",before,editor());shell("input keyevent 279");waitEditor(before+expected,10000);
+        save("authoritative-outbox-editor-paste",new JSONObject().put("editor",editor()).put("clipboard",cm.getPrimaryClip().getItemAt(0).getText().toString()).put("queue_delivered",q.delivered(id)).put("delivery_seam","public queue replay to clipboard, Android paste to actual editor"));
+    }
+
+    public void testChunkCustodyPreservesSavedFinalAndEditorPaste()throws Exception {
+        startVoice();String expected="　 完整最終文字 <sil>，時間確實有節省到。 　";Context c=getInstrumentation().getTargetContext();VoicePendingQueue q=VoicePendingQueue.getInstance(c.getFilesDir(),16000);
+        String id=q.begin();byte[] pcm=new byte[(int)VoicePendingQueue.CHUNK_BYTES+8];pcm[0]=10;q.append(id,pcm,pcm.length);q.markPending(id,"fixture");q.persistResult(id,expected);JSONObject original=custody(id,pcm);AtomicInteger parents=new AtomicInteger();
+        android.content.ClipboardManager cm=(android.content.ClipboardManager)c.getSystemService(Context.CLIPBOARD_SERVICE);String before=editor();q.uploadOne(id,new VoicePendingQueue.Uploader(){
+            public String transcribe(File file,String sid,int rate)throws Exception{return new JSONObject().put("receipt",custody(sid,java.nio.file.Files.readAllBytes(file.toPath()))).toString();}
+            public String finalizeParent(JSONObject identity,JSONArray children,int rate)throws Exception{fail("saved final must not be replaced by another recognition");return null;}
+            public String archiveParent(JSONObject identity,JSONArray children,int rate)throws Exception{parents.incrementAndGet();assertEquals(2,children.length());return new JSONObject().put("receipt",original).toString();}
+        },(text,time)->cm.setPrimaryClip(ClipData.newPlainText("fixture",text)),null);
+        assertEquals(1,parents.get());assertTrue(q.receiptConfirmed(id));assertEquals(expected,cm.getPrimaryClip().getItemAt(0).getText().toString());assertEquals(before,editor());shell("input keyevent 279");waitEditor(before+expected,10000);
+        save("chunk-custody-authoritative-editor-paste",new JSONObject().put("editor",editor()).put("clipboard",cm.getPrimaryClip().getItemAt(0).getText().toString()).put("parent_custody_calls",parents.get()).put("server_custody_accepted",q.receiptConfirmed(id)));
+    }
+
     public void testDelayedNormalFinalThenNewClipboardIsNotReplayed()throws Exception {
         normalFinalReady=new CountDownLatch(1);normalFinalRelease=new CountDownLatch(1);startVoice();record(1600);assertTrue(normalFinalReady.await(5,TimeUnit.SECONDS));
         getInstrumentation().runOnMainSync(()->{normalFinalRelease.countDown();SystemClock.sleep(1200);});waitEditor("段1",10000);

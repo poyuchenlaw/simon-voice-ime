@@ -41,6 +41,8 @@ final class ImeTelemetry {
     private final String session = UUID.randomUUID().toString();
     private final HandlerThread thread = new HandlerThread("IME-Diagnostics");
     private Handler handler;
+    // Counts observable local enqueue failures; disk eviction/failure remains outside this counter.
+    private final java.util.concurrent.atomic.AtomicLong droppedEvents=new java.util.concurrent.atomic.AtomicLong();
     private final Transport transport;
     private volatile String lastResult = "尚未上傳";
     private volatile long lastUploadMs;
@@ -70,9 +72,10 @@ final class ImeTelemetry {
         if(!context.getSharedPreferences("simon_ime_prefs",Context.MODE_PRIVATE).getBoolean("ime_auto_upload",true))return;
         try {
             if("bopomofo".equals(page)&&!"error".equals(type)&&!"legacy_zhuyin".equals(context.getSharedPreferences("simon_ime_prefs",Context.MODE_PRIVATE).getString("layout_mode","text_word_char")))fields=textOnlyMetadata(fields);
+            if("voice".equals(type)&&fields!=null&&"voice_stage".equals(fields.optString("phase")))fields.put("dropped_events",droppedEvents.get());
             JSONObject event=makeEvent(System.currentTimeMillis(),session,appVersion,type,page,fields,protectedField);
-            Handler target=handler;if(target!=null)target.post(()->enqueue(event));
-        }catch(Exception e){Log.w("ImeTelemetry","event dropped",e);}
+            Handler target=handler;if(target==null||!target.post(()->enqueue(event)))droppedEvents.incrementAndGet();
+        }catch(Exception e){droppedEvents.incrementAndGet();Log.w("ImeTelemetry","event dropped",e);}
     }
     private void recordUrgent(String type,String page,JSONObject fields){
         try{JSONObject event=makeEvent(System.currentTimeMillis(),session,appVersion,type,page,fields,false);enqueue(event);}catch(Exception e){Log.w("ImeTelemetry","urgent event could not be stored",e);}
