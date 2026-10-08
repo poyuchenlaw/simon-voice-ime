@@ -10,8 +10,11 @@ import static org.junit.Assert.*;
 
 public class VoiceServiceHarness {
     // Editor selection ownership is exercised by the Android consumer, not this audio seam.
+    static class CursorTapGuard {void reset(){}}
+    final CursorTapGuard cursorTapGuard=new CursorTapGuard();
     long selectionRevision;
     void clearExternalSelection(){}
+    void invalidateExternalCandidates(){selectionRevision++;clearExternalSelection();}
     @Test public void voiceStageTraceLinksDeliveryWithoutContent() throws Exception {
         String id=session(1);voicePendingQueue.holdForReceipt(id);
         wsFinal(new JSONObject().put("text","正確文字"),1);barrier();

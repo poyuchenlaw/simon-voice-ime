@@ -3,6 +3,9 @@ import java.util.*;
 import java.io.*;
 import java.nio.charset.StandardCharsets;
 final class ZhuyinWordIndex {
+ int[] cursorWordRange(String text,int cursor){return null;}
+ List<Entry> cursorWordCandidates(String text){return Collections.emptyList();}
+ List<Entry> cursorCharacterCandidates(String text){return Collections.emptyList();}
  List<Entry> selectionCandidates(String text){return Collections.emptyList();}
  static final class Entry { final String key,word,pronunciation; final long frequency; final boolean personal; Entry(String w,String p){this("",w,p,0,false);} Entry(String k,String w,String p,long f,boolean x){key=k;word=w;pronunciation=p;frequency=f;personal=x;} }
  private final List<Entry> entries;

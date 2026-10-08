@@ -806,7 +806,9 @@ public class SimonIMEService extends InputMethodService {
     @Override
     public void onStartInput(EditorInfo attribute, boolean restarting) {
         super.onStartInput(attribute, restarting);
-        selectionRevision++;clearExternalSelection();
+        cursorTapGuard.reset();invalidateExternalCandidates();
+        selectionStart=attribute.initialSelStart;selectionEnd=attribute.initialSelEnd;
+        cursorTapGuard.observe(selectionStart,selectionEnd,-1,-1);
         boolean wasProtected=protectedInputField;
         protectedInputField = isProtectedInputField(attribute);
         clearRankingContext();
@@ -857,6 +859,9 @@ public class SimonIMEService extends InputMethodService {
     @Override
     public View onCreateInputView() {
         rootView = LayoutInflater.from(this).inflate(R.layout.keyboard_view, null);
+        ((KeyboardInputLayout)rootView).beforeTouch=event->{
+            if((externalCandidatePending||externalConnection!=null)&&!touchInside(boWordCandidateScroll,event)&&!touchInside(boCandidateScroll,event))invalidateExternalCandidates();
+        };
 
         statusText = rootView.findViewById(R.id.statusText);
         previewText = rootView.findViewById(R.id.previewText);
@@ -5070,34 +5075,65 @@ public class SimonIMEService extends InputMethodService {
     private long externalField,externalRevision,selectionRevision;
     private int selectionStart=-1,selectionEnd=-1,externalOffset;
     private String externalText="";
-    private void clearExternalSelection(){externalConnection=null;externalTextChoices=Collections.emptyList();externalText="";}
+    private final CursorTapGuard cursorTapGuard=new CursorTapGuard();
+    private InputConnection cursorRawConnection,cursorTrackedConnection;
+    private boolean inCandidateReplacement,externalCandidatePending;
+    private void invalidateExternalCandidates(){selectionRevision++;clearExternalSelection();renderTextCandidateRows();}
+    private boolean touchInside(View view,MotionEvent event){
+        if(view==null||!view.isShown())return false;android.graphics.Rect bounds=new android.graphics.Rect();
+        int[] at=new int[2];view.getLocationOnScreen(at);bounds.set(at[0],at[1],at[0]+view.getWidth(),at[1]+view.getHeight());
+        return bounds.contains((int)event.getRawX(),(int)event.getRawY());
+    }
+    @Override public boolean onKeyDown(int code,android.view.KeyEvent event){if(externalCandidatePending||externalConnection!=null)invalidateExternalCandidates();return super.onKeyDown(code,event);}
+    @Override public InputConnection getCurrentInputConnection(){
+        InputConnection raw=super.getCurrentInputConnection();
+        if(raw==null||!textLayoutSelected()||currentKeyboardMode!=KeyboardMode.BOPOMOFO||protectedInputField)return raw;
+        if(raw!=cursorRawConnection){
+            cursorRawConnection=raw;cursorTapGuard.reset();cursorTapGuard.observe(selectionStart,selectionEnd,-1,-1);
+            cursorTrackedConnection=new android.view.inputmethod.InputConnectionWrapper(raw,false){
+                private void before(){if(!inCandidateReplacement&&(externalCandidatePending||externalConnection!=null))invalidateExternalCandidates();}
+                @Override public boolean commitText(CharSequence text,int position){before();cursorTapGuard.replace(text.length(),position,false);return super.commitText(text,position);}
+                @Override public boolean setComposingText(CharSequence text,int position){before();cursorTapGuard.replace(text.length(),position,true);return super.setComposingText(text,position);}
+                @Override public boolean setComposingRegion(int start,int end){before();cursorTapGuard.composingRegion(start,end);return super.setComposingRegion(start,end);}
+                @Override public boolean finishComposingText(){before();cursorTapGuard.finishComposition();return super.finishComposingText();}
+                @Override public boolean deleteSurroundingText(int left,int right){before();cursorTapGuard.delete(left,right);return super.deleteSurroundingText(left,right);}
+                @Override public boolean setSelection(int start,int end){before();cursorTapGuard.select(start,end);return super.setSelection(start,end);}
+            };
+        }
+        return cursorTrackedConnection;
+    }
+    private void clearExternalSelection(){externalCandidatePending=false;externalConnection=null;externalTextChoices=Collections.emptyList();externalText="";}
     private android.view.inputmethod.ExtractedText readExternalText(InputConnection connection){
         try{return connection.getExtractedText(new android.view.inputmethod.ExtractedTextRequest(),0);}
         catch(RuntimeException unavailable){return null;}
     }
     private boolean externalSelectionCurrent(){
         if(protectedInputField||externalConnection==null||externalConnection!=getCurrentInputConnection()
-                ||externalField!=fieldGeneration||externalRevision!=selectionRevision||selectionStart<0||selectionStart==selectionEnd)return false;
+                ||externalField!=fieldGeneration||externalRevision!=selectionRevision||selectionStart<0)return false;
         android.view.inputmethod.ExtractedText value=readExternalText(externalConnection);
         return value!=null&&value.text!=null&&value.startOffset==externalOffset
                 &&value.partialStartOffset<0&&value.partialEndOffset<0&&externalText.contentEquals(value.text)
                 &&Math.min(value.selectionStart,value.selectionEnd)+value.startOffset==selectionStart&&Math.max(value.selectionStart,value.selectionEnd)+value.startOffset==selectionEnd;
     }
-    private void updateExternalSelection(int start,int end){
+    private void updateExternalSelection(int start,int end,boolean tap){
         selectionRevision++;selectionStart=Math.min(start,end);selectionEnd=Math.max(start,end);clearExternalSelection();
-        if(!textLayoutSelected()||protectedInputField||zhuyinInput==null||!zhuyinInput.previewText().isEmpty()||start<0||end<0||start==end)return;
+        if(!textLayoutSelected()||protectedInputField||zhuyinInput==null||cursorTapGuard.selfUpdate()||!zhuyinInput.previewText().isEmpty()||start<0||end<0||start==end&&!tap)return;
         final long revision=selectionRevision,field=fieldGeneration;final InputConnection connection=getCurrentInputConnection();
         if(mainHandler==null||connection==null)return;
+        externalCandidatePending=true;
         mainHandler.postDelayed(()->{
+            if(revision!=selectionRevision)return;
+            externalCandidatePending=false;
             if(revision!=selectionRevision||field!=fieldGeneration||connection!=getCurrentInputConnection()||protectedInputField||!isInputViewShown()||!zhuyinInput.previewText().isEmpty())return;
             android.view.inputmethod.ExtractedText value=readExternalText(connection);
             if(value==null||value.text==null||value.partialStartOffset>=0||value.partialEndOffset>=0){
-                android.widget.Toast.makeText(this,"此輸入框未提供可讀取的選取文字",android.widget.Toast.LENGTH_SHORT).show();return;
+                if(!tap)android.widget.Toast.makeText(this,"此輸入框未提供可讀取的選取文字",android.widget.Toast.LENGTH_SHORT).show();return;
             }
             int left=selectionStart-value.startOffset,right=selectionEnd-value.startOffset;
-            if(left<0||right>value.text.length()||left>=right||Math.min(value.selectionStart,value.selectionEnd)+value.startOffset!=selectionStart||Math.max(value.selectionStart,value.selectionEnd)+value.startOffset!=selectionEnd)return;
+            if(left<0||right>value.text.length()||left>right||Math.min(value.selectionStart,value.selectionEnd)+value.startOffset!=selectionStart||Math.max(value.selectionStart,value.selectionEnd)+value.startOffset!=selectionEnd)return;
+            if(tap&&left==0)return;
             String selected=value.text.subSequence(left,right).toString();
-            List<ZhuyinInputController.TextChoice> choices=zhuyinInput.externalTextChoices(selected);
+            List<ZhuyinInputController.TextChoice> choices=tap?zhuyinInput.cursorTextChoices(value.text.toString(),left):zhuyinInput.externalTextChoices(selected);
             if(revision!=selectionRevision||field!=fieldGeneration||connection!=getCurrentInputConnection()||protectedInputField)return;
             externalConnection=connection;externalField=field;externalRevision=revision;externalOffset=value.startOffset;
             externalText=value.text.toString();externalTextChoices=choices;
@@ -5107,13 +5143,33 @@ public class SimonIMEService extends InputMethodService {
     }
     private void chooseExternalTextCandidate(ZhuyinInputController.TextChoice choice){
         if(!externalTextChoices.contains(choice)||!externalSelectionCurrent()){clearExternalSelection();renderTextCandidateRows();return;}
-        InputConnection connection=externalConnection;
-        connection.beginBatchEdit();
+        InputConnection connection=externalConnection;final String snapshot=externalText;final int offset=externalOffset;
+        final int originalStart=selectionStart,originalEnd=selectionEnd;
+        boolean restoreCaret=false;
+        inCandidateReplacement=true;
         try{
-            // Commit into the validated existing selection; never replay preview or reset its range.
+            connection.beginBatchEdit();
+            // Only a tap transaction selects its separate word/character target, after fresh validation.
+            if(originalStart==originalEnd){
+                int start=choice.start,end=choice.end;
+                if(start<0||end>snapshot.length()||start>=end||!choice.witness.equals(snapshot.substring(start,end)))return;
+                restoreCaret=true;
+                if(!connection.setSelection(offset+start,offset+end))return;
+                android.view.inputmethod.ExtractedText selected=readExternalText(connection);
+                if(selected==null||selected.text==null||selected.startOffset!=offset
+                        ||!snapshot.contentEquals(selected.text)||selected.selectionStart!=start||selected.selectionEnd!=end)return;
+            }
+            restoreCaret=false;
             connection.commitText(choice.label,1);
         }catch(RuntimeException unavailable){Log.w(TAG,"Selected text replacement unavailable: "+unavailable.getClass().getSimpleName());}
-        finally{connection.endBatchEdit();clearExternalSelection();renderTextCandidateRows();}
+        finally{
+            try{if(restoreCaret&&!connection.setSelection(originalStart,originalEnd))Log.w(TAG,"Selected text caret restoration rejected");}
+            catch(RuntimeException unavailable){Log.w(TAG,"Selected text caret restoration unavailable: "+unavailable.getClass().getSimpleName());}
+            finally{
+                try{connection.endBatchEdit();}
+                finally{inCandidateReplacement=false;invalidateExternalCandidates();}
+            }
+        }
     }
     private final List<TextView> textWordViewPool=new ArrayList<>(),textCharViewPool=new ArrayList<>();
     private void deferTextCandidateRows(){
@@ -5163,8 +5219,9 @@ public class SimonIMEService extends InputMethodService {
             localContext=LocalConversationContext.text(editor.packageName,SystemClock.elapsedRealtime());
         else LocalConversationContext.clear();
         final String hint=localContext;
+        boolean cursorChoices=externalConnection!=null&&selectionStart==selectionEnd;
         // Stable reorder only: no candidates introduced, no selected text changed, no network payload.
-        if(!protectedInputField&&zhuyinAssociationHistory!=null&&!focused){
+        if(!cursorChoices&&!protectedInputField&&zhuyinAssociationHistory!=null&&!focused){
             List<ZhuyinInputController.TextChoice> wordChoices=new ArrayList<>();
             for(ZhuyinInputController.TextChoice choice:textChoices)if("word".equals(choice.kind))wordChoices.add(choice);
             String before=rankingField==fieldGeneration?rankingBefore:"",after=rankingField==fieldGeneration?rankingAfter:"";
@@ -5172,7 +5229,7 @@ public class SimonIMEService extends InputMethodService {
                     "",before,after,hint);
             // Reuse original transactions; character order and selected native targets stay untouched.
             textChoices.removeIf(c->"word".equals(c.kind));textChoices.addAll(0,ranked);
-        }else if(!protectedInputField&&!focused&&!hint.isEmpty()){
+        }else if(!cursorChoices&&!protectedInputField&&!focused&&!hint.isEmpty()){
             List<ZhuyinInputController.TextChoice> wordChoices=new ArrayList<>();
             for(ZhuyinInputController.TextChoice choice:textChoices)if("word".equals(choice.kind))wordChoices.add(choice);
             wordChoices.sort(java.util.Comparator.comparing(c->!hint.contains(c.label)));
@@ -5181,6 +5238,12 @@ public class SimonIMEService extends InputMethodService {
         for(ZhuyinInputController.TextChoice choice:textChoices){
             if("char".equals(choice.kind))characters.add(pooledTextChoice(textCharViewPool,ci++,choice));
             else words.add(pooledTextChoice(textWordViewPool,wi++,choice));
+        }
+        if(cursorChoices&&zhuyinWordIndex!=null){
+            int[] target=zhuyinWordIndex.cursorWordRange(externalText,selectionStart-externalOffset);
+            if(target!=null&&zhuyinWordIndex.homophoneCandidates(externalText.substring(target[0],target[1]),false).isEmpty()){
+                TextView status=new TextView(this);status.setText("此詞無同音詞；以下為字首聯想");status.setEnabled(false);status.setTextColor(boStreamPreview.getCurrentTextColor());status.setGravity(Gravity.CENTER);status.setPadding(dp(12),0,dp(12),0);words.add(0,status);
+            }
         }
         if(externalConnection!=null&&textChoices.isEmpty()){
             TextView status=new TextView(this);status.setText("此詞暫無本機候選");status.setEnabled(false);status.setTextColor(boStreamPreview.getCurrentTextColor());status.setGravity(Gravity.CENTER);status.setPadding(dp(12),0,dp(12),0);words.add(status);
@@ -6257,7 +6320,11 @@ public class SimonIMEService extends InputMethodService {
             }
         }
         if(sentencePhone!=null)sentencePhone.selection(oldSelStart,oldSelEnd,newSelStart,newSelEnd,candidatesStart,candidatesEnd);
-        updateExternalSelection(newSelStart,newSelEnd);
+        boolean tap=cursorTapGuard.allow(oldSelStart,oldSelEnd,newSelStart,newSelEnd,
+                candidatesStart>=0||zhuyinInput!=null&&!zhuyinInput.previewText().isEmpty(),
+                protectedInputField||currentKeyboardMode!=KeyboardMode.BOPOMOFO||!textLayoutSelected());
+        cursorTapGuard.observe(newSelStart,newSelEnd,candidatesStart,candidatesEnd);
+        updateExternalSelection(newSelStart,newSelEnd,tap);
         if(textLayoutSelected()&&zhuyinInput!=null&&zhuyinInput.previewText().isEmpty())renderTextCandidateRows();
         deferRankingContext();
         if (touchShadow != null && newSelStart < oldSelStart) touchShadow.invalidate();
@@ -6329,7 +6396,7 @@ public class SimonIMEService extends InputMethodService {
 
     @Override
     public void onFinishInputView(boolean finishingInput) {
-        selectionRevision++;clearExternalSelection();
+        cursorTapGuard.reset();invalidateExternalCandidates();
         invalidateLineGhostwriter();
         flushPendingVoiceAudio(false);
         dismissSymbolPopup();
