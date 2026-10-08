@@ -2,6 +2,7 @@ package com.simon.voiceime;
 import java.util.Collections;
 import java.util.List;
 final class ZhuyinWordIndex {
+ List<Entry> selectionCandidates(String text){return Collections.emptyList();}
   static final class Entry {
     final String key,word,pronunciation; final long frequency; final boolean personal;
     Entry(String key,String word,String pronunciation,long frequency,boolean personal){this.key=key;this.word=word;this.pronunciation=pronunciation;this.frequency=frequency;this.personal=personal;}

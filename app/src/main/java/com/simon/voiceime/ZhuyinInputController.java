@@ -206,6 +206,13 @@ final class ZhuyinInputController {
     private boolean textChoiceWordFocus;
     private List<TextChoice> textChoiceCache=Collections.emptyList();
     private String candidateKeys(String keys){return provisionalCharacter()>=0&&!keys.isEmpty()&&" ˉˊˇˋ˙".indexOf(keys.charAt(keys.length()-1))<0?keys+" ":keys;}
+    List<TextChoice> externalTextChoices(String selected){
+        List<TextChoice> choices=new ArrayList<>();
+        if(abbreviationIndex==null)return choices;
+        for(ZhuyinWordIndex.Entry entry:abbreviationIndex.selectionCandidates(selected))
+            choices.add(new TextChoice(entry.word,entry.word.codePointCount(0,entry.word.length())==1?"char":"word",selected,"",-1,-1));
+        return choices;
+    }
     List<TextChoice> textChoices(){
         String text=previewText(),keys=sentenceKeys();int count=text.codePointCount(0,text.length());
         int boundary=previewBoundary>=0?Math.max(1,previewBoundary):count;

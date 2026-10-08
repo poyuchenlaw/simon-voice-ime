@@ -9,6 +9,9 @@ import org.junit.rules.TemporaryFolder;
 import static org.junit.Assert.*;
 
 public class VoiceServiceHarness {
+    // Editor selection ownership is exercised by the Android consumer, not this audio seam.
+    long selectionRevision;
+    void clearExternalSelection(){}
     @Test public void voiceStageTraceLinksDeliveryWithoutContent() throws Exception {
         String id=session(1);voicePendingQueue.holdForReceipt(id);
         wsFinal(new JSONObject().put("text","正確文字"),1);barrier();
@@ -108,6 +111,23 @@ public class VoiceServiceHarness {
     int stoppedFinalizations;String finalizedSession;int finalizedGeneration;
     void finishStoppedRecordingAndSend(boolean wasStreaming,int gen,String id){releaseActiveRecordingSession(id);stoppedFinalizations++;finalizedSession=id;finalizedGeneration=gen;}
     static final String TAG="host",CLIPBOARD_SERVICE="clipboard";
+    final Map<Integer,LineContextAccessibilityService.Snapshot> lineRequests=new ConcurrentHashMap<>();
+    final Set<Integer> lineGenerations=ConcurrentHashMap.newKeySet();
+    final Map<Integer,String> lineDrafts=new ConcurrentHashMap<>();
+    boolean ghostwriterField;String draft="";
+    boolean lineGhostwriterField(){return ghostwriterField;}
+    String lineDraft(){return draft;}
+    void invalidateLineGhostwriter(){lineRequests.clear();lineDrafts.clear();}
+    static class LineContextAccessibilityService {
+        static Snapshot fresh;
+        static Snapshot capture(){return fresh;}
+        static class Snapshot {
+            final JSONObject history;boolean valid=true,contentFresh=true;
+            Snapshot(String text)throws Exception{history=new JSONObject().put("chat_title","test").put("messages",text);}
+            boolean current(){return valid;}
+            boolean contentCurrent(){return valid&&contentFresh;}
+        }
+    }
     enum Mode {APPEND,REPLACE,SPELL,TRANSLATE}
     static class Context {static final String CLIPBOARD_SERVICE="clipboard";}
     Object getSystemService(String name){return clipboard;}
@@ -278,6 +298,47 @@ public class VoiceServiceHarness {
         // Receipt wait is independent: releasing it exposes every recovered recording to drain.
         for(String id:recoverySessionByGeneration.values())voicePendingQueue.releaseReceiptWait(id);
         assertEquals(100,voicePendingQueue.pendingOldestFirst().size());
+    }
+    @Test public void lineGhostwriterChangedChatNeverInsertsReply() throws Exception {
+        String id=session(1);ghostwriterField=true;lineGenerations.add(1);lineDrafts.put(1,"");
+        lineRequests.put(1,new LineContextAccessibilityService.Snapshot("old chat"));
+        LineContextAccessibilityService.fresh=new LineContextAccessibilityService.Snapshot("different chat");
+        handleAiCommandResponse(new Response(200,"{\"text\":\"draft reply\"}"),1,1);barrier();
+        assertTrue(connection.inserted.isEmpty());assertTrue(clipboard.values.isEmpty());
+    }
+    @Test public void lineGhostwriterChangedDraftNeverInsertsReply() throws Exception {
+        String id=session(1);ghostwriterField=true;lineGenerations.add(1);lineDrafts.put(1,"old draft");draft="edited draft";
+        LineContextAccessibilityService.Snapshot same=new LineContextAccessibilityService.Snapshot("same chat");
+        lineRequests.put(1,same);LineContextAccessibilityService.fresh=same;
+        handleAiCommandResponse(new Response(200,"{\"text\":\"draft reply\"}"),1,1);barrier();
+        assertTrue(connection.inserted.isEmpty());assertTrue(clipboard.values.isEmpty());
+    }
+    @Test public void lineGhostwriterSameChatInsertsOnlyGeneratedReply() throws Exception {
+        String id=session(1);ghostwriterField=true;lineGenerations.add(1);lineDrafts.put(1,"");
+        LineContextAccessibilityService.Snapshot same=new LineContextAccessibilityService.Snapshot("same chat");
+        lineRequests.put(1,same);LineContextAccessibilityService.fresh=same;
+        handleAiCommandResponse(new Response(200,"{\"text\":\"draft reply\",\"status\":\"ok\"}"),1,1);barrier();
+        assertEquals(Arrays.asList("draft reply"),connection.inserted);
+    }
+    @Test public void lineGhostwriterLegacyServerResponseNeverInsertsInstruction() throws Exception {
+        String id=session(1);ghostwriterField=true;lineGenerations.add(1);lineDrafts.put(1,"");
+        LineContextAccessibilityService.Snapshot same=new LineContextAccessibilityService.Snapshot("same chat");
+        lineRequests.put(1,same);LineContextAccessibilityService.fresh=same;
+        handleAiCommandResponse(new Response(200,"{\"text\":\"spoken concerns should not be sent\",\"instruction\":\"spoken concerns\"}"),1,1);barrier();
+        assertTrue(connection.inserted.isEmpty());assertTrue(clipboard.values.isEmpty());
+        assertTrue(voicePendingQueue.pcmFile(id).exists());
+    }
+    @Test public void lineGhostwriterFreshSnapshotDirtyBeforeDurableCommitNeverInserts() throws Exception {
+        String id=session(1);voicePendingQueue.retainDirective(id);ghostwriterField=true;lineGenerations.add(1);lineDrafts.put(1,"");
+        LineContextAccessibilityService.Snapshot same=new LineContextAccessibilityService.Snapshot("same chat");
+        lineRequests.put(1,same);LineContextAccessibilityService.fresh=same;
+        mainHandler.deferPosts=true;
+        handleAiCommandResponse(new Response(200,"{\"text\":\"generated draft\",\"status\":\"ok\"}"),1,1);
+        mainHandler.posts.remove(0).run();barrier();same.contentFresh=false;
+        mainHandler.deferPosts=false;for(Runnable r:new ArrayList<>(mainHandler.posts)){mainHandler.posts.remove(r);r.run();}barrier();
+        assertTrue(connection.inserted.isEmpty());assertTrue(clipboard.values.isEmpty());
+        VoicePendingQueue restarted=new VoicePendingQueue(temp.getRoot(),16000);restarted.retryForUser(id);
+        assertFalse(restarted.pendingOldestFirst().contains(id));assertTrue(restarted.pcmFile(id).exists());
     }
     /* SERVICE_METHODS */
     @Test public void queuedLongAudioUsesCustodyChildrenAndWholeParentClipboard()throws Exception {

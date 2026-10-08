@@ -102,6 +102,27 @@ final class ZhuyinWordIndex {
         if (database == null) return "ㄓㄨ".equals(value) || "ㄋㄧ".equals(value) || "ㄈㄚ".equals(value) || "ㄌㄩ".equals(value);
         try (Cursor c = database.rawQuery("SELECT 1 FROM syllables WHERE spelling=? LIMIT 1", new String[]{value})) { return c.moveToFirst(); }
     }
+    List<Entry> selectionCandidates(String text) {
+        if(text==null||text.isEmpty()||text.codePointCount(0,text.length())>32)return Collections.emptyList();
+        List<Entry> matches=new ArrayList<>();
+        for(Entry e:personalEntries.values())if(e.word.equals(text))matches.add(e);
+        for(Entry e:remoteEntries.values())if(e.word.equals(text))matches.add(e);
+        if(database==null){for(Entry e:entries)if(e.word.equals(text))matches.add(e);}
+        else try(Cursor c=database.rawQuery("SELECT initial_key,word,pronunciation,frequency,personal FROM words WHERE word=? ORDER BY frequency DESC LIMIT 4",new String[]{text})){
+            while(c.moveToNext())matches.add(new Entry(c.getString(0),c.getString(1),c.getString(2),c.getLong(3),c.getInt(4)!=0?Provenance.PERSONAL_PUBLIC:Provenance.PUBLIC));
+        }
+        LinkedHashMap<String,Entry> choices=new LinkedHashMap<>();
+        for(Entry selected:matches){
+            if(selected.key.isEmpty())continue;
+            for(Entry e:lookup(selected.key))if(!e.word.equals(text)&&e.word.codePointCount(0,e.word.length())>1)choices.putIfAbsent(e.word,e);
+            String initial=selected.key.substring(0,Character.charCount(selected.key.codePointAt(0)));
+            if(database==null){for(Entry e:entries)if(e.key.equals(initial)&&e.word.codePointCount(0,e.word.length())==1&&!e.word.equals(text))choices.putIfAbsent(e.word,e);}
+            else try(Cursor c=database.rawQuery("SELECT initial_key,word,pronunciation,frequency,personal FROM words WHERE initial_key=? AND length(word)=1 ORDER BY frequency DESC LIMIT 50",new String[]{initial})){
+                while(c.moveToNext()){Entry e=new Entry(c.getString(0),c.getString(1),c.getString(2),c.getLong(3),c.getInt(4)!=0?Provenance.PERSONAL_PUBLIC:Provenance.PUBLIC);if(!e.word.equals(text))choices.putIfAbsent(e.word,e);}
+            }
+        }
+        return new ArrayList<>(choices.values());
+    }
     List<Entry> lookup(String key) {
         List<Entry> out = new ArrayList<>();
         for (Entry e : personalEntries.values()) if (e.key.startsWith(key)) out.add(e);

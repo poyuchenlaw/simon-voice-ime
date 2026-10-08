@@ -25,6 +25,13 @@ final class VoicePendingQueue {
     static final class NeedsAttentionException extends IOException {
         NeedsAttentionException(){super("audio_correction_rejected needs_attention retryable=false");}
     }
+    /** Spoken instructions belong to ghostwriter, never to generic transcription recovery. */
+    void retainDirective(String id) {runIO(() -> {
+        JSONObject m=metadata.get(id);if(m!=null&&!discarded.contains(id)) {
+            m.put("directive_only",true);update(id,"needs_attention","ghostwriter_re_record_required",0);
+        }
+        return null;
+    });}
     boolean needsAttention(String id) {Snapshot s=snapshots.get(id);return s!=null&&"needs_attention".equals(s.state);}
     List<String> needsAttentionSessions() {
         List<String> ids=new ArrayList<>();
@@ -430,7 +437,7 @@ final class VoicePendingQueue {
         try {
             JSONObject claim=runIO(() -> {
                 JSONObject m=metadata.get(id);
-                if(m==null||!"pending".equals(m.optString("state"))||capturing.contains(id)||discarded.contains(id))return null;
+                if(m==null||m.optBoolean("directive_only")||!"pending".equals(m.optString("state"))||capturing.contains(id)||discarded.contains(id))return null;
                 if(pcm(id).exists())flushFile(id);
                 if(discardEmpty(id))return null;
                 if(!m.has("result_text")&&!m.optBoolean("ignore_legacy_result")) {String legacy=readResult(id);if(legacy!=null)m.put("result_text",legacy);}
@@ -666,6 +673,9 @@ final class VoicePendingQueue {
                     if(m.has("chunk_receipts")&&!m.optBoolean("chunk_parent_corrected")) {
                         m.put("state","pending").put("server_transcript_pending",true);writeMeta(id,m);
                     }
+                    if(m.optBoolean("directive_only")) {
+                        m.put("state","needs_attention").put("next_attempt_at",0).put("last_error","ghostwriter_re_record_required");writeMeta(id,m);
+                    }
                     metadata.put(id,m);if(m.optBoolean("local_write_failed"))backupFailures.add(id);
                 }catch(Exception e){throw new IllegalStateException("legacy delivery migration failed",e);}
             }
@@ -709,6 +719,9 @@ final class VoicePendingQueue {
     }
     private void update(String id,String state,String error,long next)throws IOException {
         JSONObject m=metadata.get(id);if(m==null||discarded.contains(id))return;
+        if(m.optBoolean("directive_only") && ("pending".equals(state)||"uploading".equals(state))) {
+            state="needs_attention";error="ghostwriter_re_record_required";next=0;
+        }
         if("pending".equals(state)&&!capturing.contains(id)&&discardEmpty(id))return;
         try {m.put("state",state).put("last_error",error==null?"":error).put("next_attempt_at",next);writeMeta(id,m);publish(id);}
         catch(org.json.JSONException e) {throw new IOException(e);}

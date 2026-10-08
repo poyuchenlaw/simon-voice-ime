@@ -3,4 +3,5 @@
     <string name="app_name">Simon Voice IME</string>
     <string name="ime_name">Simon 語音輸入</string>
     <string name="zhuyin_complete_typing_hint">請看著鍵盤，每個字打完整注音和聲調（一聲按空白鍵）；打錯時把游標拉過去選。</string>
+    <string name="line_context_description">LINE 換模式會讀取目前可見的最多五則文字，連同口述指示送至已設定的 AI 伺服器產生回覆草稿。只填入輸入框，由你親自送出。不讀其他應用程式。</string>
 </resources>
