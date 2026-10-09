@@ -453,6 +453,19 @@ final class VoicePendingQueue {
     boolean due(String id,long now) {Snapshot s=snapshots.get(id);return s!=null&&"pending".equals(s.state)&&now>=s.next;}
     long retryDelayMs(String id) {Snapshot s=snapshots.get(id);return s==null?MIN_BACKOFF_MS:Math.max(0,s.next-System.currentTimeMillis());}
     byte[] pcmBytes(String id)throws IOException {return runIO(() -> {flushFile(id);return Files.readAllBytes(pcm(id).toPath());});}
+    void exportPcm(String id,OutputStream destination) {
+        runIO(() -> {if(!metadata.containsKey(id)||discarded.contains(id))throw new IOException("recording unavailable");flushFile(id);Files.copy(pcm(id).toPath(),destination);return null;});
+    }
+    long clearArchivedScratch() {
+        return runIO(() -> {
+            long removed=0;File[] files=dir.listFiles();if(files==null)throw new IOException("recording directory unavailable");
+            for(File file:files){String name=file.getName();if(!name.endsWith(".upload")||Files.isSymbolicLink(file.toPath()))continue;
+                String id=name.substring(0,name.length()-7);
+                if(capturing.contains(id)||!receiptConfirmed(id)||!file.isFile())continue;
+                long bytes=file.length();if(!file.delete())throw new IOException("archived scratch cleanup incomplete");removed+=bytes;
+            }return removed;
+        });
+    }
     File pcmFile(String id) {return pcm(id);} // Path only; callers must use runIO for reading it.
     String startedAt(String id) {Snapshot s=snapshots.get(id);return s==null?"":String.valueOf(s.start);}
     int attempts(String id) {Snapshot s=snapshots.get(id);return s==null?0:s.attempts;}
@@ -533,8 +546,9 @@ final class VoicePendingQueue {
                 JSONObject m=metadata.get(id);if(m==null||discarded.contains(id))return null;
                 int rejections=m.optInt("correction_rejections")+(rejected?1:0);
                 m.put("correction_rejections",rejections);
-                boolean stopped=e instanceof UploadFailure&&!((UploadFailure)e).retryable;
-                if(stopped)m.put("automatic_retry_stopped",true).put("server_error_code",((UploadFailure)e).code);
+                boolean stopped=e instanceof UploadFailure&&!((UploadFailure)e).retryable
+                        ||reason.contains("audio custody conflict");
+                if(stopped)m.put("automatic_retry_stopped",true).put("server_error_code",(e instanceof UploadFailure?((UploadFailure)e).code:"audio_custody_conflict"));
                 update(id,stopped?"needs_attention":"pending",reason,stopped?0:System.currentTimeMillis()+backoff);
                 return null;
             });
@@ -679,6 +693,8 @@ final class VoicePendingQueue {
                         }
                         m.put("schema_version",6);writeMeta(id,m);
                     }
+                    if(m.optString("last_error").contains("audio custody conflict"))
+                        m.put("state","needs_attention").put("automatic_retry_stopped",true).put("server_error_code","audio_custody_conflict").put("next_attempt_at",0);
                     if("needs_attention".equals(m.optString("state"))&&!m.optBoolean("automatic_retry_stopped")) {
                         String reason=m.optString("last_error").toLowerCase(Locale.ROOT);
                         boolean retained=reason.contains("oversize")||reason.contains("retryable=false")

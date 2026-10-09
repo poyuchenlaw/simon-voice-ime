@@ -26,6 +26,8 @@ import okhttp3.Response;
 
 public class SettingsActivity extends Activity {
 
+    private String exportRecordingId;
+    private static final int EXPORT_RECORDING=679;
     private EditText editServerUrl;
     private EditText editAuthPassword;
     private EditText editCommandsJson;
@@ -35,6 +37,57 @@ public class SettingsActivity extends Activity {
     private Button btnCheckUpdate;
     private CommandsHelper commandsHelper;
     private UpdateHelper updateHelper;
+
+    private static String size(long bytes){return String.format(java.util.Locale.ROOT,"%.2f MB",bytes/1000000.0);}
+    private void showStorageDetails(){
+        new Thread(()->{
+            try{
+                java.util.Map<String,File> roots=ImeTelemetry.storageRoots(this);JSONObject report=StorageDiagnostics.scan(roots);
+                runOnUiThread(()->{
+                    if(isFinishing()||isDestroyed())return;
+                    android.widget.ScrollView scroll=new android.widget.ScrollView(this);android.widget.LinearLayout list=new android.widget.LinearLayout(this);list.setOrientation(android.widget.LinearLayout.VERTICAL);scroll.addView(list);
+                    TextView total=new TextView(this);total.setText("合計 "+size(report.optLong("total_bytes"))+(report.optBoolean("over_500_mb")?"（超過 500 MB）":"")+"\n學習資料、個人詞庫與未保全錄音保留。錄音清理只處理有完整保全收據的上傳暫存；原音保留。");list.addView(total);
+                    JSONObject categories=report.optJSONObject("categories");
+                    for(String category:roots.keySet()){
+                        android.widget.LinearLayout row=new android.widget.LinearLayout(this);row.setOrientation(android.widget.LinearLayout.HORIZONTAL);row.setBaselineAligned(false);row.setGravity(android.view.Gravity.CENTER_VERTICAL);row.setLayoutParams(new android.widget.LinearLayout.LayoutParams(-1,-2));TextView label=new TextView(this);label.setText(category+"\n"+size(categories.optLong(category)));row.addView(label,new android.widget.LinearLayout.LayoutParams(0,-2,1));
+                        Button clean=new Button(this);clean.setText("清理");clean.setEnabled(StorageDiagnostics.cleanable(category)||"files/voice_pending".equals(category));row.addView(clean,new android.widget.LinearLayout.LayoutParams(-2,-2));list.addView(row);
+                        clean.setOnClickListener(v->new AlertDialog.Builder(this).setTitle("確認清理 "+category).setMessage("只清理已知舊模型、閒置超過 24 小時的更新暫存，或有完整保全收據的錄音上傳暫存。學習與原始錄音保留。").setNegativeButton("取消",null).setPositiveButton("清理",(dialog,which)->{
+                            clean.setEnabled(false);
+                            new Thread(()->{long removed=0;boolean ok=false;try{removed="files/voice_pending".equals(category)?VoicePendingQueue.getInstance(getFilesDir(),16000).clearArchivedScratch():StorageDiagnostics.clear(roots,category);ok=true;}catch(Exception error){android.util.Log.e("Settings","Storage cleanup incomplete",error);}final long bytes=removed;final boolean success=ok;
+                                ImeTelemetry telemetry=ImeTelemetry.get();if(telemetry!=null)try{telemetry.record("storage_cleanup","settings",new JSONObject().put("category",category).put("removed_bytes",bytes).put("ok",success).put("confirmed",true),false);}catch(Exception error){android.util.Log.e("Settings","Cleanup diagnostic failed",error);}
+                                runOnUiThread(()->{if(!isFinishing()){Toast.makeText(this,success?"已清理 "+size(bytes):"清理未完成；保留資料，請再查明細",Toast.LENGTH_LONG).show();clean.setEnabled(true);}});
+                            },"IME-Storage-Cleanup").start();
+                        }).show());
+                    }
+                    TextView largest=new TextView(this);StringBuilder text=new StringBuilder("\n前 20 大檔案（只列大小與相對路徑）\n");org.json.JSONArray files=report.optJSONArray("largest_files");for(int n=0;n<files.length();n++){JSONObject file=files.optJSONObject(n);text.append(file.optString("path")).append("  ").append(size(file.optLong("bytes"))).append('\n');}largest.setText(text);list.addView(largest);
+                    new AlertDialog.Builder(this).setTitle("空間明細").setView(scroll).setPositiveButton("關閉",null).show();
+                });
+            }catch(Exception error){android.util.Log.e("Settings","Storage scan failed",error);runOnUiThread(()->Toast.makeText(this,"無法讀取完整空間明細，請稍後再試",Toast.LENGTH_LONG).show());}
+        },"IME-Storage-Scan").start();
+    }
+    private void chooseRecordingExport(){
+        VoicePendingQueue queue=VoicePendingQueue.getInstance(getFilesDir(),16000);java.util.List<String> ids=queue.needsAttentionSessions();
+        if(ids.isEmpty()){Toast.makeText(this,"沒有需處理的保留錄音",Toast.LENGTH_LONG).show();return;}
+        String[] labels=new String[ids.size()];for(int n=0;n<labels.length;n++)labels[n]="錄音 "+(n+1)+"（"+(queue.audioMs(ids.get(n))/1000)+" 秒）";
+        new AlertDialog.Builder(this).setTitle("選擇匯出的保留錄音").setItems(labels,(dialog,index)->{
+            exportRecordingId=ids.get(index);Intent intent=new Intent(Intent.ACTION_CREATE_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE).setType("audio/wav").putExtra(Intent.EXTRA_TITLE,"保留錄音-"+System.currentTimeMillis()+".wav");
+            try{startActivityForResult(intent,EXPORT_RECORDING);}catch(android.content.ActivityNotFoundException unavailable){Toast.makeText(this,"此裝置沒有檔案儲存介面，原音仍保留",Toast.LENGTH_LONG).show();}
+        }).setNegativeButton("取消",null).show();
+    }
+    @Override protected void onSaveInstanceState(Bundle state){super.onSaveInstanceState(state);state.putString("export_recording_id",exportRecordingId);}
+    @Override protected void onActivityResult(int request,int result,Intent data){
+        super.onActivityResult(request,result,data);if(request!=EXPORT_RECORDING||result!=RESULT_OK||data==null||data.getData()==null||exportRecordingId==null)return;
+        String id=exportRecordingId;exportRecordingId=null;android.net.Uri uri=data.getData();VoicePendingQueue queue=VoicePendingQueue.getInstance(getFilesDir(),16000);
+        queue.execute(()->{
+            boolean ok=false;try{queue.runIO(()->{
+                long length=queue.pcmFile(id).length();if(length<=0||length>0xffffffffL-36)throw new IOException("recording unavailable or too large for WAV");
+                byte[] header=SimonIMEService.pcmToWav(new byte[0],16000,1,16);java.nio.ByteBuffer buffer=java.nio.ByteBuffer.wrap(header).order(java.nio.ByteOrder.LITTLE_ENDIAN);buffer.putInt(4,(int)(length+36));buffer.putInt(40,(int)length);
+                try(java.io.OutputStream output=getContentResolver().openOutputStream(uri)){if(output==null)throw new IOException("export destination unavailable");output.write(header);queue.exportPcm(id,output);}return null;
+            });ok=true;}catch(Exception error){android.util.Log.e("Settings","Recording export failed; original retained",error);}final boolean success=ok;
+            ImeTelemetry telemetry=ImeTelemetry.get();if(telemetry!=null)try{telemetry.record("recording_export","settings",new JSONObject().put("ok",success).put("audio_ms",queue.audioMs(id)),false);}catch(Exception error){android.util.Log.e("Settings","Export diagnostic failed",error);}
+            runOnUiThread(()->Toast.makeText(this,success?"錄音已匯出；原音仍保留":"匯出未完成，原音仍保留，請重新選擇位置",Toast.LENGTH_LONG).show());
+        });
+    }
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -119,6 +172,10 @@ public class SettingsActivity extends Activity {
             });
         });
 
+
+        Button storage=new Button(this);storage.setText("空間明細");voiceSettings.addView(storage,voiceSettings.indexOfChild(retryVoice)+1);storage.setOnClickListener(v->showStorageDetails());
+        Button export=new Button(this);export.setText("匯出需處理的保留錄音");voiceSettings.addView(export,voiceSettings.indexOfChild(storage)+1);export.setOnClickListener(v->chooseRecordingExport());
+        if(savedInstanceState!=null)exportRecordingId=savedInstanceState.getString("export_recording_id");
 
         // v6.20: 複製自動記詞開關（預設開；即時持久化）
         CheckBox checkAutoVocab = findViewById(R.id.checkAutoVocab);

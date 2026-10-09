@@ -8,6 +8,7 @@ import android.widget.TextView;
 
 /** Width-constrained text, growing upward with the IME window to at most three lines. */
 public final class PreviewScrollView extends ScrollView {
+    @Override public boolean dispatchTouchEvent(android.view.MotionEvent e){boolean consumed=super.dispatchTouchEvent(e);KeyboardTouchLayout.received(this,e,consumed,false);return consumed;}
     private int typingViewportHeight;
     private float measuredFont=-1;
     private int measuredWidth=-1;

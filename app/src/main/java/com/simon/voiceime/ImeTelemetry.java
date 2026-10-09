@@ -60,6 +60,25 @@ final class ImeTelemetry {
         replayPendingCrash();
         collectPreviousExits();
     }
+    static Map<String,File> storageRoots(Context c){
+        Map<String,File> roots=new LinkedHashMap<>();File files=c.getFilesDir();
+        roots.put("files",files);roots.put("files/rime/shared",new File(files,"rime/shared"));roots.put("files/rime/user",new File(files,"rime/user"));roots.put("files/voice_pending",new File(files,"voice_pending"));
+        roots.put("databases",new File(c.getDataDir(),"databases"));roots.put("shared_prefs",new File(c.getDataDir(),"shared_prefs"));roots.put("cache",c.getCacheDir());roots.put("no_backup",c.getNoBackupFilesDir());roots.put("code_cache",c.getCodeCacheDir());
+        File external=c.getExternalFilesDir(null);roots.put("external/files",external);roots.put("external/files/backup",external==null?null:new File(external,"backup"));return roots;
+    }
+    private boolean storageScheduled;
+    synchronized void rimeReady(){
+        if(storageScheduled||handler==null)return;
+        storageScheduled=true;
+        handler.post(new Runnable(){public void run(){
+            long now=System.currentTimeMillis();SharedPreferences prefs=context.getSharedPreferences("ime_telemetry",Context.MODE_PRIVATE);
+            if(!appVersion.equals(prefs.getString("storage_diag_version",""))||now-prefs.getLong("storage_diag_at",0)>=StorageDiagnostics.DAY_MS)try{
+                record("storage_diag","settings",StorageDiagnostics.scan(storageRoots(context)),false);
+                prefs.edit().putLong("storage_diag_at",now).putString("storage_diag_version",appVersion).apply();
+            }catch(Exception failure){Log.e("ImeTelemetry","Storage scan failed",failure);record("storage_diag_error","settings",null,false);}
+            if(handler!=null)handler.postDelayed(this,StorageDiagnostics.DAY_MS);
+        }});
+    }
     private static String version(Context c) {
         try { return c.getPackageManager().getPackageInfo(c.getPackageName(),0).versionName; }
         catch(Exception e) { return "unknown"; }

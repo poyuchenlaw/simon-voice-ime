@@ -8,6 +8,9 @@ import android.widget.TextView;
 
 /** A caret drawn between codepoints, without inserting a glyph into the user's text. */
 public final class PreviewCursorView extends TextView {
+    @Override public boolean dispatchTouchEvent(android.view.MotionEvent e){boolean consumed=super.dispatchTouchEvent(e);KeyboardTouchLayout.received(this,e,consumed,false);return consumed;}
+    @Override public boolean performClick(){boolean clicked=super.performClick();KeyboardTouchLayout.received(this,null,clicked,clicked);return clicked;}
+
     // A transient unparsed suffix can grow then shrink the text by one glyph.
     // Preserve the active composition's scroll range; empty text starts a new one.
     private int compositionWidth;

@@ -52,6 +52,8 @@ public class KeyboardTouchLayout extends LinearLayout {
             Rect bounds = new Rect();
             key.getDrawingRect(bounds);
             offsetDescendantRectToMyCoords(key, bounds);
+            // Unmeasured keys cannot own a touch or raise the candidate boundary.
+            if (bounds.isEmpty()) continue;
             top = Math.min(top, bounds.top);
             float dx = x - (bounds.left + key.getWidth() / 2f);
             float dy = y - (bounds.top + key.getHeight() / 2f);
@@ -83,6 +85,7 @@ public class KeyboardTouchLayout extends LinearLayout {
         try {
             long dispatchStarted=android.os.SystemClock.uptimeMillis();
             boolean consumed = target.key.dispatchTouchEvent(local);
+            received(target.key,local,consumed,false);
             long delay = Math.max(0L, android.os.SystemClock.uptimeMillis()-event.getEventTime());
             if(action==MotionEvent.ACTION_UP) {
                 long completed=android.os.SystemClock.uptimeMillis();
@@ -100,6 +103,54 @@ public class KeyboardTouchLayout extends LinearLayout {
         }
     }
 
+    private static long diagnosticMinute=-1;
+    private static int diagnosticCount;
+    private int diagnosticRow,diagnosticRowId,diagnosticX,diagnosticY;
+    private long diagnosticDown;
+    private boolean diagnosticGesture;
+    private org.json.JSONObject diagnosticState;
+    private SimonIMEService diagnosticService;
+    private void beginDiagnostic(MotionEvent event){
+        diagnosticRow=0;diagnosticGesture=false;diagnosticDown=event.getDownTime();
+        int[] ids={R.id.boStreamPreviewScroll,R.id.boWordCandidateScroll,R.id.boCandidateScroll};
+        for(int i=0;i<ids.length;i++){
+            View row=findViewById(ids[i]);Rect visible=new Rect();
+            if(row==null||!row.isShown()||!row.getLocalVisibleRect(visible))continue;
+            int[] origin=new int[2];row.getLocationOnScreen(origin);visible.offset(origin[0],origin[1]);
+            if(visible.contains(Math.round(event.getRawX()),Math.round(event.getRawY()))){diagnosticRow=i+1;diagnosticRowId=ids[i];break;}
+        }
+        android.content.Context c=getContext();
+        while(c instanceof android.content.ContextWrapper&&!(c instanceof SimonIMEService))c=((android.content.ContextWrapper)c).getBaseContext();
+        if(diagnosticRow==0||!(c instanceof SimonIMEService))return;
+        diagnosticService=(SimonIMEService)c;diagnosticState=diagnosticService.candidateDiagnosticState();
+        diagnosticGesture=diagnosticState!=null;
+    }
+    private void diagnostic(View receiver,String phase,boolean consumed,boolean clicked){
+        if(!diagnosticGesture)return;
+        diagnosticState=diagnosticService.candidateDiagnosticState();
+        if(diagnosticState==null)return;
+        long minute=android.os.SystemClock.uptimeMillis()/60000;
+        if(minute!=diagnosticMinute){diagnosticMinute=minute;diagnosticCount=0;}
+        if(diagnosticCount>=120)return;
+        diagnosticCount++;
+        try{
+            org.json.JSONObject e=new org.json.JSONObject(diagnosticState.toString())
+                .put("phase",phase).put("row",diagnosticRow).put("row_id",diagnosticRowId).put("down_uptime_ms",diagnosticDown).put("x",diagnosticX).put("y",diagnosticY)
+                .put("route",routingKeys?"key":"native").put("receiver_class",receiver.getClass().getName())
+                .put("receiver_id",receiver.getId()).put("consumed",consumed).put("click_listener",clicked);
+            ImeTelemetry telemetry=ImeTelemetry.get();if(telemetry!=null)telemetry.record("candidate_route","bopomofo",e,false);
+        }catch(org.json.JSONException error){android.util.Log.w("KeyboardTouchLayout","Touch diagnostic skipped",error);}
+    }
+    static void received(View view,MotionEvent event,boolean consumed,boolean clicked){
+        android.view.ViewParent parent=view.getParent();
+        while(parent!=null&&!(parent instanceof KeyboardTouchLayout))parent=parent.getParent();
+        if(parent instanceof KeyboardTouchLayout){
+            KeyboardTouchLayout root=(KeyboardTouchLayout)parent;
+            int action=event==null?-1:event.getActionMasked();
+            if(clicked||action==MotionEvent.ACTION_DOWN||action==MotionEvent.ACTION_UP||action==MotionEvent.ACTION_CANCEL)
+                root.diagnostic(view,clicked?"click":action==0?"receive_down":action==1?"receive_up":"receive_cancel",consumed,clicked);
+        }
+    }
     private int keyTimingCount;
     private boolean sampleKeyTiming(long duration) {
         return ++keyTimingCount%20==0||duration>150L;
@@ -118,6 +169,8 @@ public class KeyboardTouchLayout extends LinearLayout {
         float currentX=event.getRawX()-currentOrigin[0], currentY=event.getRawY()-currentOrigin[1];
         int action = event.getActionMasked();
         int index = event.getActionIndex();
+        if(action==MotionEvent.ACTION_DOWN)beginDiagnostic(event);
+        diagnosticX=Math.round(currentX);diagnosticY=Math.round(currentY);
         if (action == MotionEvent.ACTION_DOWN) {
             touchKeys.clear();
             KeyTarget target = nearestKey(currentX, currentY, event.getDownTime());
@@ -127,7 +180,11 @@ public class KeyboardTouchLayout extends LinearLayout {
                 if (Math.abs(currentX-event.getX())>1 || Math.abs(currentY-event.getY())>1) touchEvent("touch_origin_rebased",0,true);
             }
         }
-        if (!routingKeys) return super.dispatchTouchEvent(event);
+        if (!routingKeys) {
+            boolean consumed=super.dispatchTouchEvent(event);
+            if(action==0||action==1||action==3)diagnostic(this,action==0?"route_down":action==1?"route_up":"route_cancel",consumed,false);
+            return consumed;
+        }
         if (action == MotionEvent.ACTION_POINTER_DOWN) {
             KeyTarget target = nearestKey(currentX+event.getX(index)-event.getX(), currentY+event.getY(index)-event.getY(), event.getEventTime());
             if (target != null) touchKeys.put(event.getPointerId(index), target);
@@ -143,6 +200,7 @@ public class KeyboardTouchLayout extends LinearLayout {
                     action == MotionEvent.ACTION_POINTER_DOWN ? MotionEvent.ACTION_DOWN
                             : action == MotionEvent.ACTION_POINTER_UP ? MotionEvent.ACTION_UP : action);
         }
+        if(action==0||action==1||action==3)diagnostic(this,action==0?"route_down":action==1?"route_up":"route_cancel",true,false);
         if (action == MotionEvent.ACTION_POINTER_UP) touchKeys.remove(event.getPointerId(index));
         if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL) {
             touchKeys.clear();

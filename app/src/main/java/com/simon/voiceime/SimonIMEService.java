@@ -457,7 +457,7 @@ public class SimonIMEService extends InputMethodService {
                     OkHttpClient uploadClient=httpClient.newBuilder().readTimeout(seconds,TimeUnit.SECONDS).callTimeout(seconds+10,TimeUnit.SECONDS).build();
                     try(Response response=uploadClient.newCall(rb.build()).execute()){
                         if(response.code()==409) {
-                            mainHandler.post(() -> updateStatus("錄音備份衝突，音訊保留待重試"));
+                            mainHandler.post(() -> updateStatus("錄音備份衝突，音訊保留；請到設定匯出或手動重試"));
                             if(queue.backupFailed(sessionId)) {
                                 Request.Builder receipt=new Request.Builder().url(getServerUrl()+"/v1/audio-receipt?client_session_id="+sessionId);
                                 if(auth!=null&&!auth.isEmpty())receipt.addHeader("Authorization","Bearer "+auth);
@@ -4251,6 +4251,12 @@ public class SimonIMEService extends InputMethodService {
 
     private static boolean isProtectedInputField(EditorInfo i){if(i==null)return true;int flags=i.imeOptions&EditorInfo.IME_FLAG_NO_PERSONALIZED_LEARNING;int cls=i.inputType&android.text.InputType.TYPE_MASK_CLASS,var=i.inputType&android.text.InputType.TYPE_MASK_VARIATION;boolean password=(cls==android.text.InputType.TYPE_CLASS_TEXT&&(var==android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD||var==android.text.InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD||var==android.text.InputType.TYPE_TEXT_VARIATION_WEB_PASSWORD))||(cls==android.text.InputType.TYPE_CLASS_NUMBER&&var==android.text.InputType.TYPE_NUMBER_VARIATION_PASSWORD);return flags!=0||password;}
 
+    org.json.JSONObject candidateDiagnosticState(){
+        if(protectedInputField||zhuyinInput==null)return null;
+        try{return new JSONObject().put("preedit",!zhuyinInput.previewText().isEmpty())
+            .put("cursor_index",zhuyinInput.keyCaret()>=0?zhuyinInput.keyCaret():zhuyinInput.previewBoundary()>=0?zhuyinInput.previewBoundary():selectionStart);}
+        catch(org.json.JSONException error){return null;}
+    }
     private void recordCandidateEvent(String page,List<String> candidates,int chosen){
         if(!protectedInputField&&touchShadow!=null&&"bopomofo".equals(page)&&candidates!=null&&chosen>=0&&chosen<candidates.size()){
             // Accepting top-1 confirms the physical stream. A corrective choice
@@ -4766,7 +4772,7 @@ public class SimonIMEService extends InputMethodService {
         if(wrap&&old instanceof PreviewScrollView||!wrap&&old instanceof HorizontalScrollView)return;
         ViewGroup container=(ViewGroup)old.getParent();int index=container.indexOfChild(old);ViewGroup.LayoutParams outer=old.getLayoutParams();
         old.removeView(preview);container.removeViewAt(index);
-        ViewGroup replacement=wrap?new PreviewScrollView(this,null):new HorizontalScrollView(this);
+        ViewGroup replacement=wrap?new PreviewScrollView(this,null):new CandidateScrollView(this,null);
         replacement.setId(R.id.boStreamPreviewScroll);outer.height=wrap?ViewGroup.LayoutParams.WRAP_CONTENT:dp(50);
         replacement.setMinimumHeight(dp(50));replacement.setLayoutParams(outer);
         preview.setLayoutParams(new android.widget.FrameLayout.LayoutParams(wrap?ViewGroup.LayoutParams.MATCH_PARENT:ViewGroup.LayoutParams.WRAP_CONTENT,wrap?ViewGroup.LayoutParams.WRAP_CONTENT:ViewGroup.LayoutParams.MATCH_PARENT));
@@ -5241,6 +5247,9 @@ public class SimonIMEService extends InputMethodService {
         String touchLabel="",candidateSource="preview";
         boolean pointerDown,bindingChanged,replacementRunning;
         CandidateChoiceView(android.content.Context context){super(context);}
+        @Override public boolean dispatchTouchEvent(MotionEvent e){boolean consumed=super.dispatchTouchEvent(e);KeyboardTouchLayout.received(this,e,consumed,false);return consumed;}
+        @Override public boolean performClick(){boolean clicked=super.performClick();KeyboardTouchLayout.received(this,null,clicked,clicked);return clicked;}
+
     }
     private String candidateReplacementStage="",candidateReplacementReason="";
     private TextView pooledTextChoice(List<TextView> pool,int index,ZhuyinInputController.TextChoice choice){
@@ -5455,7 +5464,7 @@ public class SimonIMEService extends InputMethodService {
         int end = Math.min(renderedZhuyinCandidates.size(), renderedZhuyinCandidateCount + 100);
         for (int i = renderedZhuyinCandidateCount; i < end; i++) {
             final int candidateIndex = i;
-            TextView candidate = new TextView(this);
+            TextView candidate = new CandidateChoiceView(this);
             candidate.setGravity(Gravity.CENTER);
             candidate.setTextSize(15f);
             candidate.setTextColor(getColor(R.color.key_text));
@@ -5499,8 +5508,10 @@ public class SimonIMEService extends InputMethodService {
     private ZhuyinInputController.Engine createZhuyinEngine() {
         try {
             Class<?> type = Class.forName("com.simon.voiceime.RimeZhuyinEngine");
-            return (ZhuyinInputController.Engine) type
+            ZhuyinInputController.Engine engine=(ZhuyinInputController.Engine) type
                     .getDeclaredConstructor(android.content.Context.class).newInstance(this);
+            if(imeTelemetry!=null)imeTelemetry.rimeReady();
+            return engine;
         } catch (Throwable error) {
             Log.e(TAG, "Traditional-page Rime unavailable; falling back to libchewing", error);
             try {
