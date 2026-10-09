@@ -174,8 +174,8 @@ public class TapCursor677AndroidTest extends ExternalSelection675AndroidTest {
   begin();shell("am start -S -W -n com.ime.sandbox.testpad/.MainActivity --ez unreadable true");tap("test_input");await("ㄗ");bind();text(SENTENCE);
   java.util.List<String> notifications=new java.util.concurrent.CopyOnWriteArrayList<>();
   ui.setOnAccessibilityEventListener(event->{if(event.getEventType()==android.view.accessibility.AccessibilityEvent.TYPE_NOTIFICATION_STATE_CHANGED)notifications.add(event.getText().toString());});
-  try{tapCaret(9);Thread.sleep(700);inst.waitForIdleSync();assertNoExternalCandidates();
-   for(String notification:notifications)assertFalse("single tap must not show unreadable-selection hint",notification.contains("未提供可讀取"));
+  try{tapCaret(9);Thread.sleep(700);inst.waitForIdleSync();awaitTapRows(9);
+   assertTrue("unreadable tap must show no notification",notifications.isEmpty());
    assertEquals(SENTENCE,String.valueOf(await("test_input").getText()));screenshot("unreadable-silent");readback("unreadable-text.json");save("unreadable-notifications.json",new org.json.JSONArray(notifications).toString());
   }finally{ui.setOnAccessibilityEventListener(null);}
  }

@@ -41,13 +41,21 @@ final class StorageDiagnostics {
                 File file=new File(root,name);
                 if(file.exists()&&!Files.isSymbolicLink(file.toPath())&&file.isFile()&&System.currentTimeMillis()-file.lastModified()>=DAY_MS)removed+=delete(file);
             }
-        }else for(String name:new String[]{"sherpa-onnx-models","sherpa-onnx-sensevoice","sherpa-onnx-streaming","silero_vad.onnx"}) {
+        }else {removed+=clearObsoleteModel(root);for(String name:new String[]{"sherpa-onnx-models","sherpa-onnx-sensevoice","sherpa-onnx-streaming","silero_vad.onnx"}) {
             File file=new File(root,name);if(file.exists()&&!Files.isSymbolicLink(file.toPath()))removed+=delete(file);
+        }
         }
         return removed;
     }
+    static long clearObsoleteModel(File files)throws IOException {
+        if(Files.isSymbolicLink(files.toPath()))throw new IOException("storage root is symbolic link");
+        File models=new File(files,"models");
+        if(Files.isSymbolicLink(models.toPath()))throw new IOException("models is symbolic link");
+        File llm=new File(models,"llm");
+        return Files.exists(llm.toPath(),java.nio.file.LinkOption.NOFOLLOW_LINKS)?delete(llm):0;
+    }
     private static long delete(File file)throws IOException {
-        if(Files.isSymbolicLink(file.toPath()))return 0;
+        if(Files.isSymbolicLink(file.toPath())){Files.delete(file.toPath());return 0;}
         long removed=0;
         if(file.isDirectory()){File[] children=file.listFiles();if(children==null)throw new IOException("cleanup directory unavailable");for(File child:children)removed+=delete(child);}else removed=file.length();
         if(!file.delete())throw new IOException("cleanup incomplete");return removed;

@@ -99,19 +99,12 @@ public class SettingsActivity extends Activity {
             android.view.ViewGroup content=findViewById(android.R.id.content);
             android.widget.ScrollView scroll=(android.widget.ScrollView)content.getChildAt(0);
             android.widget.LinearLayout options=(android.widget.LinearLayout)scroll.getChildAt(0);
-            SharedPreferences p=getSharedPreferences("simon_ime_prefs",MODE_PRIVATE);
-            CheckBox local=new CheckBox(this);local.setText("本機對話脈絡（不儲存、不上傳）");local.setTextColor(0xffcccccc);
-            local.setChecked(p.getBoolean("local_screen_context",false));
-            local.setOnCheckedChangeListener((v,enabled)->{p.edit().putBoolean("local_screen_context",enabled).apply();LocalConversationContext.clear();});
-            options.addView(local,1);
-            Button localAccess=new Button(this);localAccess.setText("本機對話脈絡無障礙設定");
-            localAccess.setOnClickListener(v->startActivity(new Intent(android.provider.Settings.ACTION_ACCESSIBILITY_SETTINGS)));options.addView(localAccess,2);
             Button access=new Button(this);access.setText("授權 Simon LINE 語音嘴替（讀取可見對話）");
             access.setOnClickListener(v->{
                 Intent detail=new Intent("android.settings.ACCESSIBILITY_DETAILS_SETTINGS");
                 detail.putExtra(Intent.EXTRA_COMPONENT_NAME,new android.content.ComponentName(this,LineContextAccessibilityService.class).flattenToString());
                 try {startActivity(detail);} catch(android.content.ActivityNotFoundException | SecurityException unavailable) {startActivity(new Intent(android.provider.Settings.ACTION_ACCESSIBILITY_SETTINGS));}
-            });options.addView(access,3);
+            });options.addView(access,1);
         }
 
         editServerUrl = findViewById(R.id.editServerUrl);
