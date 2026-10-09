@@ -519,3 +519,22 @@ For some ISAs (for example, for MIPS) it's impossible to get gain from such filt
 http://www.7-zip.org
 http://www.7-zip.org/sdk.html
 http://www.7-zip.org/support.html
+
+
+Common-character association membership (6.81 FIX1)
+=================================================
+Derived from the public frequency data already bundled in
+app/src/phone/assets/zhuyin_initials.db (libchewing tsi.csv source).
+Use the first 4,800 distinct single Han characters, ordered by MAX(frequency)
+descending then Unicode ascending, excluding personal/private entries.
+The existing dictionary data and its provenance are unchanged; no font artwork
+or additional third-party dataset is redistributed by this membership list.
+
+MOE source checked 2026-10-09:
+https://language.moe.gov.tw/material/info?m=9fe3ff5a-5a8c-4817-9e60-6337dd55a509
+https://language.moe.gov.tw/uploads/files/17694982751710.ods
+The download page does not explicitly grant redistribution under the Government
+Open Data License. We do not assert that permission or ship the extracted list.
+The former ODS row A02149's glyph 汨 is U+6C68, not the listed Unicode 6c69 (汩).
+This discrepancy was corrected in the audit extraction; that MOE list has been
+replaced by the bundled-frequency fallback above.

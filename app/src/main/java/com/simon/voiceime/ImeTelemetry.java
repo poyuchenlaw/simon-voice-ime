@@ -163,6 +163,25 @@ final class ImeTelemetry {
         return frames.toString();
     }
     private void enqueue(JSONObject event){spool.add(event);}
+    void mainStall(int ms,String target,String callback,int what,boolean input,boolean candidates) {
+        try { record("main_stall","bopomofo",new JSONObject().put("ms",ms).put("target",target)
+                .put("callback",callback).put("what",what).put("input_active",input).put("candidates_active",candidates),false); }
+        catch(org.json.JSONException failure) { droppedEvents.incrementAndGet();Log.w("ImeTelemetry","Main dispatch metadata dropped",failure); }
+    }
+    void backspaceHold(String page,String phase,int tick,Integer delta,boolean protectedField) {
+        if(protectedField)return;
+        try { record("backspace_hold",page,new JSONObject().put("key","backspace").put("phase",phase)
+                .put("tick",tick).put("length_delta",delta==null?JSONObject.NULL:delta),false); }
+        catch(org.json.JSONException failure) { droppedEvents.incrementAndGet();Log.w("ImeTelemetry","Backspace metadata dropped",failure); }
+    }
+    static JSONObject missedTouchFields(long ms,int x,int y,String nearestKey)throws org.json.JSONException {
+        String allowed="ㄅㄆㄇㄈㄉㄊㄋㄌㄍㄎㄏㄐㄑㄒㄓㄔㄕㄖㄗㄘㄙㄧㄨㄩㄚㄛㄜㄝㄞㄟㄠㄡㄢㄣㄤㄥㄦˉˊˇˋ˙ ，。！？；：、";
+        if(nearestKey==null||!(nearestKey.length()==1&&allowed.contains(nearestKey)
+                ||java.util.Arrays.asList("backspace","space","enter","left","right","comma","toEnglish","toNumbers","toVoice","toBopomofo","shift").contains(nearestKey)))nearestKey="unknown";
+        return new JSONObject().put("key","").put("key_to_candidate_ms",JSONObject.NULL)
+                .put("step","touch_not_consumed").put("ms",ms).put("ok",false)
+                .put("x",x).put("y",y).put("nearest_key",nearestKey);
+    }
     void key(String page,String key,float x,float y,float cx,float cy,boolean protectedField) {
         try{record("key",page,new JSONObject().put("key",key).put("x",x).put("y",y).put("key_center_x",cx).put("key_center_y",cy),protectedField);}catch(Exception ignored){}
     }

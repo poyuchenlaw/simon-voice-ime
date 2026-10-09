@@ -173,7 +173,7 @@ public class VoiceServiceHarness {
     void clearAiState(){}
     static final int SAMPLE_RATE=16000;
     static class Log {static void w(String t,String m){}static void w(String t,String m,Throwable e){}static void i(String t,String m){}static void e(String t,String m,Throwable e){}static void e(String t,String m){}static void d(String t,String m){}}
-    static class Looper {static final Object MAIN=new Object();static Object myLooper(){return MAIN;}static Object getMainLooper(){return MAIN;}}
+    static class Looper {static final Looper MAIN=new Looper();static Looper myLooper(){return MAIN;}static Looper getMainLooper(){return MAIN;}void setMessageLogging(Object printer){}}
     static class FakeHandler {
         final List<Runnable> delayed=new CopyOnWriteArrayList<>();final List<Long> delays=new CopyOnWriteArrayList<>();
         volatile boolean deferPosts;final List<Runnable> posts=new CopyOnWriteArrayList<>();

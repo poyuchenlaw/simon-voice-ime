@@ -18,9 +18,13 @@ import java.util.Map;
 final class ZhuyinAssociationHistory {
     private final File file;
     private final Map<String, Long> counts = new HashMap<>();
+    private final java.util.Set<String> usedWords = new java.util.HashSet<>();
+    private void used(String word){usedWords.add(word);word.codePoints().forEach(cp->usedWords.add(new String(Character.toChars(cp))));}
+    synchronized boolean hasUsed(String word){return usedWords.contains(word);}
     ZhuyinAssociationHistory(File file) { this.file = file; load(); }
     synchronized void record(String previous, String next) {
         if (previous == null || previous.isEmpty() || next == null || next.isEmpty()) return;
+        used(previous);used(next);
         String key = previous + "\t" + next;
         counts.put(key, counts.getOrDefault(key, 0L) + 1L);
         persist();
@@ -54,9 +58,9 @@ final class ZhuyinAssociationHistory {
         try (BufferedReader in = new BufferedReader(new InputStreamReader(new FileInputStream(file), StandardCharsets.UTF_8))) {
             String line; while ((line = in.readLine()) != null) {
                 String[] parts = line.split("\\t", 3);
-                if (parts.length == 3) counts.put(parts[0] + "\t" + parts[1], Long.parseLong(parts[2]));
+                if (parts.length == 3) {counts.put(parts[0] + "\t" + parts[1], Long.parseLong(parts[2]));used(parts[0]);used(parts[1]);}
             }
-        } catch (Exception ignored) { counts.clear(); }
+        } catch (Exception ignored) { counts.clear(); usedWords.clear(); }
     }
     private void persist() {
         File temp = new File(file.getParentFile(), file.getName() + ".tmp");

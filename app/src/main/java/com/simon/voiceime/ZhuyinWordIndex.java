@@ -44,14 +44,15 @@ final class ZhuyinWordIndex {
             this.personal = provenance != Provenance.PUBLIC;
         }
     }
+    private volatile java.util.Set<String> installedWords;
     private final List<Entry> entries;
     private final SQLiteDatabase database;
     private final File personalFile;
     private final File remoteFile;
     private final LinkedHashMap<String,Entry> personalEntries = new LinkedHashMap<>();
     private final LinkedHashMap<String,Entry> remoteEntries = new LinkedHashMap<>();
-    private ZhuyinWordIndex(List<Entry> entries) { this.entries = entries; this.database = null; this.personalFile = null; this.remoteFile = null; }
-    private ZhuyinWordIndex(SQLiteDatabase database, File personalFile, File remoteFile) { this.entries = Collections.emptyList(); this.database = database; this.personalFile = personalFile; this.remoteFile = remoteFile; loadPersonal(); loadRemote(); publishRimeVocabulary(); }
+    private ZhuyinWordIndex(List<Entry> entries) { this.entries = entries; this.database = null; this.personalFile = null; this.remoteFile = null; buildInstalledWords(); }
+    private ZhuyinWordIndex(SQLiteDatabase database, File personalFile, File remoteFile) { this.entries = Collections.emptyList(); this.database = database; this.personalFile = personalFile; this.remoteFile = remoteFile; loadPersonal(); loadRemote(); rebuildInstalledWords(); publishRimeVocabulary(); }
 
     static ZhuyinWordIndex open(Context context) throws Exception {
         File file = new File(context.getFilesDir(), "zhuyin_initials.db");
@@ -85,10 +86,29 @@ final class ZhuyinWordIndex {
         } catch (Exception ignored) { return ""; }
         finally { if (db != null) db.close(); }
     }
-    synchronized boolean isInstalledWord(String word){
-        for(Entry e:personalEntries.values())if(e.word.equals(word))return true;
-        for(Entry e:remoteEntries.values())if(e.word.equals(word))return true;
-        for(Entry e:entries)if(e.personal&&e.word.equals(word))return true;
+    boolean associationFilterReady() { return installedWords != null; }
+    private void rebuildInstalledWords() {
+        installedWords = null;
+        // Membership only: this worker never touches the database, Rime or JNI.
+        Thread worker = new Thread(this::buildInstalledWords, "AssociationMembership");
+        worker.setDaemon(true); worker.start();
+    }
+    private synchronized void buildInstalledWords() {
+        java.util.Set<String> words = java.util.concurrent.ConcurrentHashMap.newKeySet();
+        for (Entry e : personalEntries.values()) words.add(e.word);
+        for (Entry e : remoteEntries.values()) words.add(e.word);
+        for (Entry e : entries) if (e.personal) words.add(e.word);
+        int commonCount = CommonCharacters.COUNT; // Initialize both memberships off the UI thread.
+        installedWords = words;
+    }
+    boolean isInstalledWord(String word) {
+        java.util.Set<String> words = installedWords;
+        if (words != null) return words.contains(word);
+        synchronized (this) {
+            for (Entry e : personalEntries.values()) if (e.word.equals(word)) return true;
+            for (Entry e : remoteEntries.values()) if (e.word.equals(word)) return true;
+            for (Entry e : entries) if (e.personal && e.word.equals(word)) return true;
+        }
         return false;
     }
     boolean hasPrefix(String key) {
@@ -285,6 +305,7 @@ final class ZhuyinWordIndex {
     synchronized void rememberPersonal(Entry entry) {
         Entry personal = new Entry(entry.key, entry.word, entry.pronunciation, Long.MAX_VALUE, Provenance.LEARNED);
         personalEntries.put(entry.word + "\t" + entry.pronunciation, personal);
+        if (installedWords != null) installedWords.add(entry.word);
         if (personalFile == null) return;
         File temp = new File(personalFile.getParentFile(), personalFile.getName() + ".tmp");
         persistPersonal();
@@ -296,6 +317,7 @@ final class ZhuyinWordIndex {
             if (!phrase[0].isEmpty() && !key.isEmpty())
                 personalEntries.put(phrase[0] + "\t" + phrase[1], new Entry(key, phrase[0], phrase[1], Long.MAX_VALUE, Provenance.LEARNED));
         }
+        rebuildInstalledWords();
         persistPersonal();
     }
     private void persistPersonal() {
@@ -320,7 +342,7 @@ final class ZhuyinWordIndex {
             }
         } catch (Exception ignored) { personalEntries.clear(); }
     }
-    synchronized void reloadRemote() { loadRemote(); publishRimeVocabulary(); }
+    synchronized void reloadRemote() { loadRemote(); rebuildInstalledWords(); publishRimeVocabulary(); }
     private void loadRemote() {
         remoteEntries.clear();
         if (remoteFile == null || !remoteFile.isFile() || remoteFile.length() > 512 * 1024) return;

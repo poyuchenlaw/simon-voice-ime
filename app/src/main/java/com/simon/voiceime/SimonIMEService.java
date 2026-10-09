@@ -721,6 +721,7 @@ public class SimonIMEService extends InputMethodService {
         }
     }
 
+    private MainDispatchMonitor mainDispatchMonitor;
     @Override
     public void onCreate() {
         super.onCreate();
@@ -730,6 +731,12 @@ public class SimonIMEService extends InputMethodService {
                 .readTimeout(30, TimeUnit.SECONDS)
                 .build();
         mainHandler = new Handler(Looper.getMainLooper());
+        mainDispatchMonitor = new MainDispatchMonitor((ms,target,callback,what,input,candidates)->{
+            ImeTelemetry telemetry=ImeTelemetry.get();
+            if(telemetry!=null)telemetry.mainStall(ms,target,callback,what,input,candidates);
+        });
+        Looper.getMainLooper().setMessageLogging(line->mainDispatchMonitor.accept(line,
+                SystemClock.uptimeMillis(),backspacePressed||textKeyRender));
         clipboardHelper = new ClipboardHelper(this);
         SharedPreferences rescuePrefs = getSharedPreferences("simon_ime_prefs", MODE_PRIVATE);
         rescueExtraChars = rescuePrefs.getInt("text_loss_min_extra_chars", TextLossGuard.MIN_EXTRA_CHARS);
@@ -938,6 +945,8 @@ public class SimonIMEService extends InputMethodService {
         btnBackspace.setOnTouchListener((v, event) -> {
             switch (event.getAction()) {
                 case MotionEvent.ACTION_DOWN:
+                    backspaceDiagnosticTick=0;
+                    Integer diagnosticBefore=backspaceLength();
                     if (touchShadow != null) touchShadow.invalidate();
                     backspacePressed = true;
                     backspaceRepeatCount = 0;
@@ -947,10 +956,13 @@ public class SimonIMEService extends InputMethodService {
                         if (!deleteSelectionIfAny(ic0)) deleteSurroundingTextProgrammatically(ic0, 1, 0);
                     }
                     // 啟動連刪
+                    recordBackspace("down",diagnosticBefore);
                     backspaceRepeatRunnable = new Runnable() {
                         @Override
                         public void run() {
                             if (!backspacePressed) return;
+                            backspaceDiagnosticTick++;
+                            Integer repeatBefore=backspaceLength();
                             InputConnection ic = getCurrentInputConnection();
                             if (ic != null) {
                                 backspaceRepeatCount++;
@@ -960,6 +972,7 @@ public class SimonIMEService extends InputMethodService {
                                 deleteSurroundingTextProgrammatically(ic, deleteCount, 0);
                             }
                             // 加速間隔：初始 120ms → 最低 30ms
+                            recordBackspace("repeat",repeatBefore);
                             long delay = Math.max(30, 120 - backspaceRepeatCount * 6);
                             mainHandler.postDelayed(this, delay);
                         }
@@ -969,6 +982,7 @@ public class SimonIMEService extends InputMethodService {
                     return true;
                 case MotionEvent.ACTION_UP:
                 case MotionEvent.ACTION_CANCEL:
+                    recordBackspace(event.getAction()==MotionEvent.ACTION_UP?"up":"cancel",null);
                     backspacePressed = false;
                     if (backspaceRepeatRunnable != null) {
                         mainHandler.removeCallbacks(backspaceRepeatRunnable);
@@ -4221,6 +4235,7 @@ public class SimonIMEService extends InputMethodService {
         } catch (Exception ignored) {}
     }
     private void recordKeyTouch(View v,String key,MotionEvent e,String page){
+        if(mainDispatchMonitor!=null)mainDispatchMonitor.input();
         recordTouchLearning(v,key,e,page);
         try{int[] p=new int[2];v.getLocationOnScreen(p);float cx=p[0]+v.getWidth()/2f,cy=p[1]+v.getHeight()/2f;
             float dx=e.getRawX()-cx,dy=e.getRawY()-cy;
@@ -4549,10 +4564,30 @@ public class SimonIMEService extends InputMethodService {
     /**
      * Set up long-press repeat for a backspace key (works for any keyboard's backspace).
      */
+    private int backspaceDiagnosticTick;
+    private Integer backspaceLength() {
+        if(protectedInputField||ImeTelemetry.get()==null
+                ||!getSharedPreferences("simon_ime_prefs",MODE_PRIVATE).getBoolean("ime_auto_upload",true))return null;
+        InputConnection ic=getCurrentInputConnection();if(ic==null)return null;
+        try {
+            android.view.inputmethod.ExtractedText text=ic.getExtractedText(new android.view.inputmethod.ExtractedTextRequest(),0);
+            // Partial/unsupported editors cannot supply a trustworthy full length.
+            return text==null||text.text==null||text.startOffset!=0||text.partialStartOffset>=0?null:text.text.length();
+        } catch(RuntimeException unavailable) { Log.w(TAG,"Backspace length unavailable",unavailable);return null; }
+    }
+    private void recordBackspace(String phase,Integer before) {
+        ImeTelemetry telemetry=ImeTelemetry.get();if(telemetry==null||protectedInputField)return;
+        Integer after=before==null?null:backspaceLength();
+        String page=currentKeyboardMode==KeyboardMode.BOPOMOFO?"bopomofo":currentKeyboardMode==KeyboardMode.ENGLISH?"english":"symbol";
+        telemetry.backspaceHold(page,phase,backspaceDiagnosticTick,before==null||after==null?null:after-before,false);
+    }
     private void setupBackspaceTouch(View backspaceView) {
         backspaceView.setOnTouchListener((v, event) -> {
             switch (event.getAction()) {
                 case MotionEvent.ACTION_DOWN:
+                    backspaceDiagnosticTick=0;
+                    Integer diagnosticBefore=backspaceLength();
+                    recordKeyTouch(v,"backspace",event,currentKeyboardMode==KeyboardMode.BOPOMOFO?"bopomofo":currentKeyboardMode==KeyboardMode.ENGLISH?"english":"symbol");
                     if (touchShadow != null) touchShadow.invalidate();
                     backspacePressed = true;
                     backspaceRepeatCount = 0;
@@ -4573,14 +4608,18 @@ public class SimonIMEService extends InputMethodService {
                             }
                         }
                     }
+                    recordBackspace("down",diagnosticBefore);
                     backspaceRepeatRunnable = new Runnable() {
                         @Override
                         public void run() {
                             if (!backspacePressed) return;
+                            backspaceDiagnosticTick++;
+                            Integer repeatBefore=backspaceLength();
                             InputConnection ic = getCurrentInputConnection();
                             if (ic != null) {
                                 if (currentKeyboardMode == KeyboardMode.BOPOMOFO && !zhuyinInput.state().composingText.isEmpty()) {
                                     applyZhuyinState(pressZhuyinWithTouch("backspace"));
+                                    recordBackspace("repeat",repeatBefore);
                                     mainHandler.postDelayed(this, 120);
                                     return;
                                 }
@@ -4595,6 +4634,7 @@ public class SimonIMEService extends InputMethodService {
                                     refreshEnglishSuggestions();
                                 }
                             }
+                            recordBackspace("repeat",repeatBefore);
                             long delay = Math.max(30, 120 - backspaceRepeatCount * 6);
                             mainHandler.postDelayed(this, delay);
                         }
@@ -4602,8 +4642,11 @@ public class SimonIMEService extends InputMethodService {
                     mainHandler.postDelayed(backspaceRepeatRunnable, 400);
                     v.setPressed(true);
                     return true;
+                case MotionEvent.ACTION_MOVE:
+                    return true;
                 case MotionEvent.ACTION_UP:
                 case MotionEvent.ACTION_CANCEL:
+                    recordBackspace(event.getAction()==MotionEvent.ACTION_UP?"up":"cancel",null);
                     backspacePressed = false;
                     if (event.getAction() == MotionEvent.ACTION_UP && currentKeyboardMode == KeyboardMode.BOPOMOFO)
                         recordBopomofoTouch(v, "backspace", event);
@@ -5078,6 +5121,8 @@ public class SimonIMEService extends InputMethodService {
         });return item;
     }
     private void applyPhysicalTextKey(String key){
+        showFullTextCandidates=false;
+        if(mainDispatchMonitor!=null)mainDispatchMonitor.input();
         lastTextKeyUptime=SystemClock.uptimeMillis();textKeyRender=true;
         try{applyZhuyinState(pressZhuyinWithTouch(key));}finally{textKeyRender=false;}
     }
@@ -5124,7 +5169,8 @@ public class SimonIMEService extends InputMethodService {
     private final CursorTapGuard cursorTapGuard=new CursorTapGuard();
     private InputConnection cursorRawConnection,cursorTrackedConnection;
     private boolean inCandidateReplacement,externalCandidatePending,externalWindow;
-    private void invalidateExternalCandidates(){selectionRevision++;clearExternalSelection();renderTextCandidateRows();}
+    private void invalidateExternalCandidates(){
+        showFullTextCandidates=false;selectionRevision++;clearExternalSelection();renderTextCandidateRows();}
     private boolean touchInside(View view,MotionEvent event){
         if(view==null||!view.isShown())return false;android.graphics.Rect bounds=new android.graphics.Rect();
         int[] at=new int[2];view.getLocationOnScreen(at);bounds.set(at[0],at[1],at[0]+view.getWidth(),at[1]+view.getHeight());
@@ -5251,20 +5297,22 @@ public class SimonIMEService extends InputMethodService {
             }
         }
     }
+    private boolean showFullTextCandidates;
     private final List<TextView> textWordViewPool=new ArrayList<>(),textCharViewPool=new ArrayList<>();
     private void deferTextCandidateRows(){
-        // Keep the first deadline: subsequent keys must not postpone a pending refresh.
-        if(pendingTextCandidates!=null)return;
+        // Calculate only after typing pauses; all Rime work stays on the UI thread.
+        cancelPendingTextCandidates();
         final ZhuyinInputController owner=zhuyinInput;final long field=fieldGeneration;
         for(LinearLayout row:new LinearLayout[]{boWordCandidateItems,boCandidateItems})
             for(int n=0;n<row.getChildCount();n++)row.getChildAt(n).setEnabled(false);
-        pendingTextCandidates=()->{
+        pendingTextCandidates=new Runnable(){@Override public void run(){
+            if(pendingTextCandidates!=this)return;
             pendingTextCandidates=null;
             if(zhuyinInput!=owner||fieldGeneration!=field||currentKeyboardMode!=KeyboardMode.BOPOMOFO||!isInputViewShown())return;
             long started=SystemClock.elapsedRealtime();textCandidateRefreshRunning=true;
             try{renderTextCandidateRows();}finally{textCandidateRefreshRunning=false;}
             if(imeTelemetry!=null)try{imeTelemetry.record("key_outcome","bopomofo",new JSONObject().put("key","").put("key_to_candidate_ms",JSONObject.NULL).put("step","text_candidates_refresh").put("ms",SystemClock.elapsedRealtime()-started).put("ok",true).put("debounce_ms",100),false);}catch(Exception ignored){}
-        };
+        }};
         mainHandler.postDelayed(pendingTextCandidates,100);
     }
     private static class CandidateChoiceView extends TextView {
@@ -5343,6 +5391,7 @@ public class SimonIMEService extends InputMethodService {
         while(row.getChildCount()>desired.size())row.removeViewAt(row.getChildCount()-1);
     }
     private void renderTextCandidateRows(){
+        if(mainDispatchMonitor!=null)mainDispatchMonitor.candidates();
         if(boWordCandidateItems==null||boCandidateItems==null||zhuyinInput==null)return;
         boolean focused=zhuyinInput.wordFocused()||zhuyinInput.previewBoundary()>=0||zhuyinInput.keyCaret()>=0;
         if(mainHandler!=null&&!focused&&!textCandidateRefreshRunning&&textKeyRender){deferTextCandidateRows();return;}
@@ -5352,6 +5401,15 @@ public class SimonIMEService extends InputMethodService {
         // Z2: sentence suggestions stay off the word row until the Z3 preview design.
         int wi=0,ci=0;
         List<ZhuyinInputController.TextChoice> textChoices=new ArrayList<>(externalConnection!=null?externalTextChoices:zhuyinInput.textChoices());
+        boolean completeInput=externalConnection==null&&zhuyinInput.provisionalCharacter()<0&&!zhuyinInput.sentenceKeys().isEmpty();
+        boolean omitted=false;
+        if((!showFullTextCandidates||!completeInput)&&zhuyinWordIndex!=null&&zhuyinWordIndex.associationFilterReady()){
+            int before=textChoices.size();
+            textChoices.removeIf(c->!CommonCharacters.permits(c.label,false)&&!CommonCharacters.permits(c.label,
+                    zhuyinWordIndex!=null&&zhuyinWordIndex.isInstalledWord(c.label)
+                    ||!protectedInputField&&zhuyinAssociationHistory!=null&&zhuyinAssociationHistory.hasUsed(c.label)));
+            omitted=before!=textChoices.size();
+        }
         final String hint="";
         boolean cursorChoices=externalConnection!=null&&selectionStart==selectionEnd;
         // Stable reorder only: no candidates introduced, no selected text changed, no network payload.
@@ -5367,6 +5425,10 @@ public class SimonIMEService extends InputMethodService {
         for(ZhuyinInputController.TextChoice choice:textChoices){
             if("char".equals(choice.kind))characters.add(pooledTextChoice(textCharViewPool,ci++,choice));
             else words.add(pooledTextChoice(textWordViewPool,wi++,choice));
+        }
+        if(omitted&&completeInput){
+            TextView more=new TextView(this);more.setText("更多");more.setTextSize(18);more.setGravity(Gravity.CENTER);more.setPadding(dp(12),0,dp(12),0);more.setTextColor(boStreamPreview.getCurrentTextColor());
+            more.setOnClickListener(v->{showFullTextCandidates=true;renderTextCandidateRows();});characters.add(more);
         }
         if(cursorChoices&&zhuyinWordIndex!=null){
             int[] target=zhuyinWordIndex.cursorWordRange(externalText,selectionStart-externalOffset);
@@ -6548,6 +6610,7 @@ public class SimonIMEService extends InputMethodService {
 
     @Override
     public void onDestroy() {
+        Looper.getMainLooper().setMessageLogging(null);
         TouchLearningStore oldTouch=touchLearning;touchLearning=null;
         if(oldTouch!=null)new Thread(oldTouch::close,"TouchLearningClose").start();
         invalidateLineGhostwriter(); fieldGeneration++;

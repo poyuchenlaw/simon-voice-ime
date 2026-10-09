@@ -41,7 +41,8 @@ public class KeyboardTouchLayout extends LinearLayout {
         }
     }
 
-    private KeyTarget nearestKey(float x, float y, long downTime) {
+    private KeyTarget nearestKey(float x,float y,long downTime){return nearestKey(x,y,downTime,true);}
+    private KeyTarget nearestKey(float x, float y, long downTime, boolean keyAreaOnly) {
         List<View> tagged = new ArrayList<>(), clickable = new ArrayList<>();
         collectKeys(this, tagged, clickable);
         List<View> keys = tagged.isEmpty() ? clickable : tagged;
@@ -64,7 +65,7 @@ public class KeyboardTouchLayout extends LinearLayout {
             }
         }
         // Preview/candidate bars retain native scrolling and clicks.
-        return y < top ? null : target;
+        return keyAreaOnly && y < top ? null : target;
     }
 
     private void dispatchKey(KeyTarget target, MotionEvent event, int pointer, int action) {
@@ -95,7 +96,7 @@ public class KeyboardTouchLayout extends LinearLayout {
                     if(telemetry!=null)telemetry.recordKeyTiming(duration,Math.max(0L,dispatchStarted-event.getEventTime()),Math.max(0L,completed-dispatchStarted),consumed);
                 }
             }
-            if (!consumed) touchEvent("touch_not_consumed", delay, false);
+            if (!consumed) missedTouch(delay,Math.round(x),Math.round(y),target);
             else if (action == MotionEvent.ACTION_UP && delay >= 197) touchEvent("touch_delay", delay, true);
             else if (action == MotionEvent.ACTION_CANCEL) touchEvent("touch_cancelled", delay, false);
         } finally {
@@ -162,6 +163,13 @@ public class KeyboardTouchLayout extends LinearLayout {
         try { telemetry.record("key_outcome", "bopomofo", new org.json.JSONObject().put("key","").put("key_to_candidate_ms",org.json.JSONObject.NULL).put("step",step).put("ms",ms).put("ok",ok),false); } catch (org.json.JSONException ignored) {}
     }
 
+    private void missedTouch(long delay,int x,int y,KeyTarget target){
+        ImeTelemetry telemetry=ImeTelemetry.get();if(telemetry==null)return;
+        Object tag=target==null?null:target.key.getTag();String key=tag instanceof String&&((String)tag).startsWith("key:")?((String)tag).substring(4):"unknown";
+        try{telemetry.record("key_outcome","bopomofo",ImeTelemetry.missedTouchFields(delay,x,y,key),false);}
+        catch(org.json.JSONException error){android.util.Log.w("KeyboardTouchLayout","Missed touch metadata unavailable",error);}
+    }
+
     @Override public boolean dispatchTouchEvent(MotionEvent event) {
         // A moving IME window can leave MotionEvent local coordinates one origin
         // behind. Rebase physical screen coordinates at delivery, then lock DOWN.
@@ -182,6 +190,7 @@ public class KeyboardTouchLayout extends LinearLayout {
         }
         if (!routingKeys) {
             boolean consumed=super.dispatchTouchEvent(event);
+            if(!consumed&&action==MotionEvent.ACTION_DOWN)missedTouch(Math.max(0L,android.os.SystemClock.uptimeMillis()-event.getEventTime()),Math.round(currentX),Math.round(currentY),nearestKey(currentX,currentY,event.getDownTime(),false));
             if(action==0||action==1||action==3)diagnostic(this,action==0?"route_down":action==1?"route_up":"route_cancel",consumed,false);
             return consumed;
         }
