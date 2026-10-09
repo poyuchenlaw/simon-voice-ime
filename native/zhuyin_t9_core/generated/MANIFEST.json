@@ -1,0 +1,19 @@
+{
+  "source": "app/src/phone/assets/zhuyin_initials.db",
+  "source_sha256": "2e74b4a7274bb3af75eaf7a71eae8c0558a762ce585472d84d5d3bb46596fa26",
+  "rime_table_sha256": "c45ab3b881be790240e59a9335f9346e227c9eecc38ee0fc142543e9b95c46ca",
+  "rime_extraction_sha256": "e5fd87c9002c4c308fcb1085b00dcd7dac5e746670935513c1508d84302c67a9",
+  "extractor_sha256": "5afb6807e0ef1a1c44f0074993a90cb25d951330a1ef32ef6296e04f35a9031f",
+  "generator_version": 3,
+  "generator_sha256": "94cebbc4d947f25d5cdb7da0af7fa9a751fa7ce58dbae8a72234e1ce21a2fe0e",
+  "syllables": 415,
+  "codes": 48,
+  "characters": 18919,
+  "excluded_rows": 5812,
+  "artifacts": {
+    "char_readings.bin": "8802ddb32551be95e6edc79e27eff7e9262ac270a7a735ce388f18afe2251c07",
+    "code_to_syllables.tsv": "da537522925876ea70ed8c1dc055cdad1c144e1f67226dc25a321bedbbac820e",
+    "excluded_readings.tsv": "c979eb918ed620583a2120c7b50d7f5d3015dbcce8097f00ab1781ab16983448",
+    "legal_syllables.tsv": "84d66be47c8c79b0b1444a9172a30971d75fb0024bded1b288825d9f9abf9a2b"
+  }
+}

@@ -1,0 +1,4 @@
+{
+ global: Java_com_simon_voiceime_t9_T9Core_*;
+ local: *;
+};

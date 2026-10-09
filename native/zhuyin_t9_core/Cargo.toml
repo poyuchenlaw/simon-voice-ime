@@ -1,0 +1,15 @@
+[package]
+name = "zhuyin_t9_core"
+version = "6.82.0"
+edition = "2021"
+build = "build.rs"
+[lib]
+crate-type = ["rlib", "staticlib"]
+[[bin]]
+name = "t9core"
+path = "src/main.rs"
+[profile.release]
+opt-level = "s"
+lto = true
+panic = "abort"
+strip = true

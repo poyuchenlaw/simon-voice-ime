@@ -2,8 +2,8 @@ plugins {
     id 'com.android.application'
 }
 
-def phoneVersionCodeValue = rootProject.findProperty("phoneVersionCode")?.toString() ?: "117"
-def phoneVersionNameValue = rootProject.findProperty("phoneVersionName")?.toString() ?: "6.81"
+def phoneVersionCodeValue = rootProject.findProperty("phoneVersionCode")?.toString() ?: "118"
+def phoneVersionNameValue = rootProject.findProperty("phoneVersionName")?.toString() ?: "6.82"
 
 android {
     namespace 'com.simon.voiceime'
@@ -84,14 +84,21 @@ def buildZhuyinIndex = tasks.register("buildPhoneZhuyinIndex", Exec) {
     commandLine "/home/simon/whisper-to-input-proxy/.g2pw_venv/bin/python",
             "scripts/build_v633_zhuyin_index.py"
 }
-def buildPhoneRime = tasks.register("buildPhoneRime", Exec) {
+def buildT9RimeSchema = tasks.register("buildT9RimeSchema", Exec) {
     workingDir rootProject.projectDir
-    inputs.files(file("src/phone/cpp/rime_jni.cpp"), fileTree("src/phone/cpp/rime_headers"), file("src/phone/cpp/rime_regroup.h"), file("../evidence/rime_spike/android-prefix/lib/librime.so"),
+    inputs.files(file("src/phone/assets/rime/bopomofo_t9_simon.schema.yaml"),file("src/phone/assets/rime/grammar.yaml"),file("../scripts/build_t9_rime.sh"))
+    outputs.files(file("src/phone/assets/rime/build/bopomofo_t9_simon.schema.yaml"),file("src/phone/assets/rime/build/bopomofo_t9_simon.prism.bin"))
+    commandLine "bash", "scripts/build_t9_rime.sh"
+}
+def buildPhoneRime = tasks.register("buildPhoneRime", Exec) {
+    dependsOn buildT9RimeSchema
+    workingDir rootProject.projectDir
+    inputs.files(file("src/phone/cpp/rime_jni.cpp"), fileTree("src/phone/cpp/rime_headers"), file("src/phone/cpp/rime_regroup.h"), file("src/phone/jniLibs/arm64-v8a/librime.so"),
             file("../scripts/build_phone_rime_jni.sh"),
             file("../scripts/check_phone_rime_assets.py"), fileTree("src/phone/assets/rime") { include "*.schema.yaml", "*.yaml", "*.gram" })
     outputs.files(file("src/phone/jniLibs/arm64-v8a/librime.so"), file("src/phone/jniLibs/arm64-v8a/librime_jni.so"),
             file("src/phone/assets/rime/build/bopomofo_express.schema.yaml"))
-    commandLine "bash", "-c", "python3 scripts/check_phone_rime_assets.py && bash scripts/build_phone_rime_jni.sh"
+    commandLine "bash", "-c", "python3 scripts/check_phone_rime_assets.py --compiled-only && bash scripts/build_phone_rime_jni.sh"
 }
 def ndkRoot = System.getenv("ANDROID_NDK_HOME") ?: "/home/simon/android-sdk/ndk/26.3.11579264"
 def buildPhoneChewingJni = tasks.register("buildPhoneChewingJni", Exec) {
@@ -112,4 +119,49 @@ dependencies {
     implementation 'com.squareup.okhttp3:okhttp:4.12.0'
     implementation 'org.json:json:20231013'
     implementation 'androidx.recyclerview:recyclerview:1.3.2'
+}
+
+def buildPhoneT9 = tasks.register("buildPhoneT9", Exec) {
+    workingDir rootProject.projectDir
+    inputs.files(fileTree("../native/zhuyin_t9_core") { exclude "target/**" },file("../scripts/build_t9_core.sh"),file("src/phone/assets/zhuyin_initials.db"),file("src/phone/assets/rime/build/terra_pinyin.table.bin"))
+    outputs.files(file("src/phone/jniLibs/arm64-v8a/libzhuyin_t9_core.so"),file("src/phone/jniLibs/x86_64/libzhuyin_t9_core.so"))
+    commandLine "bash", "scripts/build_t9_core.sh"
+}
+tasks.matching { it.name in ["prePhoneDebugBuild", "prePhoneReleaseBuild"] }.configureEach { dependsOn buildPhoneT9 }
+
+// Verify the delivered ZIP, including a second comparison to the T9 compiler output.
+['Debug', 'Release'].each { kind ->
+    def variant = "phone${kind}"
+    def verifyNative = tasks.register("verifyPhone${kind}NativeLibraries") {
+        dependsOn "packagePhone${kind}"
+        doLast {
+            def apk = file("build/outputs/apk/phone/${kind.toLowerCase()}/app-phone-${kind.toLowerCase()}.apk")
+            def built = file("build/intermediates/stripped_native_libs/${variant}/out/lib")
+            def sha = { byte[] bytes -> java.security.MessageDigest.getInstance('SHA-256').digest(bytes).encodeHex().toString() }
+            def libraries = [:]
+            new java.util.zip.ZipFile(apk).withCloseable { zip ->
+                def entries = zip.entries().findAll { it.name.startsWith('lib/') && it.name.endsWith('.so') }
+                if (entries.empty) throw new GradleException("No native libraries in ${apk}")
+                def expected = fileTree(built).matching { include 'arm64-v8a/*.so' }.files.collect { 'lib/' + built.toPath().relativize(it.toPath()).toString() }.toSet()
+                if (entries.collect { it.name }.toSet() != expected) throw new GradleException('Native library inventory mismatch')
+                entries.each { entry ->
+                    if (!entry.name.startsWith('lib/arm64-v8a/')) throw new GradleException("Unexpected phone ABI: ${entry.name}")
+                    def actual = zip.getInputStream(entry).withCloseable { sha(it.bytes) }
+                    def source = new File(built, entry.name.substring(4))
+                    if (actual != sha(source.bytes)) throw new GradleException("Native library mismatch: ${entry.name}")
+                    if (entry.name.endsWith('/libzhuyin_t9_core.so')) {
+                        source = file('../native/zhuyin_t9_core/target/aarch64-linux-android/release/libzhuyin_t9_core.so')
+                        if (actual != sha(source.bytes)) throw new GradleException("Native library mismatch: ${entry.name} vs fresh compiler output")
+                    }
+                    libraries[entry.name] = [sha256: actual, source: source.toString()]
+                }
+            }
+            def receipt = file("build/reports/native-libraries/${variant}.json")
+            receipt.parentFile.mkdirs()
+            receipt.text = groovy.json.JsonOutput.prettyPrint(groovy.json.JsonOutput.toJson([apk: apk.toString(), apk_sha256: sha(apk.bytes), libraries: libraries])) + '\n'
+            logger.lifecycle("Verified ${libraries.size()} packaged native libraries: ${apk}")
+        }
+    }
+    tasks.matching { it.name == "packagePhone${kind}" }.configureEach { finalizedBy verifyNative }
+    tasks.matching { it.name == "assemblePhone${kind}" }.configureEach { dependsOn verifyNative }
 }

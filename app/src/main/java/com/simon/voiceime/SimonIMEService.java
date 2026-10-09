@@ -268,6 +268,10 @@ public class SimonIMEService extends InputMethodService {
     /** Blocks telemetry and local learning for password/no-personalized-learning editors. */
     private boolean protectedInputField = false;
     private AiSentencePhone sentencePhone;
+    private T9Page t9Page;
+    private boolean t9Selected;
+    private boolean t9Configuring;
+    private String t9ConfigurationField="";
     private String sentenceInstalledCommit;
     private String touchSessionId = java.util.UUID.randomUUID().toString();
     private BopomofoKeyTouch pendingBopomofoKeyTouch;
@@ -794,7 +798,7 @@ public class SimonIMEService extends InputMethodService {
         try { sentencePhone=new AiSentencePhone(this,mainHandler,new AiSentencePhone.Host(){
             public ZhuyinInputController controller(){return zhuyinInput;}
             public InputConnection ownedConnection(){InputConnection ic=getCurrentInputConnection();return ic!=null&&ic==zhuyinComposingConnection?ic:null;}
-            public boolean allowed(){EditorInfo info=getCurrentInputEditorInfo();return !protectedInputField&&info!=null&&info.inputType!=0&&info.packageName!=null&&currentKeyboardMode==KeyboardMode.BOPOMOFO;}
+            public boolean allowed(){EditorInfo info=getCurrentInputEditorInfo();return !protectedInputField&&info!=null&&info.inputType!=0&&info.packageName!=null&&currentKeyboardMode==KeyboardMode.BOPOMOFO&&!t9Selected;}
             public void replace(ZhuyinInputController controller){controller.inheritCommitTelemetry(zhuyinInput);zhuyinInput=controller;applyZhuyinState(controller.state());}
             public void render(){renderSentenceOptions();}
             public void commitSuggestion(){applyZhuyinState(zhuyinInput.press("enter"));}
@@ -852,6 +856,9 @@ public class SimonIMEService extends InputMethodService {
             discardRetainedTextComposition();
         else if(retained&&!protectedInputField)retainedTextNeedsReclaim=true;
         retainedTextField=field;
+        boolean t9ConfigurationRestart=t9Configuring||field.equals(t9ConfigurationField);
+        if(!restarting&&!t9Configuring)t9ConfigurationField="";
+        if(t9Page!=null&&(!restarting&&!t9ConfigurationRestart||protectedInputField||wasProtected))t9Page.clear();
         if(sentencePhone!=null)sentencePhone.changed(true);
         sentenceInstalledCommit=null;
         if(protectedInputField&&!wasProtected&&isRecording){
@@ -1039,6 +1046,8 @@ public class SimonIMEService extends InputMethodService {
 
         // 設定注音、英文鍵盤和數字鍵盤的按鍵處理
         setupTypingKeyboard(bopomofoKeyboard);
+        t9Selected=getSharedPreferences("simon_ime_prefs",MODE_PRIVATE).getBoolean("t9_mode",false);
+        if(t9Selected)ensureT9Page();
         setupTypingKeyboard(englishKeyboard);
         setupTypingKeyboard(numbersKeyboard);
 
@@ -4285,18 +4294,45 @@ public class SimonIMEService extends InputMethodService {
     private void recordCommitEvent(String page,String text,String first,String ai,boolean corrected,boolean aiTaken){if(imeTelemetry==null)return;try{imeTelemetry.record("commit",page,new JSONObject().put("text",text).put("engine_top1",first==null?"":first).put("ai_suggestion",ai==null?"":ai).put("corrected",corrected).put("ai_taken",aiTaken).put("via","bopomofo".equals(page)?zhuyinCommitVia:"other").put("committed_codepoints",text.codePointCount(0,text.length())).put("ai_shown",sentencePhone!=null&&sentencePhone.correctionShown()).put("reverted_spans",sentencePhone==null?0:sentencePhone.revertedSpans()).put("candidate_taps",textCandidateTaps),protectedInputField);}catch(Exception ignored){}}
     private void recordCorrectionEvent(String page,String segment,String from,String to,String via){if(imeTelemetry==null)return;try{imeTelemetry.record("correction",page,new JSONObject().put("segment",segment).put("from",from).put("to",to).put("via",via),protectedInputField);}catch(Exception ignored){}}
 
+    private void ensureT9Page(){
+        if(t9Page==null&&!isWatchService())try{t9Page=(T9Page)Class.forName("com.simon.voiceime.T9Keyboard").getConstructor(SimonIMEService.class).newInstance(this);}
+        catch(Throwable error){Log.e(TAG,"T9 unavailable",error);t9Selected=false;updateStatus("九宮格載入失敗，可使用注音");}
+        if(t9Page!=null&&bopomofoKeyboard!=null){View view=t9Page.view();ViewGroup owner=(ViewGroup)bopomofoKeyboard.getParent();if(view.getParent()!=owner){if(view.getParent() instanceof ViewGroup)((ViewGroup)view.getParent()).removeView(view);owner.addView(view,owner.indexOfChild(bopomofoKeyboard)+1);}view.setVisibility(currentKeyboardMode==KeyboardMode.BOPOMOFO&&t9Selected?View.VISIBLE:View.GONE);}
+    }
+    private void toggleT9(){
+        clearBopomofoBuffer();if(t9Page!=null)t9Page.clear();
+        t9Selected=!t9Selected;if(t9Selected)ensureT9Page();
+        getSharedPreferences("simon_ime_prefs",MODE_PRIVATE).edit().putBoolean("t9_mode",t9Selected).apply();
+        switchKeyboard(KeyboardMode.BOPOMOFO);
+        if(imeTelemetry!=null)try{imeTelemetry.record("t9_toggle","t9",new JSONObject().put("enabled",t9Selected),protectedInputField);}catch(org.json.JSONException error){Log.w(TAG,"T9 toggle telemetry",error);}
+    }
+    java.util.List<String> t9Vocabulary(){return zhuyinWordIndex==null?java.util.Collections.emptyList():zhuyinWordIndex.installedForms();}
+    boolean t9Allowed(){return !protectedInputField&&t9Selected&&currentKeyboardMode==KeyboardMode.BOPOMOFO&&getCurrentInputConnection()!=null&&isInputViewShown();}
+    void t9Commit(String text){InputConnection ic=getCurrentInputConnection();if(ic!=null&&!text.isEmpty()){commitTextProgrammatically(ic,text);ic.finishComposingText();}}
+    void t9Function(String key){if("toT9".equals(key))toggleT9();else onTypingKeyPressed(key);}
+    String t9Context(){if(!t9Allowed())return "";CharSequence text=getCurrentInputConnection().getTextBeforeCursor(100,0);if(text==null)return "";String s=text.toString().replace('\n',' ').replace('\r',' ');int n=s.codePointCount(0,s.length());return n<=50?s:s.substring(s.offsetByCodePoints(0,n-50));}
+    @Override public void onConfigurationChanged(android.content.res.Configuration next){
+        t9ConfigurationField=textFieldIdentity(getCurrentInputEditorInfo());
+        if(t9Page!=null)t9Page.reconfigure();t9Configuring=true;
+        try{super.onConfigurationChanged(next);}finally{t9Configuring=false;}
+        ensureT9Page();if(t9Page!=null)t9Page.reconfigure();
+    }
+
     private void switchKeyboard(KeyboardMode mode) {
         // v6.23: clear English buffer when leaving English keyboard
         if (currentKeyboardMode == KeyboardMode.ENGLISH && mode != KeyboardMode.ENGLISH) {
             clearEnWordBuffer();
         }
         if (currentKeyboardMode == KeyboardMode.BOPOMOFO && mode != KeyboardMode.BOPOMOFO) {
+            if(t9Page!=null)t9Page.clear();
             clearBopomofoBuffer();
         }
         currentKeyboardMode = mode;
         updateCompleteTypingHint(false);
         voiceKeyboard.setVisibility(mode == KeyboardMode.VOICE ? View.VISIBLE : View.GONE);
-        bopomofoKeyboard.setVisibility(mode == KeyboardMode.BOPOMOFO ? View.VISIBLE : View.GONE);
+        bopomofoKeyboard.setVisibility(mode == KeyboardMode.BOPOMOFO && !t9Selected ? View.VISIBLE : View.GONE);
+        if(t9Selected)ensureT9Page();
+        if(t9Page!=null)t9Page.view().setVisibility(mode==KeyboardMode.BOPOMOFO&&t9Selected?View.VISIBLE:View.GONE);
         englishKeyboard.setVisibility(mode == KeyboardMode.ENGLISH ? View.VISIBLE : View.GONE);
         numbersKeyboard.setVisibility(mode == KeyboardMode.NUMBERS ? View.VISIBLE : View.GONE);
         // Close any open panel when switching keyboards
@@ -4399,6 +4435,8 @@ public class SimonIMEService extends InputMethodService {
         if (ic == null) return;
 
         switch (key) {
+            case "toT9":
+                toggleT9();return;
             case "shift":
                 toggleShift();
                 break;
@@ -6593,6 +6631,7 @@ public class SimonIMEService extends InputMethodService {
         invalidateLineGhostwriter();
         flushPendingVoiceAudio(false);
         dismissSymbolPopup();
+        if(t9Page!=null)t9Page.reconfigure();
         if(textLayoutSelected()&&zhuyinInput!=null)rememberTextComposition(getCurrentInputConnection(),zhuyinInput.textPreview());
         if(textLayoutSelected()&&!protectedInputField&&zhuyinInput!=null&&!zhuyinInput.textPreview().isEmpty())retainedTextNeedsReclaim=true;
         clearRankingContext();
@@ -6619,6 +6658,7 @@ public class SimonIMEService extends InputMethodService {
         clearRankingContext();
         cancelPendingTextCandidates();lastTextKeyUptime=-1;
         if(layoutDiagnostics!=null){layoutDiagnostics.close();layoutDiagnostics=null;}
+        if(t9Page!=null){t9Page.close();t9Page=null;}
         if (sentencePhone != null) { sentencePhone.close(); sentencePhone = null; }
         if (zhuyinInput != null) { zhuyinInput.close(); zhuyinInput = null; }
         if (zhuyinWordIndex != null) { zhuyinWordIndex.close(); zhuyinWordIndex = null; }

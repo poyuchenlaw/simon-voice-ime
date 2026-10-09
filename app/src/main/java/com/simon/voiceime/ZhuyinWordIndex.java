@@ -111,6 +111,13 @@ final class ZhuyinWordIndex {
         }
         return false;
     }
+    synchronized List<String> installedForms() {
+        java.util.LinkedHashSet<String> forms = new java.util.LinkedHashSet<>();
+        for (Entry e : personalEntries.values()) forms.add(e.word);
+        for (Entry e : remoteEntries.values()) forms.add(e.word);
+        for (Entry e : entries) if (e.personal) forms.add(e.word);
+        return new ArrayList<>(forms);
+    }
     boolean hasPrefix(String key) {
         for (Entry e : personalEntries.values()) if (e.key.startsWith(key)) return true;
         for (Entry e : remoteEntries.values()) if (e.key.startsWith(key)) return true;

@@ -57,7 +57,7 @@ public class Delete681AndroidTest extends TapCursor677AndroidTest {
  }
  public void testNullExtractDelete()throws Exception{special("NullExtractActivity","null_extract_input");}
  public void testWebViewDelete()throws Exception{
-  begin();inputName="web_editor";shell("am start -S -W -n com.ime.sandbox.testpad/.WebActivity");await("web_view");await("ㄗ");bind();awaitStableWindow();
+  begin();inputName="web_editor";shell("am start -S -W -n com.ime.sandbox.testpad/.WebActivity");long readyDeadline=SystemClock.uptimeMillis()+30000;while(SystemClock.uptimeMillis()<readyDeadline){String state=String.valueOf(await("web_state").getText());if(state.startsWith("{")&&new JSONObject(state).has("sx"))break;Thread.sleep(50);}await("ㄗ");bind();awaitStableWindow();
   JSONObject initial=new JSONObject(await("web_state").getText().toString());int x=initial.getInt("sx"),y=initial.getInt("sy");tap(new Rect(x,y,x+1,y+1));Thread.sleep(600);
   JSONObject before=new JSONObject(await("web_state").getText().toString());assertEquals(9,before.getInt("start"));delete("web");
   JSONObject after=new JSONObject(await("web_state").getText().toString());assertEquals("我們明天十點在法見面",after.getString("text"));

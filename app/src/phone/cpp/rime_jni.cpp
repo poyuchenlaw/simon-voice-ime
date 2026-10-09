@@ -792,3 +792,18 @@ extern "C" JNIEXPORT jobjectArray JNICALL Java_com_simon_voiceime_RimeZhuyinNati
     auto keys=env->NewStringUTF(glyph_text(bestKeys).c_str()),text=env->NewStringUTF(bestText.c_str());
     env->SetObjectArrayElement(out,0,keys);env->SetObjectArrayElement(out,1,text);env->DeleteLocalRef(keys);env->DeleteLocalRef(text);return out;
 }
+// T9 uses the same Rime process, assets, octagram and private vocabulary lifecycle.
+extern "C" JNIEXPORT jlong JNICALL Java_com_simon_voiceime_T9Local_nativeCreate(JNIEnv* env,jclass,jstring shared,jstring user){
+ std::lock_guard<std::mutex> lock(g_mutex);RimeTraits t{};RIME_STRUCT_INIT(RimeTraits,t);
+ std::string sh=jstr(env,shared),us=jstr(env,user);t.shared_data_dir=sh.c_str();t.user_data_dir=us.c_str();t.app_name="rime.simon.voiceime";t.min_log_level=2;t.log_dir="";
+ const RimeApi*api=rime_get_api();if(!api)return 0;if(g_users++==0){api->setup(&t);api->initialize(&t);}auto id=api->create_session();
+ if(!id||!api->select_schema(id,"bopomofo_t9_simon")){if(id)api->destroy_session(id);if(--g_users==0)api->finalize();return 0;}return (jlong)(intptr_t)new Session{api,id,{}, {}};
+}
+extern "C" JNIEXPORT void JNICALL Java_com_simon_voiceime_T9Local_nativeDestroy(JNIEnv*e,jclass c,jlong h){Java_com_simon_voiceime_RimeZhuyinNative_nativeDestroy(e,c,h);}
+extern "C" JNIEXPORT jbyteArray JNICALL Java_com_simon_voiceime_T9Local_nativeQuery(JNIEnv*e,jclass,jlong h,jstring keys,jstring left){
+ std::lock_guard<std::mutex> lock(g_mutex);Session*s=state(h);if(!s)return bytes(e,"[]");s->api->clear_composition(s->id);auto*ctx=context(s->id);if(ctx){ctx->commit_history().clear();auto previous=jstr(e,left);if(!previous.empty())ctx->commit_history().Push(rime::CommitRecord("text",previous));}auto seq=jstr(e,keys);for(unsigned char c:seq)s->api->process_key(s->id,c==' '?'\'':c,0);
+ std::string out="[";RimeCandidateListIterator it{};int n=0;if(s->api->candidate_list_begin(s->id,&it)){while(n<20&&s->api->candidate_list_next(&it)){if(it.candidate.text){if(n++)out+=',';out+=jsonq(it.candidate.text);}}s->api->candidate_list_end(&it);}out+="]";return bytes(e,out);
+}
+extern "C" JNIEXPORT void JNICALL Java_com_simon_voiceime_T9Local_nativeCommit(JNIEnv*,jclass,jlong h,jint index){
+ std::lock_guard<std::mutex> lock(g_mutex);Session*s=state(h);if(!s)return;s->api->select_candidate(s->id,index);RIME_STRUCT(RimeCommit,c);if(s->api->get_commit(s->id,&c))s->api->free_commit(&c);
+}

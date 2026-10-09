@@ -23,3 +23,7 @@ app/src/main/assets/sensevoice/
 # OS
 .DS_Store
 Thumbs.db
+
+# Local T9 build/cache, never public inputs
+out/
+native/**/target/
