@@ -226,6 +226,7 @@ final class ZhuyinInputController {
         return choices;
     }
     List<TextChoice> textChoices(){
+        if(previewBoundary>=0&&textCaretChoicesDismissed)return Collections.emptyList();
         String text=previewText(),keys=sentenceKeys();int count=text.codePointCount(0,text.length());
         int boundary=previewBoundary>=0?Math.max(1,previewBoundary):count;
         boolean wordFocus=previewBoundary>=0;
@@ -308,6 +309,7 @@ final class ZhuyinInputController {
     private List<String> fixedReading=Collections.emptyList(),retypeSourceReading=Collections.emptyList();
     private final List<int[]> fixedWordRanges=new ArrayList<>();
     private boolean previewFocused;
+    private boolean textCaretChoicesDismissed;
     private int keyCaret=-1;
     private String symbolEditKeys="",symbolEditText="";
     private List<String> focusedOptionKinds=Collections.emptyList();
@@ -374,7 +376,7 @@ final class ZhuyinInputController {
             return String.join("",fixedReading.subList(0,previewBoundary))+"│"+String.join("",fixedReading.subList(previewBoundary,fixedReading.size()));
         return String.join("",fixedReading)+engine.phoneticText();
     }
-    State moveCursorToPreviewBoundary(int boundary) { symbolEditKeys=symbolEditText="";keyCaret=-1;engine.moveCursorToEnd();
+    State moveCursorToPreviewBoundary(int boundary) { textCaretChoicesDismissed=false;symbolEditKeys=symbolEditText="";keyCaret=-1;engine.moveCursorToEnd();
         if(retype!=null){if(textInsertion&&!retype.state().candidates.isEmpty())chooseCandidate(0);else cancelSecondPass();}
         if(!fixedComposition.isEmpty()){
             int count=fixedComposition.codePointCount(0,fixedComposition.length());
@@ -440,7 +442,7 @@ final class ZhuyinInputController {
 
     private State deleteAtTextCaret() {
         String text=previewText();int boundary=previewBoundary;
-        if(boundary<=0)return snapshot(true,false);
+        if(boundary<=0){textCaretChoicesDismissed=true;return snapshot(true,false);}
         List<String> readings=new ArrayList<>(engine.phoneticSyllables());
         int count=text.codePointCount(0,text.length());
         if(readings.size()!=count)return snapshot(false,false);
@@ -448,7 +450,8 @@ final class ZhuyinInputController {
         readings.remove(boundary-1);
         if(!engine.prepareSentence(String.join("",readings).replace("ˉ"," "),text.substring(0,from)+text.substring(to)))return snapshot(false,false);
         rawZhuyinKeys.setLength(0);abbreviationKeys.setLength(0);mixedChoices=Collections.emptyList();
-        return moveCursorToPreviewBoundary(boundary-1);
+        State after=moveCursorToPreviewBoundary(boundary-1);
+        textCaretChoicesDismissed=true;return after;
     }
     private boolean beginTextInsertion() {
         if(retypeEngineFactory==null)return false;
@@ -465,6 +468,7 @@ final class ZhuyinInputController {
     }
     private State pressInternal(String key) {
         breakPickRun();
+        if(!"backspace".equals(key))textCaretChoicesDismissed=false;
         // Enter owns exactly the presentation, including a provisional glyph.
         // Native raw/unparsed suffixes remain internal and cannot escape here.
         if(textLayout&&"enter".equals(key)&&!textPreview().isEmpty()){

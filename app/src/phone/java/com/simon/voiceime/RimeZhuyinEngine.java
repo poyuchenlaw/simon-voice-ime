@@ -200,7 +200,6 @@ final class RimeZhuyinEngine implements ZhuyinInputController.Engine, AutoClosea
     // Validate only the changed span, then reuse the existing native restore path.
     // Build off to the side so a refused edit preserves the old sentence/caret.
     private Boolean prepareLongTextEdit(String keys,String text){
-        if(parts.size()!=1)return null;
         String previous=previewText();int oldCount=count(previous),newCount=count(text);
         // Preserve validated unchanged text/readings for short edits too.
         // A full decoder rebuild can reject even a 20-character deletion.
@@ -225,7 +224,10 @@ final class RimeZhuyinEngine implements ZhuyinInputController.Engine, AutoClosea
         if(prefix==0&&suffix==0)return null;
         String middleText=text.substring(text.offsetByCodePoints(0,prefix),text.offsetByCodePoints(0,newCount-suffix));
         String middleKeys=keys.substring(keyStart,keyEnd);
+        // Multipart pure deletions reuse the established mapping on both sides.
+        if(parts.size()!=1&&(newCount>=oldCount||!middleKeys.isEmpty()||!middleText.isEmpty()))return null;
         SingleRimeZhuyinEngine mapped=fresh();boolean installed=false;
+        List<Part> rebuilt=new ArrayList<>();rebuilt.add(new Part(mapped));
         try{
             List<String> readings=new ArrayList<>(normalized.subList(0,prefix));
             if(!middleKeys.isEmpty()){
@@ -234,11 +236,23 @@ final class RimeZhuyinEngine implements ZhuyinInputController.Engine, AutoClosea
             }else if(!middleText.isEmpty())return false;
             readings.addAll(normalized.subList(oldCount-suffix,oldCount));
             if(readings.size()!=newCount||!String.join("",readings).equals(keys))return false;
-            mapped.nativeEngine.restore(readings,text);
-            if(!mapped.previewText().equals(text)||!mapped.sentenceKeys().replace("ˉ"," ").equals(keys))return false;
-            for(Part part:parts)part.engine.close();parts.clear();parts.add(new Part(mapped));active=0;caret=-1;installed=true;
+            int start=0;
+            for(int i=0;i<=readings.size();i++){
+                String reading=i<readings.size()?readings.get(i):"";
+                boolean literal=count(reading)==1&&!" ".equals(reading)&&ZhuyinKeyMap.physicalKey(reading)<0;
+                if(i<readings.size()&&!literal)continue;
+                mapped.nativeEngine.restore(readings.subList(start,i),text.substring(text.offsetByCodePoints(0,start),text.offsetByCodePoints(0,i)));
+                if(literal){
+                    if(!reading.equals(text.substring(text.offsetByCodePoints(0,i),text.offsetByCodePoints(0,i+1))))return false;
+                    rebuilt.add(new Part(reading));mapped=fresh();rebuilt.add(new Part(mapped));start=i+1;
+                }
+            }
+            StringBuilder restoredText=new StringBuilder(),restoredKeys=new StringBuilder();
+            for(Part part:rebuilt){restoredText.append(part.text());restoredKeys.append(part.keys());}
+            if(!restoredText.toString().equals(text)||!restoredKeys.toString().replace("ˉ"," ").equals(keys))return false;
+            for(Part part:parts)if(part.engine!=null)part.engine.close();parts.clear();parts.addAll(rebuilt);active=parts.size()-1;caret=-1;installed=true;
             return true;
-        }finally{if(!installed)mapped.close();}
+        }finally{if(!installed)for(Part part:rebuilt)if(part.engine!=null)part.engine.close();}
     }
     // JNI validates at most 64 glyphs / 256 physical keys per call. Validate
     // complete syllable chunks independently, then restore the verified mapping
