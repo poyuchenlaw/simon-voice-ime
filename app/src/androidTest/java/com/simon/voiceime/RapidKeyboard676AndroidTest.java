@@ -54,7 +54,7 @@ public class RapidKeyboard676AndroidTest extends TestCase {
  }
  static boolean emptyEditorReady(AccessibilityNodeInfo input){
   Bundle actual=input.getExtras();
-  return input.isFocused()&&actual.getInt("fixture_text_length",-1)==0&&actual.getInt("fixture_selection_start",-1)==0&&actual.getInt("fixture_selection_end",-1)==0;
+  return input.isFocused()&&actual.getString("fixture_text", "missing").isEmpty()&&actual.getInt("fixture_text_length",-1)==0&&actual.getInt("fixture_selection_start",-1)==0&&actual.getInt("fixture_selection_end",-1)==0;
  }
  void awaitEmptyEditor()throws Exception{
   long deadline=SystemClock.uptimeMillis()+5000;AccessibilityNodeInfo input;

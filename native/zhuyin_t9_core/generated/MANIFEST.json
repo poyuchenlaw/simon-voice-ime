@@ -1,6 +1,6 @@
 {
   "source": "app/src/phone/assets/zhuyin_initials.db",
-  "source_sha256": "2e74b4a7274bb3af75eaf7a71eae8c0558a762ce585472d84d5d3bb46596fa26",
+  "source_sha256": "0f3cb5e9522908ce561f0f1f64b97f4dfcb239c34a92159ed58152cf79e819ed",
   "rime_table_sha256": "c45ab3b881be790240e59a9335f9346e227c9eecc38ee0fc142543e9b95c46ca",
   "rime_extraction_sha256": "e5fd87c9002c4c308fcb1085b00dcd7dac5e746670935513c1508d84302c67a9",
   "extractor_sha256": "5afb6807e0ef1a1c44f0074993a90cb25d951330a1ef32ef6296e04f35a9031f",

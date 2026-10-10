@@ -724,9 +724,9 @@ extern "C" JNIEXPORT void JNICALL Java_com_simon_voiceime_RimeZhuyinNative_nativ
     auto* s=state(h);auto* ctx=s?context(s->id):nullptr;if(!ctx)return;
     auto raw=jstr(env,keys),shown=jstr(env,text);int n=env->GetArrayLength(stops);std::vector<jint> boundaries(n);env->GetIntArrayRegion(stops,0,n,boundaries.data());
     if(n!=cp_count(shown)+1||boundaries.empty()||boundaries.front()!=0||boundaries.back()!=static_cast<int>(raw.size()))return;
-    ctx->Clear();ctx->set_input(raw);rime::Composition fixed;fixed.Reset(raw);
+    ctx->Clear();rime::Composition fixed;fixed.Reset(raw);
     for(int i=1;i<n;i++)pin_aligned_text(fixed,boundaries[i-1],boundaries[i],cp_slice(shown,i-1,i),raw,{static_cast<size_t>(boundaries[i-1]),static_cast<size_t>(boundaries[i])});
-    fixed.Forward();ctx->set_composition(std::move(fixed));ctx->set_caret_pos(raw.size());
+    fixed.Forward();ctx->set_composition(std::move(fixed));ctx->set_input(raw);
     s->regroup.input=raw;s->regroup.stops.assign(boundaries.begin(),boundaries.end());s->regroup.cache.clear();
 }
 

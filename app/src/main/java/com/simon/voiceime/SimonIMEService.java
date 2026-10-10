@@ -5073,13 +5073,13 @@ public class SimonIMEService extends InputMethodService {
                     if(touchShadow!=null)touchShadow.invalidate();
                     if(sentencePhone!=null)sentencePhone.userTouched();
                     cursorInteractionKind="char_tap";cursorInteractionVia="text_caret";
-                    applyZhuyinState(zhuyinInput.moveCursorToPreviewBoundary(nearest));
+                    applyTextPreviewBoundary(nearest);
                     recordCursorEvent("char_tap",zhuyinInput.wordFocused()?"open":"cancel","",-1,0,0);
                 }else if(boundary&&nearest!=lastBoundary){
                     lastBoundary=nearest;if(touchShadow!=null)touchShadow.invalidate();
                     if(sentencePhone!=null)sentencePhone.userTouched();
                     cursorInteractionKind=dragging?"drag":"boundary";cursorInteractionVia="text_caret";
-                    applyZhuyinState(zhuyinInput.moveCursorToPreviewBoundary(nearest));
+                    applyTextPreviewBoundary(nearest);
                     recordCursorEvent(cursorInteractionKind,"open","",-1,0,0);
                 }
                 if(action==MotionEvent.ACTION_UP)v.getParent().requestDisallowInterceptTouchEvent(false);
@@ -5088,6 +5088,12 @@ public class SimonIMEService extends InputMethodService {
         });
         }
         revealZhuyinPreviewAfterLayout(boStreamPreview,false);
+    }
+
+    private void applyTextPreviewBoundary(int boundary){
+        // Batched MOVE events update the caret now and query candidates once after the gesture.
+        textCursorRender=true;
+        try{applyZhuyinState(zhuyinInput.moveCursorToPreviewBoundary(boundary));}finally{textCursorRender=false;}
     }
 
     private void installKeyCaretTouch(TextView row) {
@@ -5168,7 +5174,7 @@ public class SimonIMEService extends InputMethodService {
         if(pendingTextCandidates!=null&&mainHandler!=null)mainHandler.removeCallbacks(pendingTextCandidates);
         pendingTextCandidates=null;
     }
-    private boolean textCandidateRefreshRunning,textKeyRender;
+    private boolean textCandidateRefreshRunning,textKeyRender,textCandidateSelectionRender,textCursorRender;
     private String rankingBefore="",rankingAfter="";
     private long rankingField=-1,rankingSelection=0;
     private Runnable pendingRankingContext;
@@ -5387,7 +5393,10 @@ public class SimonIMEService extends InputMethodService {
                     candidateReplacementStage="local_selection";
                     textCandidateTaps++;if(sentencePhone!=null)sentencePhone.userSelected();
                     ZhuyinInputController.State state=zhuyinInput.chooseTextCandidate(selected);accepted=state.accepted;
-                    candidateReplacementReason=accepted?"":"local_candidate_rejected";applyZhuyinState(state);
+                    candidateReplacementReason=accepted?"":"local_candidate_rejected";
+                    // Selection already queries Rime; refresh through the existing debounce.
+                    textCandidateSelectionRender=accepted;
+                    try{applyZhuyinState(state);}finally{textCandidateSelectionRender=false;}
                     candidateReplacementStage="local_applied";
                 }finally{recordCandidateTouch(item,times,item.bindingChanged?item.touchLabel:selected.label,"replacement",accepted,before);item.replacementRunning=false;item.pointerDown=false;}
             });pool.add(item);
@@ -5431,8 +5440,10 @@ public class SimonIMEService extends InputMethodService {
     private void renderTextCandidateRows(){
         if(mainDispatchMonitor!=null)mainDispatchMonitor.candidates();
         if(boWordCandidateItems==null||boCandidateItems==null||zhuyinInput==null)return;
+        // Empty editor selection callbacks must preserve the idle shortcut chips.
+        if(externalConnection==null&&zhuyinInput.showIdleShortcuts()){renderZhuyinShortcuts();return;}
         boolean focused=zhuyinInput.wordFocused()||zhuyinInput.previewBoundary()>=0||zhuyinInput.keyCaret()>=0;
-        if(mainHandler!=null&&!focused&&!textCandidateRefreshRunning&&textKeyRender){deferTextCandidateRows();return;}
+        if(mainHandler!=null&&!textCandidateRefreshRunning&&(textCursorRender||!focused&&(textKeyRender||textCandidateSelectionRender))){deferTextCandidateRows();return;}
         cancelPendingTextCandidates();
         int wordScroll=boWordCandidateScroll.getScrollX(),charScroll=boCandidateScroll.getScrollX();
         List<View> words=new ArrayList<>(),characters=new ArrayList<>();
@@ -5547,7 +5558,10 @@ public class SimonIMEService extends InputMethodService {
 
     private void renderZhuyinShortcuts() {
         if(textLayoutSelected()&&boWordCandidateItems!=null)boWordCandidateItems.removeAllViews();
-        if(boCandidateItems==null || ("shortcuts".equals(renderedZhuyinCandidateKind)&&boCandidateItems.getChildCount()==2))return;
+        if(boCandidateItems==null || ("shortcuts".equals(renderedZhuyinCandidateKind)&&boCandidateItems.getChildCount()==2
+                &&"📋 剪貼簿".equals(boCandidateItems.getChildAt(0).getContentDescription())
+                &&"⚡ 常用詞".equals(boCandidateItems.getChildAt(1).getContentDescription())
+                &&boCandidateItems.getChildAt(0).isEnabled()&&boCandidateItems.getChildAt(1).isEnabled()))return;
         boCandidateItems.removeAllViews();rowEngineViews.clear();
         renderedZhuyinCandidates=java.util.Collections.emptyList();renderedZhuyinCandidateCount=0;
         renderedZhuyinCandidateKind="shortcuts";

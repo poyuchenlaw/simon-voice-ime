@@ -28,7 +28,7 @@ template<class T,class B> static T* engine_cast(B* value) {
     static void* library=dlopen("librime.so",RTLD_NOW|RTLD_NOLOAD);
     if(!library)return nullptr;
     auto lookup=[](const std::type_info& type){return dlsym(library,(std::string("_ZTI")+type.name()).c_str());};
-    auto source=lookup(typeid(B)),target=lookup(typeid(T));
+    static auto source=lookup(typeid(B)),target=lookup(typeid(T));
     if(!source||!target)return nullptr;
     return static_cast<T*>(::__dynamic_cast(value,source,target,-1));
 #else
@@ -282,9 +282,9 @@ static void append_repairs(RegroupState& r,rime::Context* probe,int boundary,int
                     touch=std::log((prob==sample->second.probability.end()?1e-30:std::max(1e-30,prob->second))/lp);
                 }
                 std::string input=r.input;input.replace(from,to-from,corrected);
-                probe->Clear();probe->set_input(input.substr(0,to));
-                rime::Composition prefix;prefix.Reset(probe->input());pin_text(prefix,0,from,cp_slice(r.original,0,a));prefix.Forward();
-                probe->set_composition(std::move(prefix));probe->set_caret_pos(to);
+                const auto probe_input=input.substr(0,to);probe->Clear();
+                rime::Composition prefix;prefix.Reset(probe_input);pin_text(prefix,0,from,cp_slice(r.original,0,a));prefix.Forward();
+                probe->set_composition(std::move(prefix));probe->set_input(probe_input);
                 if(probe->composition().empty())continue;
                 for(int i=0;i<5;++i){
                     auto candidate=probe->composition().back().GetCandidateAt(i);if(!candidate)break;
@@ -317,10 +317,10 @@ static void regroup_repair(RegroupState& r,rime::Context* probe,RegroupOption& o
             if(found==menus.end()) {
                 std::vector<rime::an<rime::Candidate>> candidates;
                 const auto probe_input=option.repaired_input.substr(0,r.stops[b]);
-                if(probe->input()!=probe_input){probe->Clear();probe->set_input(probe_input);}
-                rime::Composition prefix;prefix.Reset(probe->input());
+                if(probe->input()!=probe_input)probe->Clear();
+                rime::Composition prefix;prefix.Reset(probe_input);
                 pin_text(prefix,0,r.stops[a],cp_slice(r.original,0,a));
-                prefix.Forward();probe->set_composition(std::move(prefix));probe->set_caret_pos(r.stops[b]);
+                prefix.Forward();probe->set_composition(std::move(prefix));probe->set_input(probe_input);
                 if(!probe->composition().empty())for(int i=0;i<12;++i) {
                     auto candidate=probe->composition().back().GetCandidateAt(i);if(!candidate)break;
                     candidates.push_back(candidate);
@@ -369,10 +369,11 @@ static bool regroup(RegroupState& r,const RimeApi* api,RimeSessionId id,int boun
         for(int b=std::max(a+1,boundary);b<=std::min(count,boundary+2);++b) {
             if(b-a>3||splits_toned(r,r.stops[a])||splits_toned(r,r.stops[b]))continue;
             const auto probe_input=r.input.substr(0,r.stops[b]);
-            if(probe->input()!=probe_input){probe->Clear();probe->set_input(probe_input);}
-            rime::Composition prefix;prefix.Reset(probe->input());
+            if(probe->input()!=probe_input)probe->Clear();
+            // set_input translates synchronously; pin context before that update.
+            rime::Composition prefix;prefix.Reset(probe_input);
             pin_text(prefix,0,r.stops[a],cp_slice(r.original,0,a));
-            prefix.Forward();probe->set_composition(std::move(prefix));probe->set_caret_pos(r.stops[b]);
+            prefix.Forward();probe->set_composition(std::move(prefix));probe->set_input(probe_input);
             auto& comp=probe->composition();if(comp.empty())continue;
             auto& seg=comp.back();
             for(size_t i=0;i<12;++i) {
@@ -389,10 +390,10 @@ static bool regroup(RegroupState& r,const RimeApi* api,RimeSessionId id,int boun
             // neighbouring grouping. Fix a native left word, then ask the same
             // translator to score the right word using that left word as context.
             for(int split=a+1;split<b;++split){
-                probe->Clear();probe->set_input(r.input.substr(0,r.stops[split]));
-                rime::Composition leftPrefix;leftPrefix.Reset(probe->input());
+                const auto left_input=r.input.substr(0,r.stops[split]);probe->Clear();
+                rime::Composition leftPrefix;leftPrefix.Reset(left_input);
                 pin_text(leftPrefix,0,r.stops[a],cp_slice(r.original,0,a));
-                leftPrefix.Forward();probe->set_composition(std::move(leftPrefix));probe->set_caret_pos(r.stops[split]);
+                leftPrefix.Forward();probe->set_composition(std::move(leftPrefix));probe->set_input(left_input);
                 if(probe->composition().empty())continue;
                 std::vector<rime::an<rime::Candidate>> lefts;
                 for(int i=0;i<4;i++){auto cand=probe->composition().back().GetCandidateAt(i);if(!cand)break;
@@ -401,9 +402,9 @@ static bool regroup(RegroupState& r,const RimeApi* api,RimeSessionId id,int boun
                 }
                 for(const auto& left:lefts){
                     auto lp=native_phrase(left);if(!lp)continue;
-                    probe->Clear();probe->set_input(r.input.substr(0,r.stops[b]));rime::Composition selected;selected.Reset(probe->input());
+                    probe->Clear();rime::Composition selected;selected.Reset(probe_input);
                     pin_text(selected,0,r.stops[a],cp_slice(r.original,0,a));pin(selected,r.stops[a],r.stops[split],left);
-                    selected.Forward();probe->set_composition(std::move(selected));probe->set_caret_pos(r.stops[b]);
+                    selected.Forward();probe->set_composition(std::move(selected));probe->set_input(probe_input);
                     if(probe->composition().empty())continue;
                     for(int i=0;i<4;i++){auto right=probe->composition().back().GetCandidateAt(i);if(!right)break;
                         if(right->start()!=r.stops[split]||right->end()!=r.stops[b]||cp_count(right->text())!=b-split)continue;
@@ -504,9 +505,9 @@ static std::vector<RegroupOption> sandhi_words(RegroupState& r,int target) {
         for(unsigned mask=1;mask<(1u<<local.size());mask++) {
             auto input=r.input.substr(0,r.stops[b]);
             for(unsigned i=0;i<local.size();i++)if(mask&(1u<<i))input[r.stops[local[i].syllable+1]-1]=local[i].tone;
-            probe->Clear();probe->set_input(input);
+            probe->Clear();
             rime::Composition prefix;prefix.Reset(input);pin_text(prefix,0,r.stops[a],cp_slice(r.original,0,a));
-            prefix.Forward();probe->set_composition(std::move(prefix));probe->set_caret_pos(r.stops[b]);
+            prefix.Forward();probe->set_composition(std::move(prefix));probe->set_input(input);
             if(probe->composition().empty())continue;
             for(int i=0;i<200;i++) {
                 auto candidate=probe->composition().back().GetCandidateAt(i);if(!candidate)break;
@@ -569,10 +570,10 @@ static bool focus_character(RegroupState& r,RimeSessionId id,int target,bool cha
             for(int from=std::max(span_start,target-3);from<=target;from++)
                 for(int to=target+1;to<=std::min(span_end,from+4);to++) {
                     if(to-from<=1)continue;
-                    probe->Clear();probe->set_input(r.input.substr(0,r.stops[to]));
-                    rime::Composition prefix;prefix.Reset(probe->input());
+                    const auto probe_input=r.input.substr(0,r.stops[to]);probe->Clear();
+                    rime::Composition prefix;prefix.Reset(probe_input);
                     pin_text(prefix,0,r.stops[from],cp_slice(r.original,0,from));
-                    prefix.Forward();probe->set_composition(std::move(prefix));probe->set_caret_pos(r.stops[to]);
+                    prefix.Forward();probe->set_composition(std::move(prefix));probe->set_input(probe_input);
                     if(probe->composition().empty())continue;
                     for(int i=0;i<200;i++) {
                         auto candidate=probe->composition().back().GetCandidateAt(i);if(!candidate)break;
@@ -611,10 +612,10 @@ static bool focus_character(RegroupState& r,RimeSessionId id,int target,bool cha
         else repairs.push_back(option);
     }
     auto* probe=context(r.probe);if(!probe)return false;
-    probe->Clear();probe->set_input(r.input.substr(0,r.stops[b]));
-    rime::Composition prefix;prefix.Reset(probe->input());
+    const auto focus_input=r.input.substr(0,r.stops[b]);probe->Clear();
+    rime::Composition prefix;prefix.Reset(focus_input);
     pin_text(prefix,0,r.stops[a],cp_slice(r.original,0,a));
-    prefix.Forward();probe->set_composition(std::move(prefix));probe->set_caret_pos(r.stops[b]);
+    prefix.Forward();probe->set_composition(std::move(prefix));probe->set_input(focus_input);
     if(!probe->composition().empty())for(int i=0;i<200;++i) {
         auto candidate=probe->composition().back().GetCandidateAt(i);if(!candidate)break;
         auto phrase=native_phrase(candidate);
@@ -641,10 +642,10 @@ static bool focus_character(RegroupState& r,RimeSessionId id,int target,bool cha
     // Append exact-reading single-character choices using the same isolated
     // translator, with candidate offsets anchored to the tapped syllable.
     if(b-a>1) {
-        probe->Clear();probe->set_input(r.input.substr(0,r.stops[target+1]));
-        rime::Composition single;single.Reset(probe->input());
+        const auto single_input=r.input.substr(0,r.stops[target+1]);probe->Clear();
+        rime::Composition single;single.Reset(single_input);
         pin_text(single,0,r.stops[target],cp_slice(r.original,0,target));
-        single.Forward();probe->set_composition(std::move(single));probe->set_caret_pos(r.stops[target+1]);
+        single.Forward();probe->set_composition(std::move(single));probe->set_input(single_input);
         if(!probe->composition().empty())for(int i=0;i<200;++i) {
             auto candidate=probe->composition().back().GetCandidateAt(i);if(!candidate)break;
             auto phrase=native_phrase(candidate);

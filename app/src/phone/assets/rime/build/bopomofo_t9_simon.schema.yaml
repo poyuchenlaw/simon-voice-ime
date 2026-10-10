@@ -1,14 +1,14 @@
 __build_info:
   rime_version: 1.17.0
   timestamps:
-    bopomofo_t9_simon.schema: 1791569913
-    default: 1791568018
+    bopomofo_t9_simon.schema: 1791607855
+    default: 1791607855
     default.custom: 0
-    grammar: 1791568018
+    grammar: 1791607855
     grammar.custom: 0
-    key_bindings: 1791568018
+    key_bindings: 1791607855
     key_bindings.custom: 0
-    punctuation: 1791568018
+    punctuation: 1791607855
     punctuation.custom: 0
 custom_phrase:
   db_class: stabledb
