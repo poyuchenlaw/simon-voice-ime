@@ -11,7 +11,7 @@ public class DualHand686AndroidTest extends TapCursor677AndroidTest {
     DualHandKeyboard page;
     @Override void preparePreferences(){super.preparePreferences();inst.getTargetContext().getSharedPreferences("simon_ime_prefs",0).edit().putBoolean("dual_hand_enabled",true).putBoolean("dual_hand_mode",false).putBoolean("ime_auto_upload",false).commit();}
     void startDual()throws Exception {
-        ready();out=new File(inst.getTargetContext().getFilesDir(),"v666");out.mkdirs();bind();text("");tap("test_input");tap("雙");await("ㄅㄆㄇㄈ");
+        ready();out=new File(inst.getTargetContext().getFilesDir(),"v666");out.mkdirs();bind();text("");tap("test_input");tap("雙");await("1 ㄅ up ㄆ left ㄇ down ㄈ");
         inst.runOnMainSync(()->{android.content.Context c=root.getContext();while(c instanceof android.content.ContextWrapper&&!(c instanceof SimonIMEService))c=((android.content.ContextWrapper)c).getBaseContext();try{var f=SimonIMEService.class.getDeclaredField("dualHandPage");f.setAccessible(true);page=(DualHandKeyboard)f.get(c);}catch(Exception e){throw new RuntimeException(e);}});
     }
     Rect key(String key){final Rect r=new Rect();inst.runOnMainSync(()->{View v=page.view().findViewWithTag("dh-key:"+key);assertNotNull(v);assertTrue(v.getLocalVisibleRect(r));int[] at=new int[2];v.getLocationOnScreen(at);r.offset(at[0],at[1]);});return r;}
@@ -29,6 +29,32 @@ public class DualHand686AndroidTest extends TapCursor677AndroidTest {
         swipe("1","tap");swipe("core","up");inst.runOnMainSync(()->{assertNull(page.buffer().pending());assertEquals(1,page.buffer().syllables().size());});assertEquals("對",editorText(await("test_input")));
         swipe("core","up");assertEquals("",editorText(await("test_input")));swipe("symbols","right");assertEquals("，",editorText(await("test_input")));swipe("core","up");assertEquals("",editorText(await("test_input")));
         swipe("tools","up");await("ㄗ");
+    }
+    public void testDirectionalLabelsAndTwoPointInjection()throws Exception {
+        startDual();
+        inst.runOnMainSync(()->{
+            String[][] expected={{"ㄅ","ㄆ","ㄇ","ㄈ",""},{"ㄉ","ㄊ","ㄋ","ㄌ",""},{"ㄍ","ㄎ","ㄏ","Ø","ㄨ"},{"ㄐ","ㄑ","ㄒ","ㄩ","ㄧ"},{"ㄓ","ㄔ","ㄕ","ㄖ",""},{"ㄗ","ㄘ","ㄙ","",""}};
+            for(int k=0;k<6;k++){
+                FrameLayout box=(FrameLayout)page.view().findViewWithTag("dh-key:"+(k+1));java.util.List<Rect> occupied=new java.util.ArrayList<>();
+                for(int i=0;i<5;i++){
+                    TextView label=(TextView)box.getChildAt(i);assertEquals(expected[k][i],label.getText().toString());
+                    assertEquals(expected[k][i].isEmpty()?View.GONE:View.VISIBLE,label.getVisibility());if(label.getVisibility()!=View.VISIBLE)continue;
+                    Rect r=new Rect(label.getLeft(),label.getTop(),label.getRight(),label.getBottom());assertTrue("label inside key",r.left>=0&&r.top>=0&&r.right<=box.getWidth()&&r.bottom<=box.getHeight());
+                    for(Rect other:occupied)assertFalse("left labels must not overlap",Rect.intersects(r,other));occupied.add(r);
+                }
+            }
+            try{assertEquals("dual_hand",geometry().getString("mode"));}catch(Exception e){throw new RuntimeException(e);}
+        });
+        Rect r=key("2");float distance=30*inst.getTargetContext().getResources().getDisplayMetrics().density;long t=SystemClock.uptimeMillis();
+        MotionEvent down=MotionEvent.obtain(t,t,MotionEvent.ACTION_DOWN,r.centerX(),r.centerY(),0),up=MotionEvent.obtain(t,t+40,MotionEvent.ACTION_UP,r.centerX()+distance,r.centerY(),0);
+        try{assertTrue(ui.injectInputEvent(down,true)&&ui.injectInputEvent(up,true));}finally{down.recycle();up.recycle();}Thread.sleep(100);inst.waitForIdleSync();
+        // Key 2 right is empty: a tap would incorrectly leave ㄉ pending.
+        inst.runOnMainSync(()->assertNull("two-point right swipe is not a tap",page.buffer().pending()));
+        swipe("2","tap");inst.runOnMainSync(()->{
+            FrameLayout c=(FrameLayout)page.view().findViewWithTag("dh-key:C");TextView upLabel=(TextView)c.getChildAt(1);
+            assertEquals("",upLabel.getText().toString());assertEquals(View.GONE,upLabel.getVisibility());
+            assertEquals("ㄨㄟ",((TextView)c.getChildAt(4)).getText().toString());
+        });screenshot("dh-directional-labels");
     }
     public void testPanelsReplaceSurface()throws Exception {
         startDual();swipe("symbols","tap");inst.runOnMainSync(()->assertEquals(View.GONE,page.view().getVisibility()));screenshot("dh-symbols");tap("，");inst.runOnMainSync(()->assertEquals(View.VISIBLE,page.view().getVisibility()));assertEquals("，",editorText(await("test_input")));

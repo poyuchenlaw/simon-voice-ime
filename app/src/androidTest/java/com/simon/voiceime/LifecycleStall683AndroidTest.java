@@ -60,7 +60,7 @@ public class LifecycleStall683AndroidTest extends MainStall683AndroidTest {
         assertEquals(1.3f,row1.getResources().getConfiguration().fontScale,.01f);
         observe();boolean complete=false;
         try {
-            stage("toggle-on");tagged("key:toDualHand");await("ㄅㄆㄇㄈ");
+            stage("toggle-on");tagged("key:toDualHand");await("1 ㄅ up ㄆ left ㄇ down ㄈ");
             stage("toggle-off");dualHandTo41();
             // No extra settling pause before the first 41-key touch.
             stage("typing-ten");keys(KEYS);Thread.sleep(300);inst.waitForIdleSync();

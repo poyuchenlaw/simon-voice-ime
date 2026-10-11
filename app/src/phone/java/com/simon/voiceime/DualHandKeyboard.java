@@ -42,10 +42,10 @@ public final class DualHandKeyboard implements DualHandPage {
     private final Runnable flush=this::flush;
     private static final String[][] LEFT={{"1","2"},{"3","4"},{"5","6"},{"tools","symbols"}};
     private static final String[][] RIGHT={{"A","B"},{"C","D"},{"E","F"},{"Ø","core"}};
-    private static final String[] LEFT_TEXT={"ㄅㄆㄇㄈ","ㄉㄊㄋㄌ","ㄍㄎㄏ Ø","ㄐㄑㄒ","ㄓㄔㄕㄖ","ㄗㄘㄙ"};
     private static final class Touch {
         DualHandState.Stroke stroke;
         float x,y,lastX,lastY,path,dx,dy;
+        int samples;
         DualHandGesture.Result result;
     }
     public DualHandKeyboard(SimonIMEService service)throws IOException {
@@ -72,10 +72,11 @@ public final class DualHandKeyboard implements DualHandPage {
         for(String[] row:rows){LinearLayout line=new LinearLayout(service);line.setOrientation(LinearLayout.HORIZONTAL);half.addView(line,new LinearLayout.LayoutParams(-1,dp(78)));
             for(String key:row){FrameLayout box=new FrameLayout(service);box.setBackgroundResource(R.drawable.keyboard_key);box.setTag("dh-key:"+key);box.setClickable(true);
                 Map<String,TextView> parts=new HashMap<>();TextView main=text("",DualHandTable.isLeft(key)?18:23);parts.put("tap",main);
-                box.addView(main,new FrameLayout.LayoutParams(-1,-1,Gravity.CENTER));
-                if(DualHandTable.isRight(key))for(String direction:new String[]{"up","left","down","right"}){
-                    TextView edge=text("",11);parts.put(direction,edge);int gravity="up".equals(direction)?Gravity.TOP|Gravity.CENTER_HORIZONTAL:"down".equals(direction)?Gravity.BOTTOM|Gravity.CENTER_HORIZONTAL:"left".equals(direction)?Gravity.LEFT|Gravity.CENTER_VERTICAL:Gravity.RIGHT|Gravity.CENTER_VERTICAL;
-                    FrameLayout.LayoutParams p=new FrameLayout.LayoutParams(-2,-2,gravity);p.setMargins(dp(2),dp(2),dp(2),dp(2));box.addView(edge,p);
+                if(DualHandTable.isLeft(key)){main.setSingleLine();main.setIncludeFontPadding(false);}
+                box.addView(main,new FrameLayout.LayoutParams(DualHandTable.isLeft(key)?-2:-1,DualHandTable.isLeft(key)?-2:-1,Gravity.CENTER));
+                if(DualHandTable.isLeft(key)||DualHandTable.isRight(key))for(String direction:new String[]{"up","left","down","right"}){
+                    TextView edge=text("",DualHandTable.isLeft(key)?9:11);if(DualHandTable.isLeft(key)){edge.setSingleLine();edge.setIncludeFontPadding(false);}parts.put(direction,edge);int gravity="up".equals(direction)?Gravity.TOP|Gravity.CENTER_HORIZONTAL:"down".equals(direction)?Gravity.BOTTOM|Gravity.CENTER_HORIZONTAL:"left".equals(direction)?Gravity.LEFT|Gravity.CENTER_VERTICAL:Gravity.RIGHT|Gravity.CENTER_VERTICAL;
+                    FrameLayout.LayoutParams p=new FrameLayout.LayoutParams(-2,-2,gravity);int margin=dp(DualHandTable.isLeft(key)?1:2);p.setMargins(margin,margin,margin,margin);box.addView(edge,p);
                 }
                 LinearLayout.LayoutParams p=new LinearLayout.LayoutParams(0,-1,1);p.setMargins(dp(2),dp(2),dp(2),dp(2));line.addView(box,p);keys.put(key,box);labels.put(key,parts);
                 box.setOnClickListener(v->activate(key,"tap"));
@@ -102,7 +103,11 @@ public final class DualHandKeyboard implements DualHandPage {
     }
     private void renderLabels(){
         String pending=labelState();
-        for(int i=0;i<6;i++)labels.get(Integer.toString(i+1)).get("tap").setText(LEFT_TEXT[i]);
+        for(int i=1;i<=6;i++){
+            String key=Integer.toString(i);Map<String,TextView> parts=labels.get(key);StringBuilder description=new StringBuilder(key);
+            for(String direction:DualHandTable.DIRECTIONS){String value=table.left(key,direction);TextView label=parts.get(direction);label.setText(value);label.setVisibility(value.isEmpty()?View.GONE:View.VISIBLE);if(!value.isEmpty())description.append(" ").append("tap".equals(direction)?"":direction+" ").append(value);}
+            keys.get(key).setContentDescription(description);
+        }
         labels.get("tools").get("tap").setText("工具箱");labels.get("symbols").get("tap").setText("符號／剪貼");
         labels.get("core").get("tap").setText("空白／AI／送出");labels.get("core").get("tap").setTextSize(14);
         keys.get("core").setActivated(state.syllables().size()>8);
@@ -116,14 +121,14 @@ public final class DualHandKeyboard implements DualHandPage {
             for(String direction:new String[]{"up","left","down","right"}){
                 TextView edge=parts.get(direction);String syllable=table.right(pending,key,direction),value;
                 if(pending==null)value=syllable.matches(".*[ㄧㄨㄩ].*")?"":syllable;
-                else value=syllable.isEmpty()?("up".equals(direction)?"↑":"down".equals(direction)?"↓":"left".equals(direction)?"←":"→"):suffix(pending,syllable);
-                edge.setText(value);edge.setAlpha(pending==null||!syllable.isEmpty()?1f:.25f);
+                else value=syllable.isEmpty()?"":suffix(pending,syllable);
+                edge.setText(value);edge.setVisibility(value.isEmpty()?View.GONE:View.VISIBLE);
             }
             StringBuilder description=new StringBuilder(key+" "+parts.get("tap").getText());
             for(String direction:new String[]{"up","left","down","right"})if(!parts.get(direction).getText().toString().isEmpty())description.append(" ").append(direction).append(" ").append(parts.get(direction).getText());
             keys.get(key).setContentDescription(description);
         }
-        for(String key:keys.keySet())if(!DualHandTable.isRight(key))keys.get(key).setContentDescription(labels.get(key).get("tap").getText());
+        for(String key:keys.keySet())if(!DualHandTable.isLeft(key)&&!DualHandTable.isRight(key))keys.get(key).setContentDescription(labels.get(key).get("tap").getText());
     }
     private static String suffix(String state,String syllable){
         if(state!=null&&!Arrays.asList("Ø","ㄧ","ㄨ","ㄩ").contains(state)&&syllable.startsWith(state))syllable=syllable.substring(state.length());
@@ -210,13 +215,13 @@ public final class DualHandKeyboard implements DualHandPage {
             float density=service.getResources().getDisplayMetrics().density;
             for(int i=0;i<e.getPointerCount();i++){Touch t=touches.get(e.getPointerId(i));if(t==null)continue;
                 for(int h=0;h<e.getHistorySize();h++)move(t,e.getHistoricalX(i,h),e.getHistoricalY(i,h),density);
-                move(t,e.getX(i),e.getY(i),density);t.result=DualHandGesture.classify(t.dx,t.dy,e.getEventTime()-t.stroke.down,t.path);
+                move(t,e.getX(i),e.getY(i),density);t.result=DualHandGesture.classify(t.dx,t.dy,e.getEventTime()-t.stroke.down,t.path,t.samples);
             }
             if(action==MotionEvent.ACTION_UP||action==MotionEvent.ACTION_POINTER_UP){Touch t=touches.remove(e.getPointerId(index));if(t!=null){state.end(t.stroke,t.result.direction,false);keys.get(t.stroke.key).setPressed(false);
-                try{event("dh_gesture",new JSONObject().put("key",t.stroke.key).put("dx_dp",t.dx).put("dy_dp",t.dy).put("contact_ms",e.getEventTime()-t.stroke.down).put("gesture",t.result.direction).put("ambiguous",t.result.ambiguous));}catch(JSONException error){throw new IllegalStateException(error);}
+                try{event("dh_gesture",new JSONObject().put("key",t.stroke.key).put("dx_dp",t.dx).put("dy_dp",t.dy).put("contact_ms",e.getEventTime()-t.stroke.down).put("gesture",t.result.direction).put("ambiguous",t.result.ambiguous).put("samples",t.samples));}catch(JSONException error){throw new IllegalStateException(error);}
                 flush();ui.removeCallbacks(flush);ui.postDelayed(flush,DualHandGesture.RACE_MS+1);
             }}renderLabels();return true;
         }
-        private void move(Touch t,float x,float y,float density){t.path+=(float)Math.hypot(x-t.lastX,y-t.lastY)/density;t.lastX=x;t.lastY=y;t.dx=(x-t.x)/density;t.dy=(y-t.y)/density;}
+        private void move(Touch t,float x,float y,float density){if(t.samples==0||x!=t.lastX||y!=t.lastY)t.samples++;t.path+=(float)Math.hypot(x-t.lastX,y-t.lastY)/density;t.lastX=x;t.lastY=y;t.dx=(x-t.x)/density;t.dy=(y-t.y)/density;}
     }
 }

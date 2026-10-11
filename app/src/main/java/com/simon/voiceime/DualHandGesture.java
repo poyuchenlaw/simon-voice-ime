@@ -13,9 +13,14 @@ public final class DualHandGesture {
         Result(String direction, boolean ambiguous) { this.direction=direction; this.ambiguous=ambiguous; }
     }
     public static Result classify(float dx, float dy, long ms, float travelled) {
-        if (!Float.isFinite(dx)||!Float.isFinite(dy)||!Float.isFinite(travelled)||ms<0||travelled<0)
+        return classify(dx,dy,ms,travelled,0);
+    }
+    public static Result classify(float dx, float dy, long ms, float travelled, int samples) {
+        if (!Float.isFinite(dx)||!Float.isFinite(dy)||!Float.isFinite(travelled)||ms<0||travelled<0||samples<0)
             throw new IllegalArgumentException("Invalid gesture measurements");
         float distance=(float)Math.hypot(dx,dy), x=Math.abs(dx), y=Math.abs(dy);
+        // A stroke with only two distinct positions has no intermediate path; use its endpoints.
+        if(samples==2&&distance>=FAST_DRIFT_DP)travelled=distance;
         if(distance<=SWIPE_DP || ms<FAST_MS && (distance<FAST_DRIFT_DP || distance<LINEAR_RATIO*travelled))
             return new Result("tap",false);
         boolean horizontal=x>=y; // Equal axes deterministically use horizontal; never emit diagonal.

@@ -31,6 +31,7 @@ public class TextRows670AndroidTest extends TextRows669AndroidTest {
         throw new AssertionError("actual keyboard window unavailable");
     }
     @Override JSONObject geometry()throws Exception {
+        if(dualHandSurface()!=null&&!keyboard.isShown())return dualHandGeometry();
         View viewport=(View)row1.getParent();android.text.Layout layout=row1.getLayout();int end=row1.getText().length(),line=layout.getLineForOffset(end);
         JSONArray lines=new JSONArray();String text=row1.getText().toString();for(int cp=0;cp<text.codePointCount(0,text.length());cp++)lines.put(layout.getLineForOffset(text.offsetByCodePoints(0,cp)));
         View key=keyboard.findViewWithTag("key:ㄐ");int[] at=new int[2],rootAt=new int[2];key.getLocationOnScreen(at);root.getLocationOnScreen(rootAt);
@@ -95,9 +96,10 @@ public class TextRows670AndroidTest extends TextRows669AndroidTest {
         java.util.concurrent.CountDownLatch ready=new java.util.concurrent.CountDownLatch(1);
         JSONArray trace=new JSONArray();final String[] previous={null};final int[] stable={0};
         Runnable poll=new Runnable(){public void run(){
-            View key=keyboard.findViewWithTag("key:ㄐ");int[] at=new int[2],window=new int[2];key.getLocationOnScreen(at);root.getLocationOnScreen(window);
+            boolean dual=dualHandSurface()!=null&&!keyboard.isShown();
+            View key=dual?dualHandSurface().findViewWithTag("dh-key:1"):keyboard.findViewWithTag("key:ㄐ");int[] at=new int[2],window=new int[2];key.getLocationOnScreen(at);root.getLocationOnScreen(window);
             String signature=window[1]+":"+root.getHeight()+":"+at[0]+":"+at[1]+":"+key.getWidth()+":"+key.getHeight();
-            trace.put(signature);stable[0]=!root.isLayoutRequested()&&row1.getLayout()!=null&&signature.equals(previous[0])?stable[0]+1:0;previous[0]=signature;
+            trace.put(signature);stable[0]=!root.isLayoutRequested()&&(dual||row1.getLayout()!=null)&&signature.equals(previous[0])?stable[0]+1:0;previous[0]=signature;
             if(stable[0]>=3)ready.countDown();else root.postOnAnimation(this);
         }};
         inst.runOnMainSync(()->root.postOnAnimation(poll));

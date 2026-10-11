@@ -79,7 +79,17 @@ public class Layout668AndroidTest extends TestCase {
         }
         throw new AssertionError("IME window not in target process");
     }
+    View dualHandSurface(){return root.findViewWithTag("dual-hand-keyboard");}
+    JSONObject dualHandGeometry()throws Exception {
+        View surface=dualHandSurface();JSONArray keys=new JSONArray();
+        for(String key:new String[]{"1","2","3","4","5","6","tools","symbols","A","B","C","D","E","F","Ø","core"}){
+            View v=surface.findViewWithTag("dh-key:"+key);int[] at=new int[2];v.getLocationOnScreen(at);
+            keys.put(new JSONObject().put("key",key).put("x",at[0]).put("y",at[1]).put("width",v.getWidth()).put("height",v.getHeight()).put("shown",v.isShown()).put("labels",String.valueOf(v.getContentDescription())));
+        }
+        return new JSONObject().put("mode","dual_hand").put("uptime_ms",SystemClock.uptimeMillis()).put("shown",surface.isShown()).put("keys",keys);
+    }
     JSONObject geometry()throws Exception {
+        if(dualHandSurface()!=null&&!keyboard.isShown())return dualHandGeometry();
         int[] at=new int[2];keyboard.getLocationOnScreen(at);String text=row1.getText().toString();
         JSONObject g=new JSONObject().put("uptime_ms",SystemClock.uptimeMillis()).put("key_index",keyIndex).put("preview",text).put("preview_chars",text.codePointCount(0,text.length()))
             .put("reading",row2.getText().toString()).put("row1_text_size_px",row1.getTextSize()).put("row1_scroll_x",((View)row1.getParent()).getScrollX()).put("row1_internal_scroll_x",row1.getScrollX())
