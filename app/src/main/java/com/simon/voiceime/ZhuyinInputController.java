@@ -720,7 +720,9 @@ final class ZhuyinInputController {
         if(previewText().isEmpty())return new State("",Collections.emptyList(),text,true,0,"engine",Collections.emptyList(),0,0,true);
         if(retype!=null)return retypeState(retype.punctuation(text));
         if(!engine.punctuation(text)){System.err.println("Zhuyin punctuation retained: boundary unavailable");return snapshot(false,false);}
-        keyCaret=engine.cursorPosition();previewFocused=false;previewBoundary=-1;
+        // Appending a literal in text mode must not open phonetic-key editing.
+        if(textLayout&&keyCaret<0)engine.moveCursorToEnd();else keyCaret=engine.cursorPosition();
+        previewFocused=false;previewBoundary=-1;
         rawZhuyinKeys.setLength(0);abbreviationKeys.setLength(0);mixedChoices=Collections.emptyList();abbreviationEntries=Collections.emptyList();
         return snapshot(true,true);
     }
