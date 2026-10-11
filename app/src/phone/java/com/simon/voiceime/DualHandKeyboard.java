@@ -71,12 +71,13 @@ public final class DualHandKeyboard implements DualHandPage {
         LinearLayout half=new LinearLayout(service);half.setOrientation(LinearLayout.VERTICAL);
         for(String[] row:rows){LinearLayout line=new LinearLayout(service);line.setOrientation(LinearLayout.HORIZONTAL);half.addView(line,new LinearLayout.LayoutParams(-1,dp(78)));
             for(String key:row){FrameLayout box=new FrameLayout(service);box.setBackgroundResource(R.drawable.keyboard_key);box.setTag("dh-key:"+key);box.setClickable(true);
-                Map<String,TextView> parts=new HashMap<>();TextView main=text("",DualHandTable.isLeft(key)?18:23);parts.put("tap",main);
-                if(DualHandTable.isLeft(key)){main.setSingleLine();main.setIncludeFontPadding(false);}
-                box.addView(main,new FrameLayout.LayoutParams(DualHandTable.isLeft(key)?-2:-1,DualHandTable.isLeft(key)?-2:-1,Gravity.CENTER));
-                if(DualHandTable.isLeft(key)||DualHandTable.isRight(key))for(String direction:new String[]{"up","left","down","right"}){
-                    TextView edge=text("",DualHandTable.isLeft(key)?9:11);if(DualHandTable.isLeft(key)){edge.setSingleLine();edge.setIncludeFontPadding(false);}parts.put(direction,edge);int gravity="up".equals(direction)?Gravity.TOP|Gravity.CENTER_HORIZONTAL:"down".equals(direction)?Gravity.BOTTOM|Gravity.CENTER_HORIZONTAL:"left".equals(direction)?Gravity.LEFT|Gravity.CENTER_VERTICAL:Gravity.RIGHT|Gravity.CENTER_VERTICAL;
-                    FrameLayout.LayoutParams p=new FrameLayout.LayoutParams(-2,-2,gravity);int margin=dp(DualHandTable.isLeft(key)?1:2);p.setMargins(margin,margin,margin,margin);box.addView(edge,p);
+                boolean function=!DualHandTable.isLeft(key)&&!DualHandTable.isRight(key),compact=!DualHandTable.isRight(key);
+                Map<String,TextView> parts=new HashMap<>();TextView main=text("",function?10:DualHandTable.isLeft(key)?18:23);parts.put("tap",main);
+                if(compact){main.setSingleLine();main.setIncludeFontPadding(false);}
+                box.addView(main,new FrameLayout.LayoutParams(compact?-2:-1,compact?-2:-1,Gravity.CENTER));
+                for(String direction:new String[]{"up","left","down","right"}){
+                    TextView edge=text("",function?8:DualHandTable.isLeft(key)?9:11);if(compact){edge.setSingleLine();edge.setIncludeFontPadding(false);}parts.put(direction,edge);int gravity="up".equals(direction)?Gravity.TOP|Gravity.CENTER_HORIZONTAL:"down".equals(direction)?Gravity.BOTTOM|Gravity.CENTER_HORIZONTAL:"left".equals(direction)?Gravity.LEFT|Gravity.CENTER_VERTICAL:Gravity.RIGHT|Gravity.CENTER_VERTICAL;
+                    FrameLayout.LayoutParams p=new FrameLayout.LayoutParams(-2,-2,gravity);int margin=dp(compact?1:2);p.setMargins(margin,margin,margin,margin);box.addView(edge,p);
                 }
                 LinearLayout.LayoutParams p=new LinearLayout.LayoutParams(0,-1,1);p.setMargins(dp(2),dp(2),dp(2),dp(2));line.addView(box,p);keys.put(key,box);labels.put(key,parts);
                 box.setOnClickListener(v->activate(key,"tap"));
@@ -108,10 +109,13 @@ public final class DualHandKeyboard implements DualHandPage {
             for(String direction:DualHandTable.DIRECTIONS){String value=table.left(key,direction);TextView label=parts.get(direction);label.setText(value);label.setVisibility(value.isEmpty()?View.GONE:View.VISIBLE);if(!value.isEmpty())description.append(" ").append("tap".equals(direction)?"":direction+" ").append(value);}
             keys.get(key).setContentDescription(description);
         }
-        labels.get("tools").get("tap").setText("工具箱");labels.get("symbols").get("tap").setText("符號／剪貼");
-        labels.get("core").get("tap").setText("空白／AI／送出");labels.get("core").get("tap").setTextSize(14);
+        functionLabels("tools","工具箱","41鍵","英數","收起","語音");
+        functionLabels("symbols","符號","剪貼","","。","，");
+        functionLabels("core","空白","⌫",state.aiShown()?"還原":"刪詞","AI","送出");
         keys.get("core").setActivated(state.syllables().size()>8);
         labels.get("core").get("tap").setTextColor(state.syllables().size()>8?0xFF4ECCA3:service.getResources().getColor(R.color.keyboard_key_text,null));
+        labels.get("core").get("down").setTextColor(state.syllables().size()>8?0xFF4ECCA3:service.getResources().getColor(R.color.keyboard_key_text,null));
+        labels.get("core").get("left").setTextColor(state.aiShown()?0xFF4ECCA3:service.getResources().getColor(R.color.keyboard_key_text,null));
         for(String key:DualHandTable.RIGHT_KEYS){
             Map<String,TextView> parts=labels.get(key);
             String main=table.right(pending,key,"tap");
@@ -128,7 +132,15 @@ public final class DualHandKeyboard implements DualHandPage {
             for(String direction:new String[]{"up","left","down","right"})if(!parts.get(direction).getText().toString().isEmpty())description.append(" ").append(direction).append(" ").append(parts.get(direction).getText());
             keys.get(key).setContentDescription(description);
         }
-        for(String key:keys.keySet())if(!DualHandTable.isLeft(key)&&!DualHandTable.isRight(key))keys.get(key).setContentDescription(labels.get(key).get("tap").getText());
+    }
+    private void functionLabels(String key,String... values){
+        StringBuilder description=new StringBuilder();
+        for(int i=0;i<DualHandTable.DIRECTIONS.length;i++){
+            String direction=DualHandTable.DIRECTIONS[i],value=values[i];TextView label=labels.get(key).get(direction);
+            label.setText(value);label.setVisibility(value.isEmpty()?View.GONE:View.VISIBLE);
+            if(!value.isEmpty()){if(description.length()>0)description.append(" ");if(!"tap".equals(direction))description.append(direction).append(" ");description.append(value);}
+        }
+        keys.get(key).setContentDescription(description);
     }
     private static String suffix(String state,String syllable){
         if(state!=null&&!Arrays.asList("Ø","ㄧ","ㄨ","ㄩ").contains(state)&&syllable.startsWith(state))syllable=syllable.substring(state.length());

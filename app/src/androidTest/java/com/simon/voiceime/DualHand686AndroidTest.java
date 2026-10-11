@@ -12,6 +12,7 @@ public class DualHand686AndroidTest extends TapCursor677AndroidTest {
     @Override void preparePreferences(){super.preparePreferences();inst.getTargetContext().getSharedPreferences("simon_ime_prefs",0).edit().putBoolean("dual_hand_enabled",true).putBoolean("dual_hand_mode",false).putBoolean("ime_auto_upload",false).commit();}
     void startDual()throws Exception {
         ready();out=new File(inst.getTargetContext().getFilesDir(),"v666");out.mkdirs();bind();text("");tap("test_input");tap("雙");await("1 ㄅ up ㄆ left ㄇ down ㄈ");
+        await("工具箱 up 41鍵 left 英數 down 收起 right 語音");await("符號 up 剪貼 down 。 right ，");await("空白 up ⌫ left 刪詞 down AI right 送出");
         inst.runOnMainSync(()->{android.content.Context c=root.getContext();while(c instanceof android.content.ContextWrapper&&!(c instanceof SimonIMEService))c=((android.content.ContextWrapper)c).getBaseContext();try{var f=SimonIMEService.class.getDeclaredField("dualHandPage");f.setAccessible(true);page=(DualHandKeyboard)f.get(c);}catch(Exception e){throw new RuntimeException(e);}});
     }
     Rect key(String key){final Rect r=new Rect();inst.runOnMainSync(()->{View v=page.view().findViewWithTag("dh-key:"+key);assertNotNull(v);assertTrue(v.getLocalVisibleRect(r));int[] at=new int[2];v.getLocationOnScreen(at);r.offset(at[0],at[1]);});return r;}
@@ -60,5 +61,34 @@ public class DualHand686AndroidTest extends TapCursor677AndroidTest {
         startDual();swipe("symbols","tap");inst.runOnMainSync(()->assertEquals(View.GONE,page.view().getVisibility()));screenshot("dh-symbols");tap("，");inst.runOnMainSync(()->assertEquals(View.VISIBLE,page.view().getVisibility()));assertEquals("，",editorText(await("test_input")));
         swipe("symbols","up");screenshot("dh-clipboard");tap("✕");
         swipe("tools","tap");screenshot("dh-commands");
+    }
+    void assertFunctionHints(boolean restore,boolean bright){
+        inst.runOnMainSync(()->{
+            String[] keys={"tools","symbols","core"};String[][] expected={{"工具箱","41鍵","英數","收起","語音"},{"符號","剪貼","","。","，"},{"空白","⌫",restore?"還原":"刪詞","AI","送出"}};
+            int normal=inst.getTargetContext().getColor(R.color.keyboard_key_text);
+            for(int k=0;k<keys.length;k++){
+                FrameLayout box=(FrameLayout)page.view().findViewWithTag("dh-key:"+keys[k]);assertEquals(5,box.getChildCount());java.util.List<Rect> occupied=new java.util.ArrayList<>();
+                for(int i=0;i<5;i++){
+                    TextView label=(TextView)box.getChildAt(i);assertEquals(expected[k][i],label.getText().toString());
+                    assertEquals(expected[k][i].isEmpty()?View.GONE:View.VISIBLE,label.getVisibility());if(label.getVisibility()!=View.VISIBLE)continue;
+                    Rect r=new Rect(label.getLeft(),label.getTop(),label.getRight(),label.getBottom());assertTrue("function label inside key",r.left>=0&&r.top>=0&&r.right<=box.getWidth()&&r.bottom<=box.getHeight());
+                    for(Rect other:occupied)assertFalse("function labels must not overlap",Rect.intersects(r,other));occupied.add(r);
+                    assertNotNull(label.getLayout());assertEquals(1,label.getLineCount());assertEquals(0,label.getLayout().getEllipsisCount(0));assertTrue("full label fits",label.getLayout().getLineWidth(0)<=label.getWidth());
+                    if(k==2)assertEquals((bright&&(i==0||i==3))||(restore&&i==2)?0xFF4ECCA3:normal,label.getCurrentTextColor());
+                }
+                if(k==2)assertEquals(bright,box.isActivated());
+            }
+        });
+    }
+    public void testFunctionHintsAndHighlights()throws Exception {
+        startDual();assertFunctionHints(false,false);screenshot("dh-function-hints");
+        for(int count=1;count<=9;count++){
+            final int n=count;inst.runOnMainSync(()->{for(String key:new String[]{"1","A"}){long t=n*200+("A".equals(key)?100:0);DualHandState.Stroke s=page.buffer().begin(key,t);page.buffer().end(s,"tap",false);page.buffer().drain(t+100);}page.refresh();});
+            inst.waitForIdleSync();if(count>=8)assertFunctionHints(false,count>8);
+        }
+        inst.runOnMainSync(()->{assertTrue(page.buffer().applyAi("一".repeat(9)));page.refresh();});inst.waitForIdleSync();await("空白 up ⌫ left 還原 down AI right 送出");assertFunctionHints(true,true);screenshot("dh-function-ai");
+        inst.runOnMainSync(()->{assertTrue(page.buffer().restoreAi());page.buffer().backspace();page.refresh();});inst.waitForIdleSync();await("空白 up ⌫ left 刪詞 down AI right 送出");assertFunctionHints(false,false);
+        inst.runOnMainSync(()->{assertTrue(page.buffer().applyAi("一".repeat(8)));page.refresh();});inst.waitForIdleSync();assertFunctionHints(true,false);
+        inst.runOnMainSync(()->{page.buffer().clearBuffer();page.refresh();});inst.waitForIdleSync();assertFunctionHints(false,false);
     }
 }
