@@ -14,16 +14,16 @@
   },
   "artifacts": {
     "draft_chars.tsv": {
-      "sha256": "24fd2d94a3bb9646b167e91e4dc8e16c79499627480c6641a559557d771c86ca",
+      "sha256": "437328def90605faeaae6ca57ca32cb9f0a7f5e6b000c35198ae17648f90323c",
       "bytes": 5011
     },
     "dual_hand_map.tsv": {
-      "sha256": "f7526d907c77bd0e9be34d77d17cd9e6a5bb03b6bbb37647b7b90c87f727c452",
-      "bytes": 13357
+      "sha256": "c572cdf89583c45c5985fa3385f59566b7ebdcb635f0ef1f5460cc7ed914211a",
+      "bytes": 13474
     },
     "grid_chars.tsv": {
-      "sha256": "dc4db1984fafd7d2f9a8abfcc073845d33885f70423397ebf9cc40b4f9a4ce9c",
-      "bytes": 17644
+      "sha256": "e57af7e2bcaae000d97084bed96c74f9cbad1856b66986cd935f3575649982a9",
+      "bytes": 17608
     },
     "left_hand.tsv": {
       "sha256": "95dc6b66367e0e4b696481f331314dfc384f4bbc294b9cc87c75f22fc90fe2ba",
@@ -34,7 +34,7 @@
       "bytes": 3547192
     },
     "draft_chars_ai.tsv": {
-      "sha256": "437328def90605faeaae6ca57ca32cb9f0a7f5e6b000c35198ae17648f90323c",
+      "sha256": "5c1f6f3386a6317fffa96259feff0798566d737c0ba6ced5f7efe654c2643d49",
       "bytes": 5011
     }
   }
