@@ -954,6 +954,7 @@ public class SimonIMEService extends InputMethodService {
                 case MotionEvent.ACTION_DOWN:
                     backspaceDiagnosticTick=0;
                     Integer diagnosticBefore=backspaceLength();
+                    int composingBefore=backspaceComposingLength();
                     if (touchShadow != null) touchShadow.invalidate();
                     backspacePressed = true;
                     backspaceRepeatCount = 0;
@@ -963,13 +964,14 @@ public class SimonIMEService extends InputMethodService {
                         if (!deleteSelectionIfAny(ic0)) deleteSurroundingTextProgrammatically(ic0, 1, 0);
                     }
                     // 啟動連刪
-                    recordBackspace("down",diagnosticBefore);
+                    recordBackspace("down",diagnosticBefore,composingBefore);
                     backspaceRepeatRunnable = new Runnable() {
                         @Override
                         public void run() {
                             if (!backspacePressed) return;
                             backspaceDiagnosticTick++;
                             Integer repeatBefore=backspaceLength();
+                            int repeatComposingBefore=backspaceComposingLength();
                             InputConnection ic = getCurrentInputConnection();
                             if (ic != null) {
                                 backspaceRepeatCount++;
@@ -979,7 +981,7 @@ public class SimonIMEService extends InputMethodService {
                                 deleteSurroundingTextProgrammatically(ic, deleteCount, 0);
                             }
                             // 加速間隔：初始 120ms → 最低 30ms
-                            recordBackspace("repeat",repeatBefore);
+                            recordBackspace("repeat",repeatBefore,repeatComposingBefore);
                             long delay = Math.max(30, 120 - backspaceRepeatCount * 6);
                             mainHandler.postDelayed(this, delay);
                         }
@@ -989,7 +991,7 @@ public class SimonIMEService extends InputMethodService {
                     return true;
                 case MotionEvent.ACTION_UP:
                 case MotionEvent.ACTION_CANCEL:
-                    recordBackspace(event.getAction()==MotionEvent.ACTION_UP?"up":"cancel",null);
+                    recordBackspace(event.getAction()==MotionEvent.ACTION_UP?"up":"cancel",null,backspaceComposingLength());
                     backspacePressed = false;
                     if (backspaceRepeatRunnable != null) {
                         mainHandler.removeCallbacks(backspaceRepeatRunnable);
@@ -4613,11 +4615,29 @@ public class SimonIMEService extends InputMethodService {
             return text==null||text.text==null||text.startOffset!=0||text.partialStartOffset>=0?null:text.text.length();
         } catch(RuntimeException unavailable) { Log.w(TAG,"Backspace length unavailable",unavailable);return null; }
     }
-    private void recordBackspace(String phase,Integer before) {
-        ImeTelemetry telemetry=ImeTelemetry.get();if(telemetry==null||protectedInputField)return;
-        Integer after=before==null?null:backspaceLength();
+    private int backspaceComposingLength() {
+        if(currentKeyboardMode!=KeyboardMode.BOPOMOFO||zhuyinInput==null)return 0;
+        return (int)zhuyinInput.sentenceKeys().codePoints().filter(cp->cp>=0x3105&&cp<=0x312f
+                ||cp>=0x31a0&&cp<=0x31bf||" ˉˊˇˋ˙".indexOf(cp)>=0).count();
+    }
+    private void recordBackspace(String phase,Integer before,int composingBefore) {
+        if(protectedInputField)return;
+        int composingAfter=backspaceComposingLength();
+        boolean start=zhuyinInput!=null&&currentKeyboardMode==KeyboardMode.BOPOMOFO
+                &&(zhuyinInput.previewBoundary()==0||zhuyinInput.keyCaret()==0);
+        if("down".equals(phase)&&start&&composingBefore>0&&composingBefore==composingAfter)
+            updateStatus("游標在開頭，請移動游標後刪除");
+        ImeTelemetry telemetry=ImeTelemetry.get();if(telemetry==null)return;
+        Integer after=backspaceLength();
         String page=currentKeyboardMode==KeyboardMode.BOPOMOFO?"bopomofo":currentKeyboardMode==KeyboardMode.ENGLISH?"english":"symbol";
-        telemetry.backspaceHold(page,phase,backspaceDiagnosticTick,before==null||after==null?null:after-before,false);
+        telemetry.backspaceHold(page,phase,backspaceDiagnosticTick,before==null||after==null?null:after-before,
+                after==null?null:after==0,composingBefore,false);
+        if(before!=null&&before>0&&before.equals(after)&&composingBefore==composingAfter){
+            if("down".equals(phase))updateStatus(start?"游標在開頭，請移動游標後刪除":"未刪除內容，請確認游標位置");
+            try{telemetry.record("key_outcome",page,new JSONObject().put("key","").put("key_to_candidate_ms",JSONObject.NULL)
+                    .put("step",start?"backspace_cursor_start":"backspace_no_change").put("ok",false),false);}
+            catch(org.json.JSONException error){Log.w(TAG,"Backspace outcome unavailable",error);}
+        }
     }
     private void setupBackspaceTouch(View backspaceView) {
         backspaceView.setOnTouchListener((v, event) -> {
@@ -4625,6 +4645,7 @@ public class SimonIMEService extends InputMethodService {
                 case MotionEvent.ACTION_DOWN:
                     backspaceDiagnosticTick=0;
                     Integer diagnosticBefore=backspaceLength();
+                    int composingBefore=backspaceComposingLength();
                     recordKeyTouch(v,"backspace",event,currentKeyboardMode==KeyboardMode.BOPOMOFO?"bopomofo":currentKeyboardMode==KeyboardMode.ENGLISH?"english":"symbol");
                     if (touchShadow != null) touchShadow.invalidate();
                     backspacePressed = true;
@@ -4646,18 +4667,19 @@ public class SimonIMEService extends InputMethodService {
                             }
                         }
                     }
-                    recordBackspace("down",diagnosticBefore);
+                    recordBackspace("down",diagnosticBefore,composingBefore);
                     backspaceRepeatRunnable = new Runnable() {
                         @Override
                         public void run() {
                             if (!backspacePressed) return;
                             backspaceDiagnosticTick++;
                             Integer repeatBefore=backspaceLength();
+                            int repeatComposingBefore=backspaceComposingLength();
                             InputConnection ic = getCurrentInputConnection();
                             if (ic != null) {
                                 if (currentKeyboardMode == KeyboardMode.BOPOMOFO && !zhuyinInput.state().composingText.isEmpty()) {
                                     applyZhuyinState(pressZhuyinWithTouch("backspace"));
-                                    recordBackspace("repeat",repeatBefore);
+                                    recordBackspace("repeat",repeatBefore,repeatComposingBefore);
                                     mainHandler.postDelayed(this, 120);
                                     return;
                                 }
@@ -4672,7 +4694,7 @@ public class SimonIMEService extends InputMethodService {
                                     refreshEnglishSuggestions();
                                 }
                             }
-                            recordBackspace("repeat",repeatBefore);
+                            recordBackspace("repeat",repeatBefore,repeatComposingBefore);
                             long delay = Math.max(30, 120 - backspaceRepeatCount * 6);
                             mainHandler.postDelayed(this, delay);
                         }
@@ -4684,7 +4706,7 @@ public class SimonIMEService extends InputMethodService {
                     return true;
                 case MotionEvent.ACTION_UP:
                 case MotionEvent.ACTION_CANCEL:
-                    recordBackspace(event.getAction()==MotionEvent.ACTION_UP?"up":"cancel",null);
+                    recordBackspace(event.getAction()==MotionEvent.ACTION_UP?"up":"cancel",null,backspaceComposingLength());
                     backspacePressed = false;
                     if (event.getAction() == MotionEvent.ACTION_UP && currentKeyboardMode == KeyboardMode.BOPOMOFO)
                         recordBopomofoTouch(v, "backspace", event);

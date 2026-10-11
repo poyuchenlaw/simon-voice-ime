@@ -50,7 +50,9 @@ public class Diagnostic681AndroidTest extends Delete681AndroidTest {
   save("backspace-hold-queue.json",found.toString());readback("diagnostic-hold-after-text.json");screenshot("diagnostic-hold");
   int starts=0,ends=0,repeats=0,delta=0;for(int n=0;n<found.length();n++){
    JSONObject e=found.getJSONObject(n);assertEquals("backspace",e.getString("key"));
-   java.util.Set<String> allowed=new java.util.HashSet<>(java.util.Arrays.asList("ts","type","session_id","page","app_version","key","phase","tick","length_delta"));
+   assertTrue("field_empty is boolean",e.get("field_empty") instanceof Boolean);
+   assertEquals("committed field has no composing keys",0,e.getInt("composing_len"));
+   java.util.Set<String> allowed=new java.util.HashSet<>(java.util.Arrays.asList("ts","type","session_id","page","app_version","key","phase","tick","length_delta","field_empty","composing_len"));
    for(java.util.Iterator<String> keys=e.keys();keys.hasNext();)assertTrue("metadata keys only",allowed.contains(keys.next()));
    switch(e.getString("phase")){case "down":starts++;break;case "up":ends++;break;case "repeat":repeats++;assertEquals(repeats,e.getInt("tick"));break;}
    if(!e.isNull("length_delta"))delta+=e.getInt("length_delta");

@@ -168,10 +168,11 @@ final class ImeTelemetry {
                 .put("callback",callback).put("what",what).put("input_active",input).put("candidates_active",candidates),false); }
         catch(org.json.JSONException failure) { droppedEvents.incrementAndGet();Log.w("ImeTelemetry","Main dispatch metadata dropped",failure); }
     }
-    void backspaceHold(String page,String phase,int tick,Integer delta,boolean protectedField) {
+    void backspaceHold(String page,String phase,int tick,Integer delta,Boolean fieldEmpty,int composingLen,boolean protectedField) {
         if(protectedField)return;
         try { record("backspace_hold",page,new JSONObject().put("key","backspace").put("phase",phase)
-                .put("tick",tick).put("length_delta",delta==null?JSONObject.NULL:delta),false); }
+                .put("tick",tick).put("length_delta",delta==null?JSONObject.NULL:delta)
+                .put("field_empty",fieldEmpty).put("composing_len",composingLen),false); }
         catch(org.json.JSONException failure) { droppedEvents.incrementAndGet();Log.w("ImeTelemetry","Backspace metadata dropped",failure); }
     }
     static JSONObject missedTouchFields(long ms,int x,int y,String nearestKey)throws org.json.JSONException {

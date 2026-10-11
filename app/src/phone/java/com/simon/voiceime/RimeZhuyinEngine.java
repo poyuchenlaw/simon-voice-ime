@@ -84,6 +84,10 @@ final class RimeZhuyinEngine implements ZhuyinInputController.Engine, AutoClosea
     @Override public void key(String symbol){if(parts.isEmpty()){return;}if(textLayout&&caret<0)textKey(symbol);else current().key(symbol);if(caret>=0)caret=cursorPosition();}
     @Override public void recordTouch(int[] k,double[] p,boolean[] a){if(parts.isEmpty()){return;}current().recordTouch(k,p,a);}
     @Override public void backspace(){if(parts.isEmpty()){return;}
+        // A removed literal leaves adjacent native segments; delete in the segment before the caret.
+        while(current().cursorPosition()==0&&active>0&&parts.get(active-1).engine!=null){
+            active--;current().keyCaret(count(current().sentenceKeys()));
+        }
         if(current().cursorPosition()==0&&active>0&&parts.get(active-1).engine==null){
             parts.remove(active-1);active--;caret=keyOffset();current().keyCaret(0);return;
         }
