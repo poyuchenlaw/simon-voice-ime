@@ -10,10 +10,18 @@ import java.nio.charset.StandardCharsets;
 import java.util.*;
 import org.json.*;
 
-/** Six left families + seven right finals + three function keys. W3 plugs into Hooks. */
+/** Six left families, seven finals, and offline/AI/correction tracks. */
 public final class DualHandKeyboard implements DualHandPage {
     public interface Hooks {
         default void changed(DualHandKeyboard keyboard) {}
+        default boolean beforeSyllable(DualHandKeyboard keyboard){return true;}
+        default boolean beforeWrite(DualHandKeyboard keyboard){return true;}
+        default void written(DualHandKeyboard keyboard) {}
+        default void committed(DualHandKeyboard keyboard,String text,List<String> sounds) {}
+        default void cancel(DualHandKeyboard keyboard,boolean clear) {}
+        default void close(DualHandKeyboard keyboard) {}
+        default void cursorAnchor(android.view.inputmethod.CursorAnchorInfo info) {}
+        default List<Integer> warnings(DualHandKeyboard keyboard){return Collections.emptyList();}
         default boolean space(DualHandKeyboard keyboard) {return false;}
         default void ai(DualHandKeyboard keyboard) {keyboard.service.dualHandStatus("AI 功能待接入");}
         default boolean restore(DualHandKeyboard keyboard) {keyboard.service.dualHandStatus("還原／刪詞功能待接入");return true;}
@@ -54,6 +62,7 @@ public final class DualHandKeyboard implements DualHandPage {
         root.addOnLayoutChangeListener((v,l,t,r,b,ol,ot,or,ob)->{if(r-l!=or-ol)sizeHalves(r-l);});
         root.setOnApplyWindowInsetsListener((v,in)->{root.setPadding(dp(3),0,dp(3),dp(3)+in.getSystemWindowInsetBottom());return in;});
         sizeHalves(service.getResources().getDisplayMetrics().widthPixels);renderLabels();
+        setHooks(new DualHandEditor(this,service,ui));
     }
     private Reader asset(String name)throws IOException {return new InputStreamReader(service.getAssets().open("dual_hand/"+name),StandardCharsets.UTF_8);}
     private int dp(float value){return Math.round(value*service.getResources().getDisplayMetrics().density);}
@@ -120,15 +129,20 @@ public final class DualHandKeyboard implements DualHandPage {
         if(state!=null&&!Arrays.asList("Ø","ㄧ","ㄨ","ㄩ").contains(state)&&syllable.startsWith(state))syllable=syllable.substring(state.length());
         return syllable.isEmpty()?"Ø":syllable;
     }
+    public boolean compose(List<Integer> warnings){
+        if(!hooks.beforeWrite(this))return false;boolean accepted=service.dualHandCompose(state.draft(),warnings);
+        if(accepted){composing=!state.draft().isEmpty();hooks.written(this);}else service.dualHandStatus("輸入框未接受組字，草稿已保留");return accepted;
+    }
+    public void refresh(){changed(false);}
     private void changed(boolean editor){
-        if(editor){if(service.dualHandCompose(state.draft()))composing=!state.draft().isEmpty();else service.dualHandStatus("輸入框未接受組字，草稿已保留");}
+        if(editor)compose(hooks.warnings(this));
         renderLabels();hooks.changed(this);
     }
     private void vibrate(){if(service.getSharedPreferences("simon_ime_prefs",0).getBoolean("haptic_enabled",true))root.performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK);}
     private void flush(){
         if(closed)return;
         List<DualHandState.Output> ready;
-        while(!(ready=state.drain(SystemClock.uptimeMillis())).isEmpty())for(DualHandState.Output result:ready){
+        while(!(ready=state.drain(SystemClock.uptimeMillis(),()->hooks.beforeSyllable(this))).isEmpty())for(DualHandState.Output result:ready){
             if(result.empty)vibrate();
             if(!result.syllable.isEmpty()){JSONObject data=new JSONObject();try{data.put("state",result.state).put("key",result.stroke.key).put("gesture",result.direction).put("syllable",result.syllable);}catch(JSONException error){throw new IllegalStateException(error);}event("dh_syllable",data);changed(true);}
             else if(!DualHandTable.isLeft(result.stroke.key)&&!DualHandTable.isRight(result.stroke.key))function(result.stroke.key,result.direction);
@@ -145,7 +159,7 @@ public final class DualHandKeyboard implements DualHandPage {
             case "up":DualHandState.Delete deleted=state.backspace();if(deleted==DualHandState.Delete.EDITOR)service.dualHandErase();else changed(deleted==DualHandState.Delete.SYLLABLE);break;
             case "down":if(service.dualHandProtected())vibrate();else hooks.ai(this);break;
             case "left":if(!hooks.restore(this)&&finish())service.dualHandStatus("刪詞功能待接入");break;
-            case "right":if(finish())service.dualHandFunction("enter");break;
+            case "right":if(!state.syllables().isEmpty())finish();else if(finish())service.dualHandFunction("enter");break;
         }
         else if("symbols".equals(key))switch(direction){
             case "tap":if(finish())service.dualHandPanel("symbols");break;
@@ -163,17 +177,19 @@ public final class DualHandKeyboard implements DualHandPage {
         }
     }
     public boolean finish(){
-        String value=state.draft();if(!value.isEmpty()&&!service.dualHandCommit(value))return false;
+        String value=state.draft();List<String> sounds=state.syllables();if(!value.isEmpty()&&!hooks.beforeWrite(this))return false;
+        if(!value.isEmpty()&&!service.dualHandCommit(value))return false;
         if(value.isEmpty()&&composing&&!service.dualHandFinishComposition())return false;
-        composing=false;state.clearBuffer();changed(false);return true;
+        composing=false;hooks.committed(this,value,sounds);state.clearBuffer();changed(false);return true;
     }
-    public void requestGrid(int index){if(index<0||index>=state.syllables().size())return;try{event("dh_grid",new JSONObject().put("action","open_hook").put("index",index));}catch(JSONException error){throw new IllegalStateException(error);}hooks.grid(this,index);}
-    private void event(String name,JSONObject fields){if(service.dualHandProtected())return;ImeTelemetry telemetry=ImeTelemetry.get();if(telemetry!=null)telemetry.record(name,"dual_hand",fields,service.dualHandProtected());}
+    public void requestGrid(int index){if(index<0||index>=state.syllables().size())return;hooks.grid(this,index);}
+    public void event(String name,JSONObject fields){if(service.dualHandProtected())return;ImeTelemetry telemetry=ImeTelemetry.get();if(telemetry!=null)telemetry.record(name,"dual_hand",fields,service.dualHandProtected());}
     private void cancelTouches(){touches.clear();state.cancelTouches();ui.removeCallbacks(flush);for(FrameLayout key:keys.values())key.setPressed(false);}
-    public void clear(){cancelTouches();state.clear();composing=false;changed(false);}
-    public void reconfigure(){cancelTouches();sizeHalves(root.getWidth());renderLabels();}
+    public void clear(){cancelTouches();hooks.cancel(this,true);state.clear();composing=false;changed(false);}
+    public void reconfigure(){cancelTouches();hooks.cancel(this,false);sizeHalves(root.getWidth());renderLabels();}
     public void selection(int start,int end,int composingStart,int composingEnd){hooks.selection(this,start,end,composingStart,composingEnd);}
-    public void close(){closed=true;cancelTouches();}
+    public void cursorAnchor(android.view.inputmethod.CursorAnchorInfo info){hooks.cursorAnchor(info);}
+    public void close(){closed=true;cancelTouches();hooks.cancel(this,true);hooks.close(this);}
     private final class Surface extends LinearLayout {
         Surface(){super(service);setMotionEventSplittingEnabled(false);}
         private String hit(float x,float y){

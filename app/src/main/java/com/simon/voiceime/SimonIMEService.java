@@ -1172,6 +1172,9 @@ public class SimonIMEService extends InputMethodService {
     }
 
     private View buildSymbolPopupContent(String[] symbols, int columns, String fallbackText) {
+        return buildChoiceGrid(symbols,columns,40,index->{commitSymbolFromPopup(symbols[index],fallbackText);dismissSymbolPopup();});
+    }
+    View buildChoiceGrid(String[] symbols,int columns,int width,java.util.function.IntConsumer choose) {
         LinearLayout panel = new LinearLayout(this);
         panel.setOrientation(LinearLayout.VERTICAL);
         panel.setPadding(dp(6), dp(6), dp(6), dp(6));
@@ -1179,7 +1182,8 @@ public class SimonIMEService extends InputMethodService {
         GridLayout grid = new GridLayout(this);
         grid.setColumnCount(columns);
         grid.setRowCount((int) Math.ceil(symbols.length / (double) columns));
-        for (String symbol : symbols) {
+        for (int index=0;index<symbols.length;index++) {
+            String symbol=symbols[index];final int selected=index;
             TextView button = new TextView(this);
             button.setText(symbol);
             button.setTextColor(0xFFE0E0E0);
@@ -1188,12 +1192,12 @@ public class SimonIMEService extends InputMethodService {
             button.setBackgroundColor(0xFF16213E);
             button.setClickable(true);
             button.setFocusable(true);
+            button.setEnabled(!symbol.isEmpty());
             button.setOnClickListener(v -> {
-                commitSymbolFromPopup(symbol, fallbackText);
-                dismissSymbolPopup();
+                choose.accept(selected);
             });
             GridLayout.LayoutParams lp = new GridLayout.LayoutParams();
-            lp.width = dp(40);
+            lp.width = dp(width);
             lp.height = dp(38);
             lp.setMargins(dp(2), dp(2), dp(2), dp(2));
             grid.addView(button, lp);
@@ -4306,6 +4310,10 @@ public class SimonIMEService extends InputMethodService {
         catch(Throwable error){Log.e(TAG,"Dual hand unavailable",error);dualHandSelected=false;updateStatus("雙手鍵盤載入失敗，可使用注音");}
         if(dualHandPage!=null&&bopomofoKeyboard!=null){View view=dualHandPage.view();ViewGroup owner=(ViewGroup)bopomofoKeyboard.getParent();if(view.getParent()!=owner){if(view.getParent() instanceof ViewGroup)((ViewGroup)view.getParent()).removeView(view);owner.addView(view,owner.indexOfChild(bopomofoKeyboard)+1);}view.setVisibility(currentKeyboardMode==KeyboardMode.BOPOMOFO&&dualHandSelected?View.VISIBLE:View.GONE);}
     }
+    @Override public void onUpdateCursorAnchorInfo(android.view.inputmethod.CursorAnchorInfo info){
+        super.onUpdateCursorAnchorInfo(info);
+        if(dualHandSelected&&dualHandPage!=null)dualHandPage.cursorAnchor(info);
+    }
     private void toggleDualHand(){
         if(!getSharedPreferences("simon_ime_prefs",MODE_PRIVATE).getBoolean("dual_hand_enabled",true)){updateStatus("雙手鍵盤已在設定關閉");return;}
         if(dualHandPage!=null&&!dualHandPage.finish())return;
@@ -4315,12 +4323,19 @@ public class SimonIMEService extends InputMethodService {
         getSharedPreferences("simon_ime_prefs",MODE_PRIVATE).edit().putBoolean("dual_hand_mode",dualHandSelected).apply();
         configureTextRows();switchKeyboard(KeyboardMode.BOPOMOFO);
     }
+    void dualHandCursorUpdates(){InputConnection connection=getCurrentInputConnection();if(connection!=null)try{connection.requestCursorUpdates(InputConnection.CURSOR_UPDATE_IMMEDIATE|InputConnection.CURSOR_UPDATE_MONITOR);}catch(RuntimeException unsupported){}}
     boolean dualHandProtected(){return protectedInputField;}
+    boolean dualHandSelfUpdate(){return cursorTapGuard.selfUpdate();}
+    long dualHandFieldGeneration(){return fieldGeneration;}
     void dualHandStatus(String text){updateStatus(text);}
-    boolean dualHandCompose(String text){
+    boolean dualHandCompose(String text){return dualHandCompose(text,java.util.Collections.emptyList());}
+    boolean dualHandCompose(String text,java.util.List<Integer> warnings){
         InputConnection ic=getCurrentInputConnection();if(ic==null)return false;
         android.text.SpannableString underlined=new android.text.SpannableString(text);
-        if(!text.isEmpty())underlined.setSpan(new android.text.style.UnderlineSpan(),0,text.length(),android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+        int cp=0;for(int at=0;at<text.length();cp++){
+            int end=at+Character.charCount(text.codePointAt(at));
+            underlined.setSpan(warnings.contains(cp)?new DualHandWarningSpan():new android.text.style.UnderlineSpan(),at,end,android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);at=end;
+        }
         try{markProgrammaticTextChange();return ic.setComposingText(underlined,1);}catch(RuntimeException error){Log.w(TAG,"Dual-hand composing rejected",error);return false;}
     }
     boolean dualHandCommit(String text){
@@ -5288,7 +5303,7 @@ public class SimonIMEService extends InputMethodService {
     @Override public boolean onKeyDown(int code,android.view.KeyEvent event){if(externalCandidatePending||externalConnection!=null)invalidateExternalCandidates();return super.onKeyDown(code,event);}
     @Override public InputConnection getCurrentInputConnection(){
         InputConnection raw=super.getCurrentInputConnection();
-        if(raw==null||!textLayoutSelected()||currentKeyboardMode!=KeyboardMode.BOPOMOFO||protectedInputField)return raw;
+        if(raw==null||(!textLayoutSelected()&&!dualHandSelected)||currentKeyboardMode!=KeyboardMode.BOPOMOFO||(protectedInputField&&!dualHandSelected))return raw;
         if(raw!=cursorRawConnection){
             cursorRawConnection=raw;cursorTapGuard.reset();cursorTapGuard.observe(selectionStart,selectionEnd,-1,-1);
             cursorTrackedConnection=new android.view.inputmethod.InputConnectionWrapper(raw,false){
@@ -6613,7 +6628,6 @@ public class SimonIMEService extends InputMethodService {
     @Override
     public void onUpdateSelection(int oldSelStart, int oldSelEnd, int newSelStart, int newSelEnd,
                                   int candidatesStart, int candidatesEnd) {
-        if(dualHandSelected&&dualHandPage!=null)dualHandPage.selection(newSelStart,newSelEnd,candidatesStart,candidatesEnd);
         if(retainedTextNeedsReclaim&&reclaimTextComposition(getCurrentInputEditorInfo()))applyZhuyinState(zhuyinInput.state());
         if(textLayoutSelected()&&!protectedInputField&&zhuyinInput!=null&&zhuyinComposingConnection!=null&&zhuyinComposingConnection==getCurrentInputConnection()){
             String value=zhuyinInput.textPreview();
@@ -6635,6 +6649,7 @@ public class SimonIMEService extends InputMethodService {
                 candidatesStart>=0||zhuyinInput!=null&&!zhuyinInput.previewText().isEmpty(),
                 protectedInputField||currentKeyboardMode!=KeyboardMode.BOPOMOFO||!textLayoutSelected());
         cursorTapGuard.observe(newSelStart,newSelEnd,candidatesStart,candidatesEnd);
+        if(dualHandSelected&&dualHandPage!=null)dualHandPage.selection(newSelStart,newSelEnd,candidatesStart,candidatesEnd);
         updateExternalSelection(newSelStart,newSelEnd,tap);
         if(textLayoutSelected()&&zhuyinInput!=null&&zhuyinInput.previewText().isEmpty())renderTextCandidateRows();
         deferRankingContext();

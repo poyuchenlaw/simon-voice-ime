@@ -7,5 +7,6 @@ interface DualHandPage extends AutoCloseable {
     boolean finish();
     void reconfigure();
     void selection(int start,int end,int composingStart,int composingEnd);
+    default void cursorAnchor(android.view.inputmethod.CursorAnchorInfo info) {}
     void close();
 }

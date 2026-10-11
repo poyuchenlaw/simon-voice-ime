@@ -5,8 +5,8 @@ state	key	gesture	syllable
 ㄅ	A	right	
 ㄅ	A	down	
 ㄅ	B	tap	ㄅㄛ
-ㄅ	B	left	ㄅㄧㄝ
-ㄅ	B	up	
+ㄅ	B	left	
+ㄅ	B	up	ㄅㄧㄝ
 ㄅ	B	right	
 ㄅ	B	down	
 ㄅ	C	tap	ㄅㄞ
@@ -40,8 +40,8 @@ state	key	gesture	syllable
 ㄆ	A	right	
 ㄆ	A	down	
 ㄆ	B	tap	ㄆㄛ
-ㄆ	B	left	ㄆㄧㄝ
-ㄆ	B	up	
+ㄆ	B	left	
+ㄆ	B	up	ㄆㄧㄝ
 ㄆ	B	right	
 ㄆ	B	down	
 ㄆ	C	tap	ㄆㄞ
@@ -131,9 +131,9 @@ state	key	gesture	syllable
 ㄈ	E	down	
 ㄈ	F	tap	ㄈㄤ
 ㄈ	F	left	ㄈㄥ
-ㄈ	F	up	ㄈㄨㄥ
+ㄈ	F	up	
 ㄈ	F	right	
-ㄈ	F	down	
+ㄈ	F	down	ㄈㄨㄥ
 ㄈ	Ø	tap	
 ㄈ	Ø	left	
 ㄈ	Ø	up	
@@ -145,8 +145,8 @@ state	key	gesture	syllable
 ㄉ	A	right	
 ㄉ	A	down	
 ㄉ	B	tap	ㄉㄜ
-ㄉ	B	left	ㄉㄧㄝ
-ㄉ	B	up	
+ㄉ	B	left	
+ㄉ	B	up	ㄉㄧㄝ
 ㄉ	B	right	ㄉㄨㄛ
 ㄉ	B	down	
 ㄉ	C	tap	ㄉㄞ
@@ -166,9 +166,9 @@ state	key	gesture	syllable
 ㄉ	E	down	ㄉㄨㄣ
 ㄉ	F	tap	ㄉㄤ
 ㄉ	F	left	ㄉㄥ
-ㄉ	F	up	ㄉㄨㄥ
+ㄉ	F	up	
 ㄉ	F	right	ㄉㄧㄥ
-ㄉ	F	down	
+ㄉ	F	down	ㄉㄨㄥ
 ㄉ	Ø	tap	
 ㄉ	Ø	left	
 ㄉ	Ø	up	ㄉㄧ
@@ -180,15 +180,15 @@ state	key	gesture	syllable
 ㄊ	A	right	
 ㄊ	A	down	
 ㄊ	B	tap	ㄊㄜ
-ㄊ	B	left	ㄊㄧㄝ
-ㄊ	B	up	
+ㄊ	B	left	
+ㄊ	B	up	ㄊㄧㄝ
 ㄊ	B	right	ㄊㄨㄛ
 ㄊ	B	down	
 ㄊ	C	tap	ㄊㄞ
 ㄊ	C	left	
 ㄊ	C	up	
-ㄊ	C	right	
-ㄊ	C	down	ㄊㄨㄟ
+ㄊ	C	right	ㄊㄨㄟ
+ㄊ	C	down	
 ㄊ	D	tap	ㄊㄠ
 ㄊ	D	left	ㄊㄡ
 ㄊ	D	up	ㄊㄧㄠ
@@ -201,9 +201,9 @@ state	key	gesture	syllable
 ㄊ	E	down	ㄊㄨㄣ
 ㄊ	F	tap	ㄊㄤ
 ㄊ	F	left	ㄊㄥ
-ㄊ	F	up	ㄊㄨㄥ
+ㄊ	F	up	
 ㄊ	F	right	ㄊㄧㄥ
-ㄊ	F	down	
+ㄊ	F	down	ㄊㄨㄥ
 ㄊ	Ø	tap	
 ㄊ	Ø	left	
 ㄊ	Ø	up	ㄊㄧ
@@ -215,8 +215,8 @@ state	key	gesture	syllable
 ㄋ	A	right	
 ㄋ	A	down	
 ㄋ	B	tap	ㄋㄜ
-ㄋ	B	left	ㄋㄧㄝ
-ㄋ	B	up	
+ㄋ	B	left	
+ㄋ	B	up	ㄋㄧㄝ
 ㄋ	B	right	ㄋㄨㄛ
 ㄋ	B	down	ㄋㄩㄝ
 ㄋ	C	tap	ㄋㄞ
@@ -230,10 +230,10 @@ state	key	gesture	syllable
 ㄋ	D	right	
 ㄋ	D	down	ㄋㄧㄡ
 ㄋ	E	tap	ㄋㄢ
-ㄋ	E	left	ㄋㄣ
+ㄋ	E	left	ㄋㄧㄣ
 ㄋ	E	up	ㄋㄧㄢ
 ㄋ	E	right	ㄋㄨㄢ
-ㄋ	E	down	ㄋㄧㄣ
+ㄋ	E	down	ㄋㄣ
 ㄋ	F	tap	ㄋㄤ
 ㄋ	F	left	ㄋㄥ
 ㄋ	F	up	ㄋㄧㄤ
@@ -251,9 +251,9 @@ state	key	gesture	syllable
 ㄌ	A	down	
 ㄌ	B	tap	ㄌㄜ
 ㄌ	B	left	ㄌㄛ
-ㄌ	B	up	ㄌㄩㄝ
+ㄌ	B	up	ㄌㄧㄝ
 ㄌ	B	right	ㄌㄨㄛ
-ㄌ	B	down	ㄌㄧㄝ
+ㄌ	B	down	ㄌㄩㄝ
 ㄌ	C	tap	ㄌㄞ
 ㄌ	C	left	ㄌㄟ
 ㄌ	C	up	
@@ -341,9 +341,9 @@ state	key	gesture	syllable
 ㄎ	E	down	ㄎㄨㄣ
 ㄎ	F	tap	ㄎㄤ
 ㄎ	F	left	ㄎㄥ
-ㄎ	F	up	ㄎㄨㄥ
+ㄎ	F	up	
 ㄎ	F	right	ㄎㄨㄤ
-ㄎ	F	down	
+ㄎ	F	down	ㄎㄨㄥ
 ㄎ	Ø	tap	
 ㄎ	Ø	left	
 ㄎ	Ø	up	
@@ -376,9 +376,9 @@ state	key	gesture	syllable
 ㄏ	E	down	ㄏㄨㄣ
 ㄏ	F	tap	ㄏㄤ
 ㄏ	F	left	ㄏㄥ
-ㄏ	F	up	ㄏㄨㄥ
+ㄏ	F	up	
 ㄏ	F	right	ㄏㄨㄤ
-ㄏ	F	down	
+ㄏ	F	down	ㄏㄨㄥ
 ㄏ	Ø	tap	
 ㄏ	Ø	left	
 ㄏ	Ø	up	
@@ -390,17 +390,17 @@ state	key	gesture	syllable
 ㄐ	A	right	
 ㄐ	A	down	
 ㄐ	B	tap	ㄐㄧㄝ
-ㄐ	B	left	ㄐㄩㄝ
-ㄐ	B	up	
+ㄐ	B	left	
+ㄐ	B	up	ㄐㄧㄝ
 ㄐ	B	right	
-ㄐ	B	down	
+ㄐ	B	down	ㄐㄩㄝ
 ㄐ	C	tap	
 ㄐ	C	left	
 ㄐ	C	up	
 ㄐ	C	right	
 ㄐ	C	down	
 ㄐ	D	tap	ㄐㄧㄠ
-ㄐ	D	left	
+ㄐ	D	left	ㄐㄧㄡ
 ㄐ	D	up	ㄐㄧㄠ
 ㄐ	D	right	
 ㄐ	D	down	ㄐㄧㄡ
@@ -409,11 +409,11 @@ state	key	gesture	syllable
 ㄐ	E	up	ㄐㄧㄢ
 ㄐ	E	right	ㄐㄩㄣ
 ㄐ	E	down	ㄐㄩㄢ
-ㄐ	F	tap	ㄐㄧㄥ
-ㄐ	F	left	ㄐㄩㄥ
+ㄐ	F	tap	ㄐㄧㄤ
+ㄐ	F	left	ㄐㄧㄥ
 ㄐ	F	up	ㄐㄧㄤ
-ㄐ	F	right	
-ㄐ	F	down	
+ㄐ	F	right	ㄐㄧㄥ
+ㄐ	F	down	ㄐㄩㄥ
 ㄐ	Ø	tap	ㄐㄧ
 ㄐ	Ø	left	
 ㄐ	Ø	up	ㄐㄧ
@@ -425,30 +425,30 @@ state	key	gesture	syllable
 ㄑ	A	right	
 ㄑ	A	down	
 ㄑ	B	tap	ㄑㄧㄝ
-ㄑ	B	left	ㄑㄩㄝ
-ㄑ	B	up	
+ㄑ	B	left	
+ㄑ	B	up	ㄑㄧㄝ
 ㄑ	B	right	
-ㄑ	B	down	
+ㄑ	B	down	ㄑㄩㄝ
 ㄑ	C	tap	
 ㄑ	C	left	
 ㄑ	C	up	
 ㄑ	C	right	
 ㄑ	C	down	
-ㄑ	D	tap	ㄑㄧㄡ
-ㄑ	D	left	
+ㄑ	D	tap	ㄑㄧㄠ
+ㄑ	D	left	ㄑㄧㄡ
 ㄑ	D	up	ㄑㄧㄠ
 ㄑ	D	right	
-ㄑ	D	down	
+ㄑ	D	down	ㄑㄧㄡ
 ㄑ	E	tap	ㄑㄧㄢ
 ㄑ	E	left	ㄑㄧㄣ
 ㄑ	E	up	ㄑㄧㄢ
 ㄑ	E	right	ㄑㄩㄣ
 ㄑ	E	down	ㄑㄩㄢ
-ㄑ	F	tap	ㄑㄧㄥ
-ㄑ	F	left	ㄑㄩㄥ
+ㄑ	F	tap	ㄑㄧㄤ
+ㄑ	F	left	ㄑㄧㄥ
 ㄑ	F	up	ㄑㄧㄤ
-ㄑ	F	right	
-ㄑ	F	down	
+ㄑ	F	right	ㄑㄧㄥ
+ㄑ	F	down	ㄑㄩㄥ
 ㄑ	Ø	tap	ㄑㄧ
 ㄑ	Ø	left	
 ㄑ	Ø	up	ㄑㄧ
@@ -460,17 +460,17 @@ state	key	gesture	syllable
 ㄒ	A	right	
 ㄒ	A	down	
 ㄒ	B	tap	ㄒㄧㄝ
-ㄒ	B	left	ㄒㄩㄝ
-ㄒ	B	up	
+ㄒ	B	left	
+ㄒ	B	up	ㄒㄧㄝ
 ㄒ	B	right	
-ㄒ	B	down	
+ㄒ	B	down	ㄒㄩㄝ
 ㄒ	C	tap	
 ㄒ	C	left	
 ㄒ	C	up	
 ㄒ	C	right	
 ㄒ	C	down	
 ㄒ	D	tap	ㄒㄧㄠ
-ㄒ	D	left	
+ㄒ	D	left	ㄒㄧㄡ
 ㄒ	D	up	ㄒㄧㄠ
 ㄒ	D	right	
 ㄒ	D	down	ㄒㄧㄡ
@@ -480,10 +480,10 @@ state	key	gesture	syllable
 ㄒ	E	right	ㄒㄩㄣ
 ㄒ	E	down	ㄒㄩㄢ
 ㄒ	F	tap	ㄒㄧㄤ
-ㄒ	F	left	ㄒㄩㄥ
+ㄒ	F	left	ㄒㄧㄥ
 ㄒ	F	up	ㄒㄧㄤ
 ㄒ	F	right	ㄒㄧㄥ
-ㄒ	F	down	
+ㄒ	F	down	ㄒㄩㄥ
 ㄒ	Ø	tap	ㄒㄧ
 ㄒ	Ø	left	
 ㄒ	Ø	up	ㄒㄧ
@@ -516,9 +516,9 @@ state	key	gesture	syllable
 ㄓ	E	down	ㄓㄨㄣ
 ㄓ	F	tap	ㄓㄤ
 ㄓ	F	left	ㄓㄥ
-ㄓ	F	up	ㄓㄨㄥ
+ㄓ	F	up	
 ㄓ	F	right	ㄓㄨㄤ
-ㄓ	F	down	
+ㄓ	F	down	ㄓㄨㄥ
 ㄓ	Ø	tap	ㄓ
 ㄓ	Ø	left	
 ㄓ	Ø	up	
@@ -551,9 +551,9 @@ state	key	gesture	syllable
 ㄔ	E	down	ㄔㄨㄣ
 ㄔ	F	tap	ㄔㄤ
 ㄔ	F	left	ㄔㄥ
-ㄔ	F	up	ㄔㄨㄥ
+ㄔ	F	up	
 ㄔ	F	right	ㄔㄨㄤ
-ㄔ	F	down	
+ㄔ	F	down	ㄔㄨㄥ
 ㄔ	Ø	tap	ㄔ
 ㄔ	Ø	left	
 ㄔ	Ø	up	
@@ -621,9 +621,9 @@ state	key	gesture	syllable
 ㄖ	E	down	ㄖㄨㄣ
 ㄖ	F	tap	ㄖㄤ
 ㄖ	F	left	ㄖㄥ
-ㄖ	F	up	ㄖㄨㄥ
+ㄖ	F	up	
 ㄖ	F	right	
-ㄖ	F	down	
+ㄖ	F	down	ㄖㄨㄥ
 ㄖ	Ø	tap	ㄖ
 ㄖ	Ø	left	
 ㄖ	Ø	up	
@@ -642,8 +642,8 @@ state	key	gesture	syllable
 ㄗ	C	tap	ㄗㄞ
 ㄗ	C	left	ㄗㄟ
 ㄗ	C	up	
-ㄗ	C	right	
-ㄗ	C	down	ㄗㄨㄟ
+ㄗ	C	right	ㄗㄨㄟ
+ㄗ	C	down	
 ㄗ	D	tap	ㄗㄠ
 ㄗ	D	left	ㄗㄡ
 ㄗ	D	up	
@@ -656,9 +656,9 @@ state	key	gesture	syllable
 ㄗ	E	down	ㄗㄨㄣ
 ㄗ	F	tap	ㄗㄤ
 ㄗ	F	left	ㄗㄥ
-ㄗ	F	up	ㄗㄨㄥ
+ㄗ	F	up	
 ㄗ	F	right	
-ㄗ	F	down	
+ㄗ	F	down	ㄗㄨㄥ
 ㄗ	Ø	tap	ㄗ
 ㄗ	Ø	left	
 ㄗ	Ø	up	
@@ -677,8 +677,8 @@ state	key	gesture	syllable
 ㄘ	C	tap	ㄘㄞ
 ㄘ	C	left	
 ㄘ	C	up	
-ㄘ	C	right	
-ㄘ	C	down	ㄘㄨㄟ
+ㄘ	C	right	ㄘㄨㄟ
+ㄘ	C	down	
 ㄘ	D	tap	ㄘㄠ
 ㄘ	D	left	ㄘㄡ
 ㄘ	D	up	
@@ -691,9 +691,9 @@ state	key	gesture	syllable
 ㄘ	E	down	ㄘㄨㄣ
 ㄘ	F	tap	ㄘㄤ
 ㄘ	F	left	ㄘㄥ
-ㄘ	F	up	ㄘㄨㄥ
+ㄘ	F	up	
 ㄘ	F	right	
-ㄘ	F	down	
+ㄘ	F	down	ㄘㄨㄥ
 ㄘ	Ø	tap	ㄘ
 ㄘ	Ø	left	
 ㄘ	Ø	up	
@@ -712,8 +712,8 @@ state	key	gesture	syllable
 ㄙ	C	tap	ㄙㄞ
 ㄙ	C	left	ㄙㄟ
 ㄙ	C	up	
-ㄙ	C	right	
-ㄙ	C	down	ㄙㄨㄟ
+ㄙ	C	right	ㄙㄨㄟ
+ㄙ	C	down	
 ㄙ	D	tap	ㄙㄠ
 ㄙ	D	left	ㄙㄡ
 ㄙ	D	up	
@@ -726,9 +726,9 @@ state	key	gesture	syllable
 ㄙ	E	down	ㄙㄨㄣ
 ㄙ	F	tap	ㄙㄤ
 ㄙ	F	left	ㄙㄥ
-ㄙ	F	up	ㄙㄨㄥ
+ㄙ	F	up	
 ㄙ	F	right	
-ㄙ	F	down	
+ㄙ	F	down	ㄙㄨㄥ
 ㄙ	Ø	tap	ㄙ
 ㄙ	Ø	left	
 ㄙ	Ø	up	
@@ -741,29 +741,29 @@ state	key	gesture	syllable
 Ø	A	down	
 Ø	B	tap	ㄜ
 Ø	B	left	ㄛ
-Ø	B	up	ㄧㄛ
+Ø	B	up	ㄧㄝ
 Ø	B	right	ㄨㄛ
-Ø	B	down	ㄝ
+Ø	B	down	ㄩㄝ
 Ø	C	tap	ㄞ
 Ø	C	left	ㄟ
-Ø	C	up	ㄧㄞ
-Ø	C	right	ㄨㄞ
+Ø	C	up	
+Ø	C	right	ㄨㄟ
 Ø	C	down	
 Ø	D	tap	ㄠ
 Ø	D	left	ㄡ
-Ø	D	up	ㄧㄠ
+Ø	D	up	ㄧㄡ
 Ø	D	right	
 Ø	D	down	ㄧㄡ
 Ø	E	tap	ㄢ
 Ø	E	left	ㄣ
-Ø	E	up	ㄧㄢ
+Ø	E	up	ㄧㄣ
 Ø	E	right	ㄨㄢ
 Ø	E	down	ㄩㄢ
 Ø	F	tap	ㄤ
 Ø	F	left	ㄥ
-Ø	F	up	ㄧㄤ
+Ø	F	up	ㄧㄥ
 Ø	F	right	ㄨㄤ
-Ø	F	down	
+Ø	F	down	ㄩㄥ
 Ø	Ø	tap	
 Ø	Ø	left	ㄦ
 Ø	Ø	up	ㄧ
@@ -864,7 +864,7 @@ state	key	gesture	syllable
 ㄩ	E	up	
 ㄩ	E	right	
 ㄩ	E	down	
-ㄩ	F	tap	
+ㄩ	F	tap	ㄩㄥ
 ㄩ	F	left	ㄩㄥ
 ㄩ	F	up	
 ㄩ	F	right	
