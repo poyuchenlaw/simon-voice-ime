@@ -173,7 +173,9 @@ public final class DualHandKeyboard implements DualHandPage {
     private void function(String key,String direction){
         if("core".equals(key))switch(direction){
             case "tap":if(!hooks.space(this)){if(state.syllables().isEmpty())service.dualHandCommit(" ");else finish();}break;
-            case "up":DualHandState.Delete deleted=state.backspace();if(deleted==DualHandState.Delete.EDITOR)service.dualHandErase();else changed(deleted==DualHandState.Delete.SYLLABLE);break;
+            case "up":Integer before=service.dualHandBackspaceLength();int composingBefore=state.syllables().size();
+                DualHandState.Delete deleted=state.backspace();if(deleted==DualHandState.Delete.EDITOR)service.dualHandErase();else changed(deleted==DualHandState.Delete.SYLLABLE);
+                service.dualHandBackspaceTelemetry("down",before,composingBefore);service.dualHandBackspaceTelemetry("up",null,state.syllables().size());break;
             case "down":if(service.dualHandProtected())vibrate();else hooks.ai(this);break;
             case "left":if(!hooks.restore(this)&&finish())service.dualHandStatus("刪詞功能待接入");break;
             case "right":if(!state.syllables().isEmpty())finish();else if(finish())service.dualHandFunction("enter");break;

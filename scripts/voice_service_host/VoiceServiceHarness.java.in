@@ -146,7 +146,21 @@ public class VoiceServiceHarness {
     boolean isWatchService(){return false;}
     void pruneUtteranceGenerationState(){}
     void recordVoiceEvent(String p,String id,long ms,int chars,int code,String reason,String method,long bytes,int attempts){}
+    void recordVoiceEvent(String p,String id,long ms,int chars,int code,String reason,String method,long bytes,int attempts,String via){}
     void showPendingVoiceNotification(String start){notifications++;}
+    boolean showPendingVoiceNotification(){notifications++;return true;}
+    String pendingVoiceFieldIdentity(){return "host-field";}
+    boolean isInputViewShown(){return true;}
+    String pendingVoiceNotice;
+    static class NoticeView {boolean isShown(){return false;}}
+    NoticeView pendingVoiceCandidateNotice;
+    void offerPendingVoiceNotifications(){}
+    void renderPendingVoiceNotices(){}
+    static class Toast {static final int LENGTH_LONG=1;static Toast makeText(Object c,String text,int n){return new Toast();}void show(){}}
+    // Lifecycle timing and presentation are checked by Android tests, not this audio seam.
+    static class MainDispatchMonitor {void beginLifecycle(String name,long now){}void endLifecycle(long now){}}
+    MainDispatchMonitor mainDispatchMonitor;
+    java.lang.ref.WeakReference<VoiceServiceHarness> notificationVoiceService=new java.lang.ref.WeakReference<>(null);
     void showPendingVoiceQuotaWarning(){}
     List<String> pendingNotices=new ArrayList<>();void showPendingVoiceNotice(String message){pendingNotices.add(message);}
     String getServerUrl(){return "http://fake";}
@@ -177,7 +191,7 @@ public class VoiceServiceHarness {
     static class FakeHandler {
         final List<Runnable> delayed=new CopyOnWriteArrayList<>();final List<Long> delays=new CopyOnWriteArrayList<>();
         volatile boolean deferPosts;final List<Runnable> posts=new CopyOnWriteArrayList<>();
-        void post(Runnable r){if(deferPosts)posts.add(r);else r.run();}void postDelayed(Runnable r,long ms){delayed.add(r);delays.add(ms);}
+        boolean post(Runnable r){if(deferPosts)posts.add(r);else r.run();return true;}void postDelayed(Runnable r,long ms){delayed.add(r);delays.add(ms);}
         void removeCallbacks(Runnable r){delayed.remove(r);}
     }
     static class ClipData {final String text;ClipData(String t){text=t;}static ClipData newPlainText(String label,String t){return new ClipData(t);}}

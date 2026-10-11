@@ -9,15 +9,31 @@ final class MainDispatchMonitor {
     private long started;
     private String dispatch;
     private boolean inputActive, candidatesActive;
+    private String owner="",activeLifecycle="",dispatchLifecycle="",eventLifecycle="";
+    private long lifecycleStarted;
     private static final String CLASS = "[A-Za-z_$][A-Za-z0-9_$]*(?:\\.[A-Za-z_$][A-Za-z0-9_$]*)*";
     private static final java.util.regex.Pattern HEADER = java.util.regex.Pattern.compile(
             "^>>>>> Dispatching to Handler \\(("+CLASS+")\\) \\{[0-9a-fA-F]+\\} (.*): (-?[0-9]+)$");
     private static final java.util.regex.Pattern CALLBACK = java.util.regex.Pattern.compile("^("+CLASS+")(?:@[0-9a-fA-F]+)?$");
     MainDispatchMonitor(Sink sink) { this.sink=sink; }
+    void service(String name) {owner=name;}
+    String service() {return owner;}
+    String lifecycle() {return eventLifecycle;}
+    void beginLifecycle(String name,long now) {activeLifecycle=name;lifecycleStarted=now;if(dispatch!=null)dispatchLifecycle=name;}
+    void endLifecycle(long now) {
+        String name=activeLifecycle;activeLifecycle="";
+        emit(now-lifecycleStarted,owner,"",0,false,false,name,now);
+    }
+    private void emit(long ms,String target,String callback,int what,boolean input,boolean candidates,String lifecycle,long now) {
+        if(ms<=100||ms>Integer.MAX_VALUE||count==60&&now-emitted[next]<60000)return;
+        emitted[next]=now;next=(next+1)%60;if(count<60)count++;
+        eventLifecycle=lifecycle;
+        try {sink.record((int)ms,target,callback,what,input,candidates);}finally {eventLifecycle="";}
+    }
     void input() { if(dispatch!=null)inputActive=true; }
     void candidates() { if(dispatch!=null)candidatesActive=true; }
     void accept(String line,long now,boolean input) {
-        if(line.startsWith(">>>>>")) { started=now;dispatch=line;inputActive=input;candidatesActive=false;return; }
+        if(line.startsWith(">>>>>")) { started=now;dispatch=line;inputActive=input;candidatesActive=false;dispatchLifecycle=activeLifecycle;return; }
         if(!line.startsWith("<<<<<")||dispatch==null)return;
         String header=dispatch;dispatch=null;
         long ms=now-started;
@@ -30,7 +46,6 @@ final class MainDispatchMonitor {
         if(!"null".equals(raw)&&cb.matches()&&cb.group(1).length()<=256)callback=cb.group(1);
         int what;
         try { what=Integer.parseInt(match.group(3)); } catch(NumberFormatException invalid) { return; }
-        emitted[next]=now;next=(next+1)%60;if(count<60)count++;
-        sink.record((int)ms,target,callback,what,inputActive||input,candidatesActive);
+        emit(ms,target,callback,what,inputActive||input,candidatesActive,dispatchLifecycle,now);
     }
 }

@@ -22,6 +22,7 @@ names=['fetchServerArchiveText','commitFinalText','pasteClipboardText','copyToSy
 names.extend(['recordVoiceStage','cancelVoiceFinalDeadline','armVoiceFinalDeadline','recoverUnfinishedVoiceGeneration','recoverLateVoiceFinal','receiveAudioReceipt','sendAudioEndOfStream','finishWhenRecorderStopped','sendToWTI','notePendingGeneration','httpFallbackFullAudio','runOfflineFullAudioFallback','sendTextProcess','completeAppendProcessTextFailureWithOfflineFallback'])
 for helper in ['foregroundVoiceBusy','foregroundSessionBusy']:
     if re.search(r'private boolean '+helper+r'\(',src):names.append(helper)
+if 'private String deliverPendingVoiceText(' in src:names.append('deliverPendingVoiceText')
 parts=[]
 counts={}
 # These production APIs do not exist in the work order's requested old revision.
@@ -72,7 +73,10 @@ parts.append('void streamCapturedRead(byte[] buffer,int read){do {\n'+src[stream
 for callback,signature in [('onFinishInputView','boolean finishingInput'),('onDestroy','')]:
     match=re.search(r'public void '+callback+r'\([^)]*\)\s*\{',src)
     end=src.index('        dismissSymbolPopup();',match.end())
-    parts.append('void '+callback+'('+signature+'){'+src[match.end():end]+'}')
+    body=block(match.start())
+    final=body.rfind('        } finally {')
+    tail=body[final:body.rfind('}')] if final>=0 else ''
+    parts.append('void '+callback+'('+signature+'){'+src[match.end():end]+tail+'}')
 for callback in ['onLowMemory','onTrimMemory']:
     match=re.search(r'public void '+callback+r'\([^)]*\)\s*\{',src)
     body=block(match.start()) if match else None
@@ -142,6 +146,7 @@ cp=':'.join([jar('junit','junit'),jar('org.hamcrest','hamcrest-core'),jar('org.j
 prod=root/'app/src/main/java/com/simon/voiceime'
 files=[str(prod/n) for n in ['VoicePendingQueue.java','TextLossGuard.java']]
 if (prod/'VoiceResultText.java').exists():files.append(str(prod/'VoiceResultText.java'))
+if (prod/'PendingVoiceDelivery.java').exists():files.append(str(prod/'PendingVoiceDelivery.java'))
 test_class='VoiceServiceHarness'
 if args.queue_only:
     repo=pathlib.Path(__file__).resolve().parents[1]

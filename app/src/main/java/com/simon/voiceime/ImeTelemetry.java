@@ -163,16 +163,17 @@ final class ImeTelemetry {
         return frames.toString();
     }
     private void enqueue(JSONObject event){spool.add(event);}
-    void mainStall(int ms,String target,String callback,int what,boolean input,boolean candidates) {
+    void mainStall(int ms,String target,String callback,int what,boolean input,boolean candidates,String service,String lifecycle) {
         try { record("main_stall","bopomofo",new JSONObject().put("ms",ms).put("target",target)
-                .put("callback",callback).put("what",what).put("input_active",input).put("candidates_active",candidates),false); }
+                .put("service",service).put("lifecycle",lifecycle).put("callback",callback).put("what",what).put("input_active",input).put("candidates_active",candidates),false); }
         catch(org.json.JSONException failure) { droppedEvents.incrementAndGet();Log.w("ImeTelemetry","Main dispatch metadata dropped",failure); }
     }
-    void backspaceHold(String page,String phase,int tick,Integer delta,Boolean fieldEmpty,int composingLen,boolean protectedField) {
+    void backspaceHold(String page,String phase,int tick,Integer delta,Boolean fieldEmpty,int composingLen,boolean protectedField,Integer charsBeforeCursor) {
         if(protectedField)return;
         try { record("backspace_hold",page,new JSONObject().put("key","backspace").put("phase",phase)
                 .put("tick",tick).put("length_delta",delta==null?JSONObject.NULL:delta)
-                .put("field_empty",fieldEmpty).put("composing_len",composingLen),false); }
+                .put("field_empty",fieldEmpty).put("composing_len",composingLen)
+                .put("chars_before_cursor",charsBeforeCursor==null?null:Math.max(0,Math.min(1000,charsBeforeCursor))),false); }
         catch(org.json.JSONException failure) { droppedEvents.incrementAndGet();Log.w("ImeTelemetry","Backspace metadata dropped",failure); }
     }
     static JSONObject missedTouchFields(long ms,int x,int y,String nearestKey)throws org.json.JSONException {

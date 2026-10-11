@@ -2,8 +2,9 @@ plugins {
     id 'com.android.application'
 }
 
-def phoneVersionCodeValue = rootProject.findProperty("phoneVersionCode")?.toString() ?: "122"
-def phoneVersionNameValue = rootProject.findProperty("phoneVersionName")?.toString() ?: "6.86"
+// NOTE: 123=6.87-trial, 124=6.86-rollback; next release MUST be >= 125
+def phoneVersionCodeValue = rootProject.findProperty("phoneVersionCode")?.toString() ?: "123"
+def phoneVersionNameValue = rootProject.findProperty("phoneVersionName")?.toString() ?: "6.87"
 
 android {
     namespace 'com.simon.voiceime'

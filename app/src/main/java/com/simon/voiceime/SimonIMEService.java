@@ -40,6 +40,7 @@ import android.widget.HorizontalScrollView;
 import android.widget.LinearLayout;
 import android.widget.PopupWindow;
 import android.widget.TextView;
+import android.widget.Toast;
 
 import android.graphics.Canvas;
 import android.graphics.Color;
@@ -354,6 +355,9 @@ public class SimonIMEService extends InputMethodService {
 
     private void recordVoiceEvent(String phase, String id, long audioMs, int chars, int closeCode,
                                   String closeReason, String insertMethod, long bytes, int attempts) {
+        recordVoiceEvent(phase,id,audioMs,chars,closeCode,closeReason,insertMethod,bytes,attempts,null);
+    }
+    private void recordVoiceEvent(String phase,String id,long audioMs,int chars,int closeCode,String closeReason,String insertMethod,long bytes,int attempts,String deliveredVia) {
         if (imeTelemetry == null || protectedInputField) return;
         try {
             String reason = closeReason == null ? "" : closeReason;
@@ -366,7 +370,7 @@ public class SimonIMEService extends InputMethodService {
                     .put("audio_ms",Math.max(0L,audioMs)).put("chars",Math.max(0,chars))
                     .put("close_code",closeCode).put("close_reason",reason)
                     .put("insert_method",insertMethod == null ? "" : insertMethod)
-                    .put("bytes",Math.max(0L,bytes)).put("attempts",Math.max(0,attempts)),false);
+                    .put("bytes",Math.max(0L,bytes)).put("attempts",Math.max(0,attempts)).put("delivered_via",deliveredVia),false);
         } catch (Exception e) { Log.w(TAG,"voice telemetry event skipped",e); }
     }
 
@@ -505,14 +509,16 @@ public class SimonIMEService extends InputMethodService {
                     if(clipboardHelper==null)throw new IllegalStateException("clipboard history unavailable");
                     clipboardHelper.addToHistory(text);
                   }
-                  @Override public void deliver(String text,String startedAt) {
-                    if(!VoiceResultText.isEmptyFinal(text)){
-                        if(clipboardHelper==null)throw new IllegalStateException("clipboard history unavailable");
-                        if(!copyToSystemClipboard(text))throw new IllegalStateException("clipboard unavailable; retry delivery");
-                        clipboardHelper.addToHistory(text);
-                        showPendingVoiceNotification(startedAt);
-                    }
-                    recordVoiceEvent("pending_uploaded",id,queue.audioMs(id),text==null?0:text.length(),0,"","clipboard",queue.totalBytes(),queue.attempts(id));
+                  @Override public void deliver(String text,String startedAt) {deliver(text,startedAt,"",-1);}
+                  @Override public void deliver(String text,String startedAt,String field,int generation) {
+                    java.util.concurrent.FutureTask<String> delivered=new java.util.concurrent.FutureTask<>(()->deliverPendingVoiceText(text,field,generation));
+                    if(!mainHandler.post(delivered))throw new IllegalStateException("main delivery unavailable");
+                    try {
+                        String via=delivered.get();
+                        recordVoiceEvent("pending_uploaded",id,queue.audioMs(id),text==null?0:text.length(),0,"",
+                                "direct_insert".equals(via)?"commit":"clipboard",queue.totalBytes(),queue.attempts(id),via);
+                    }catch(InterruptedException error){Thread.currentThread().interrupt();throw new IllegalStateException("delivery interrupted",error);}
+                    catch(java.util.concurrent.ExecutionException error){throw new IllegalStateException("delivery failed",error.getCause());}
                   }
                 },(phase,sessionId,audioMs,bytes,attempts,error)->{
                     if("silence".equals(phase)&&!queue.backupFailed(sessionId)) { mainHandler.post(this::showNoVoiceStatus); }
@@ -564,17 +570,64 @@ public class SimonIMEService extends InputMethodService {
         };
     }
 
-    private void showPendingVoiceNotification(String startedAt) {
+    // The owner token prevents an old service/process generation from matching a new editor.
+    private static java.lang.ref.WeakReference<SimonIMEService> notificationVoiceService=new java.lang.ref.WeakReference<>(null);
+    static boolean notificationPermissionAllowed() {
+        SimonIMEService service=notificationVoiceService.get();
+        return service==null||PendingVoiceDelivery.permissionAllowed(service.isRecording,service.recordingFinalizing);
+    }
+    private final String pendingVoiceOwner=java.util.UUID.randomUUID().toString();
+    private String pendingVoiceFieldIdentity() {
+        String field=textFieldIdentity(getCurrentInputEditorInfo());return field.isEmpty()?"":pendingVoiceOwner+":"+field;
+    }
+    private String pendingVoiceNotice="";
+    private TextView pendingVoiceCandidateNotice,notificationEntry;
+    private boolean notificationEntryActive;
+    private boolean notificationsGranted() {
+        NotificationManager nm=(NotificationManager)getSystemService(NOTIFICATION_SERVICE);
+        return nm!=null&&nm.areNotificationsEnabled()&&(android.os.Build.VERSION.SDK_INT<33
+                ||checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS)==android.content.pm.PackageManager.PERMISSION_GRANTED);
+    }
+    private void renderPendingVoiceNotices() {
+        if(pendingVoiceCandidateNotice!=null){pendingVoiceCandidateNotice.setText(pendingVoiceNotice);pendingVoiceCandidateNotice.setVisibility(pendingVoiceNotice.isEmpty()?View.GONE:View.VISIBLE);}
+        if(notificationEntry!=null)notificationEntry.setVisibility(notificationEntryActive&&!notificationsGranted()&&!getSharedPreferences("simon_ime_prefs",MODE_PRIVATE).getBoolean("notification_permission_declined",false)?View.VISIBLE:View.GONE);
+    }
+    private void offerPendingVoiceNotifications() {
+        if(android.os.Build.VERSION.SDK_INT<33||isWatchService())return;
+        SharedPreferences prefs=getSharedPreferences("simon_ime_prefs",MODE_PRIVATE);
+        if(PendingVoiceDelivery.offerNotification(notificationsGranted(),prefs.getBoolean("notification_permission_offered",false),prefs.getBoolean("notification_permission_declined",false))){
+            prefs.edit().putBoolean("notification_permission_offered",true).apply();notificationEntryActive=true;
+        }
+        renderPendingVoiceNotices();
+    }
+    private boolean showPendingVoiceNotification() {
+        if(!notificationsGranted())return false;
         try {
-            NotificationManager nm=(NotificationManager)getSystemService(NOTIFICATION_SERVICE);if(nm==null)return;
+            NotificationManager nm=(NotificationManager)getSystemService(NOTIFICATION_SERVICE);
             String channel="voice_pending";
-            if(android.os.Build.VERSION.SDK_INT>=26)nm.createNotificationChannel(new NotificationChannel(channel,"語音補傳",NotificationManager.IMPORTANCE_DEFAULT));
-            String time=startedAt;
-            try{time=new java.text.SimpleDateFormat("HH:mm",java.util.Locale.getDefault()).format(new java.util.Date(Long.parseLong(startedAt)));}catch(Exception ignored){}
-            Notification.Builder b=android.os.Build.VERSION.SDK_INT>=26?new Notification.Builder(this,channel):new Notification.Builder(this);
-            nm.notify(671,b.setOnlyAlertOnce(true).setSmallIcon(android.R.drawable.ic_btn_speak_now)
-                    .setContentTitle("已恢復 " + recoveredVoiceCount.incrementAndGet() + " 段").setContentText("開啟鍵盤 📋 歷史，點選文字取回（"+time+"）").setAutoCancel(true).build());
-        }catch(Exception e){Log.w(TAG,"pending voice notification failed",e);}
+            nm.createNotificationChannel(new NotificationChannel(channel,"語音補傳",NotificationManager.IMPORTANCE_DEFAULT));
+            if(nm.getNotificationChannel(channel).getImportance()==NotificationManager.IMPORTANCE_NONE)return false;
+            nm.notify(671,new Notification.Builder(this,channel).setOnlyAlertOnce(true).setSmallIcon(android.R.drawable.ic_btn_speak_now)
+                    .setContentTitle("語音補送完成").setContentText(PendingVoiceDelivery.CLIPBOARD_NOTICE).setAutoCancel(true).build());
+            return true;
+        }catch(Exception e){Log.w(TAG,"pending voice notification failed",e);return false;}
+    }
+    private String deliverPendingVoiceText(String text,String field,int generation) {
+        if(VoiceResultText.isEmptyFinal(text))return "clipboard_silent";
+        if(clipboardHelper==null)throw new IllegalStateException("clipboard history unavailable");
+        if(PendingVoiceDelivery.sameField(field,generation,pendingVoiceFieldIdentity(),fieldGeneration,
+                isInputViewShown()&&getCurrentInputConnection()!=null,protectedInputField)) {
+            commitFinalText(text);
+            if("ic_api_true".equals(lastVoiceCommitOutcome))return "direct_insert";
+            if(!lastCommitClipboardWritten)throw new IllegalStateException("clipboard unavailable; retry delivery");
+        } else if(!copyToSystemClipboard(text))throw new IllegalStateException("clipboard unavailable; retry delivery");
+        clipboardHelper.addToHistory(text);
+        boolean visible=showPendingVoiceNotification();
+        pendingVoiceNotice=PendingVoiceDelivery.CLIPBOARD_NOTICE;offerPendingVoiceNotifications();renderPendingVoiceNotices();
+        visible|=pendingVoiceCandidateNotice!=null&&pendingVoiceCandidateNotice.isShown();
+        if(!visible)try {Toast.makeText(this,PendingVoiceDelivery.CLIPBOARD_NOTICE,Toast.LENGTH_LONG).show();visible=true;}
+        catch(RuntimeException unavailable){Log.w(TAG,"pending voice toast unavailable",unavailable);}
+        return visible?"clipboard_notified":"clipboard_silent";
     }
     private void showPendingVoiceNotice(String message) {
         try {
@@ -728,6 +781,16 @@ public class SimonIMEService extends InputMethodService {
     private MainDispatchMonitor mainDispatchMonitor;
     @Override
     public void onCreate() {
+        mainDispatchMonitor = new MainDispatchMonitor((ms,target,callback,what,input,candidates)->{
+            ImeTelemetry telemetry=ImeTelemetry.get();
+            if(telemetry!=null)telemetry.mainStall(ms,target,callback,what,input,candidates,mainDispatchMonitor.service(),mainDispatchMonitor.lifecycle());
+        });
+        mainDispatchMonitor.service(getClass().getName());
+        if(!isWatchService())notificationVoiceService=new java.lang.ref.WeakReference<>(this);
+        Looper.getMainLooper().setMessageLogging(line->mainDispatchMonitor.accept(line,
+                SystemClock.uptimeMillis(),backspacePressed||textKeyRender));
+        if(mainDispatchMonitor!=null)mainDispatchMonitor.beginLifecycle("onCreate",SystemClock.uptimeMillis());
+        try {
         super.onCreate();
         if(!isWatchService())AiSentencePhone.migrateAutoApply(this);
         httpClient = new OkHttpClient.Builder()
@@ -735,12 +798,6 @@ public class SimonIMEService extends InputMethodService {
                 .readTimeout(30, TimeUnit.SECONDS)
                 .build();
         mainHandler = new Handler(Looper.getMainLooper());
-        mainDispatchMonitor = new MainDispatchMonitor((ms,target,callback,what,input,candidates)->{
-            ImeTelemetry telemetry=ImeTelemetry.get();
-            if(telemetry!=null)telemetry.mainStall(ms,target,callback,what,input,candidates);
-        });
-        Looper.getMainLooper().setMessageLogging(line->mainDispatchMonitor.accept(line,
-                SystemClock.uptimeMillis(),backspacePressed||textKeyRender));
         clipboardHelper = new ClipboardHelper(this);
         SharedPreferences rescuePrefs = getSharedPreferences("simon_ime_prefs", MODE_PRIVATE);
         rescueExtraChars = rescuePrefs.getInt("text_loss_min_extra_chars", TextLossGuard.MIN_EXTRA_CHARS);
@@ -835,10 +892,15 @@ public class SimonIMEService extends InputMethodService {
                 Log.w(TAG, "音訊預熱失敗（不影響功能）: " + e.getMessage());
             }
         }, "LocalSTT-Init").start();
+
+        } finally {if(mainDispatchMonitor!=null)mainDispatchMonitor.endLifecycle(SystemClock.uptimeMillis());}
     }
 
     @Override
     public void onStartInput(EditorInfo attribute, boolean restarting) {
+        if(mainDispatchMonitor!=null)mainDispatchMonitor.beginLifecycle("onStartInput",SystemClock.uptimeMillis());
+        try {
+
         super.onStartInput(attribute, restarting);
         cursorTapGuard.reset();invalidateExternalCandidates();
         selectionStart=attribute.initialSelStart;selectionEnd=attribute.initialSelEnd;
@@ -889,16 +951,28 @@ public class SimonIMEService extends InputMethodService {
             // v6.23: clear English prediction buffer on field switch
             clearEnWordBuffer();
         }
+
+        } finally {if(mainDispatchMonitor!=null)mainDispatchMonitor.endLifecycle(SystemClock.uptimeMillis());}
     }
 
     @Override
     public View onCreateInputView() {
+        if(mainDispatchMonitor!=null)mainDispatchMonitor.beginLifecycle("onCreateInputView",SystemClock.uptimeMillis());
+        try {
+
         rootView = LayoutInflater.from(this).inflate(R.layout.keyboard_view, null);
         ((KeyboardInputLayout)rootView).beforeTouch=event->{
             if((externalCandidatePending||externalConnection!=null)&&!touchInside(boWordCandidateScroll,event)&&!touchInside(boCandidateScroll,event))invalidateExternalCandidates();
         };
 
         statusText = rootView.findViewById(R.id.statusText);
+        pendingVoiceCandidateNotice=rootView.findViewById(R.id.pendingVoiceCandidateNotice);
+        notificationEntry=rootView.findViewById(R.id.notificationEntry);
+        notificationEntry.setText(PendingVoiceDelivery.NOTIFICATION_ENTRY);
+        notificationEntry.setOnClickListener(v->{if(isRecording||recordingFinalizing){updateStatus("請在語音完成後開啟通知");return;}
+            notificationEntryActive=false;renderPendingVoiceNotices();
+            startActivity(new Intent(this,SettingsActivity.class).putExtra("request_pending_notifications",true).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));});
+        renderPendingVoiceNotices();
         previewText = rootView.findViewById(R.id.previewText);
         btnMic = rootView.findViewById(R.id.btnMic);
         btnMode = rootView.findViewById(R.id.btnMode);
@@ -1091,6 +1165,8 @@ public class SimonIMEService extends InputMethodService {
         updateModeUI();
         updateArmedIndicator();
         return rootView;
+
+        } finally {if(mainDispatchMonitor!=null)mainDispatchMonitor.endLifecycle(SystemClock.uptimeMillis());}
     }
 
     private void setupPunctuationKey(View key, String fullWidth, String halfWidth) {
@@ -2746,7 +2822,7 @@ public class SimonIMEService extends InputMethodService {
             lineCaptures.put(myGen,capture);
             new Thread(capture,"LINE-Visible-Context").start();
         }
-        activePendingSessionId=(voicePendingQueue==null||protectedInputField)?null:voicePendingQueue.beginAsync(() -> mainHandler.post(() -> updateStatus("錄音備份失敗，仍可即時辨識")));
+        activePendingSessionId=(voicePendingQueue==null||protectedInputField)?null:voicePendingQueue.beginAsync(pendingVoiceFieldIdentity(),fieldGeneration,() -> mainHandler.post(() -> updateStatus("錄音備份失敗，仍可即時辨識")));
         if(activePendingSessionId!=null){pendingSessionByGeneration.put(myGen,activePendingSessionId);foregroundActivityByGeneration.put(myGen,SystemClock.elapsedRealtime());}
         lastForegroundAudioMs=SystemClock.elapsedRealtime();
         if(lineGenerations.contains(myGen)&&activePendingSessionId!=null&&voicePendingQueue!=null) {
@@ -2777,6 +2853,7 @@ public class SimonIMEService extends InputMethodService {
         final long recordingStartedMs = android.os.SystemClock.elapsedRealtime();
         activeRecordingStartedMs = recordingStartedMs;
         lastVoiceChunkElapsed=recordingStartedMs;lastVoiceStallEventElapsed=0;
+        offerPendingVoiceNotifications();
         recordVoiceEvent("start",activePendingSessionId,0,0,0,"","",0,0);
         if (!isWatchService()) {
             SharedPreferences sessionPrefs = getSharedPreferences("simon_ime_prefs", MODE_PRIVATE);
@@ -4673,6 +4750,19 @@ public class SimonIMEService extends InputMethodService {
             return text==null||text.text==null||text.startOffset!=0||text.partialStartOffset>=0?null:text.text.length();
         } catch(RuntimeException unavailable) { Log.w(TAG,"Backspace length unavailable",unavailable);return null; }
     }
+    private Integer backspaceCharsBeforeCursor() {
+        if(protectedInputField||ImeTelemetry.get()==null||!getSharedPreferences("simon_ime_prefs",MODE_PRIVATE).getBoolean("ime_auto_upload",true))return null;
+        InputConnection ic=getCurrentInputConnection();if(ic==null)return null;
+        try{return PendingVoiceDelivery.charsBeforeCursor(ic.getTextBeforeCursor(2000,0));}
+        catch(RuntimeException unavailable){Log.w(TAG,"Backspace cursor count unavailable",unavailable);return null;}
+    }
+    void dualHandBackspaceTelemetry(String phase,Integer before,int composingBefore) {
+        ImeTelemetry telemetry=ImeTelemetry.get();if(telemetry==null||protectedInputField)return;
+        Integer after=backspaceLength();
+        telemetry.backspaceHold("dual_hand",phase,0,before==null||after==null?null:after-before,
+                after==null?null:after==0,composingBefore,false,backspaceCharsBeforeCursor());
+    }
+    Integer dualHandBackspaceLength(){return backspaceLength();}
     private int backspaceComposingLength() {
         if(currentKeyboardMode!=KeyboardMode.BOPOMOFO||zhuyinInput==null)return 0;
         return (int)zhuyinInput.sentenceKeys().codePoints().filter(cp->cp>=0x3105&&cp<=0x312f
@@ -4689,7 +4779,7 @@ public class SimonIMEService extends InputMethodService {
         Integer after=backspaceLength();
         String page=currentKeyboardMode==KeyboardMode.BOPOMOFO?"bopomofo":currentKeyboardMode==KeyboardMode.ENGLISH?"english":"symbol";
         telemetry.backspaceHold(page,phase,backspaceDiagnosticTick,before==null||after==null?null:after-before,
-                after==null?null:after==0,composingBefore,false);
+                after==null?null:after==0,composingBefore,false,backspaceCharsBeforeCursor());
         if(before!=null&&before>0&&before.equals(after)&&composingBefore==composingAfter){
             if("down".equals(phase))updateStatus(start?"游標在開頭，請移動游標後刪除":"未刪除內容，請確認游標位置");
             try{telemetry.record("key_outcome",page,new JSONObject().put("key","").put("key_to_candidate_ms",JSONObject.NULL)
@@ -6673,6 +6763,9 @@ public class SimonIMEService extends InputMethodService {
 
     @Override
     public void onStartInputView(EditorInfo info, boolean restarting) {
+        if(mainDispatchMonitor!=null)mainDispatchMonitor.beginLifecycle("onStartInputView",SystemClock.uptimeMillis());
+        try {
+
         super.onStartInputView(info, restarting);
         if (isWatchService()) return;
         drainPendingVoiceQueue();
@@ -6698,6 +6791,8 @@ public class SimonIMEService extends InputMethodService {
             mainHandler.removeCallbacks(connectionWarmUpRunnable);
             mainHandler.postDelayed(connectionWarmUpRunnable, CONNECTION_WARM_UP_INTERVAL_MS);
         }
+
+        } finally {if(mainDispatchMonitor!=null)mainDispatchMonitor.endLifecycle(SystemClock.uptimeMillis());}
     }
 
     private void flushPendingVoiceAudio(boolean bounded) {
@@ -6722,6 +6817,9 @@ public class SimonIMEService extends InputMethodService {
 
     @Override
     public void onFinishInputView(boolean finishingInput) {
+        if(mainDispatchMonitor!=null)mainDispatchMonitor.beginLifecycle("onFinishInputView",SystemClock.uptimeMillis());
+        try {
+
         cursorTapGuard.reset();invalidateExternalCandidates();
         invalidateLineGhostwriter();
         flushPendingVoiceAudio(false);
@@ -6740,11 +6838,15 @@ public class SimonIMEService extends InputMethodService {
         // v6.1: 鍵盤收起 → 釋放螢幕常亮，避免非錄音時殘留 keepScreenOn 拖電
         if (rootView != null) rootView.setKeepScreenOn(false);
         super.onFinishInputView(finishingInput);
+
+        } finally {if(mainDispatchMonitor!=null)mainDispatchMonitor.endLifecycle(SystemClock.uptimeMillis());}
     }
 
     @Override
     public void onDestroy() {
-        Looper.getMainLooper().setMessageLogging(null);
+        if(mainDispatchMonitor!=null)mainDispatchMonitor.beginLifecycle("onDestroy",SystemClock.uptimeMillis());
+        try {
+
         TouchLearningStore oldTouch=touchLearning;touchLearning=null;
         if(oldTouch!=null)new Thread(oldTouch::close,"TouchLearningClose").start();
         invalidateLineGhostwriter(); fieldGeneration++;
@@ -6808,5 +6910,8 @@ public class SimonIMEService extends InputMethodService {
         pendingVoiceExecutor.shutdown();
         synchronized(this){if(pendingDrainTask!=null)pendingDrainTask.cancel(false);}
         super.onDestroy();
+
+        } finally {if(mainDispatchMonitor!=null)mainDispatchMonitor.endLifecycle(SystemClock.uptimeMillis());Looper.getMainLooper().setMessageLogging(null);
+            if(notificationVoiceService.get()==this)notificationVoiceService.clear();}
     }
 }

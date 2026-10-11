@@ -26,6 +26,21 @@
         android:paddingBottom="1dp"
         android:visibility="gone" />
 
+    <TextView
+        android:id="@+id/pendingVoiceCandidateNotice"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:textColor="@color/key_text"
+        android:textSize="14sp"
+        android:gravity="center"
+        android:accessibilityLiveRegion="polite"
+        android:visibility="gone" />
+    <Button
+        android:id="@+id/notificationEntry"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:visibility="gone" />
+
     <!-- 預覽文字 -->
     <TextView
         android:id="@+id/previewText"

@@ -34,8 +34,18 @@
       "bytes": 3547192
     },
     "draft_chars_ai.tsv": {
-      "sha256": "5c1f6f3386a6317fffa96259feff0798566d737c0ba6ced5f7efe654c2643d49",
+      "sha256": "f2a3eb37f02439753a026eda21c1fc168a3e71df8c1dd3a92a8fcfb923a5389b",
       "bytes": 5011
+    },
+    "draft_chars_ai.provenance.tsv": {
+      "sha256": "3f6b7b1a43f35f49dcf4be928376bc4a52673e020a0354637c69c8d98e180280",
+      "bytes": 7746
     }
+  },
+  "ai_table_sources": {
+    "W1F3b": "991ff50bc1ca7a45c2410001902f5c64420bee9ed047000de625175409ad3be8",
+    "W1D_FALLBACK": "5c1f6f3386a6317fffa96259feff0798566d737c0ba6ced5f7efe654c2643d49",
+    "fallback_commit": "e14d44e",
+    "fallback_rows": 34
   }
 }

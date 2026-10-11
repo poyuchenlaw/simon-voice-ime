@@ -26,6 +26,19 @@ import okhttp3.Response;
 
 public class SettingsActivity extends Activity {
 
+    private static final int NOTIFICATIONS=687;
+    private void requestPendingNotifications() {
+        if(!SimonIMEService.notificationPermissionAllowed()){Toast.makeText(this,"請在語音完成後開啟通知",Toast.LENGTH_LONG).show();return;}
+        if(android.os.Build.VERSION.SDK_INT>=33&&checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS)!=android.content.pm.PackageManager.PERMISSION_GRANTED
+                &&!getSharedPreferences("simon_ime_prefs",MODE_PRIVATE).getBoolean("notification_permission_declined",false)) {
+            requestPermissions(new String[]{android.Manifest.permission.POST_NOTIFICATIONS},NOTIFICATIONS);
+        }else startActivity(new Intent(android.provider.Settings.ACTION_APP_NOTIFICATION_SETTINGS).putExtra(android.provider.Settings.EXTRA_APP_PACKAGE,getPackageName()));
+    }
+    @Override public void onRequestPermissionsResult(int requestCode,String[] permissions,int[] results) {
+        super.onRequestPermissionsResult(requestCode,permissions,results);
+        if(requestCode==NOTIFICATIONS&&results.length>0)
+            getSharedPreferences("simon_ime_prefs",MODE_PRIVATE).edit().putBoolean("notification_permission_declined",results[0]!=android.content.pm.PackageManager.PERMISSION_GRANTED).apply();
+    }
     private String exportRecordingId;
     private static final int EXPORT_RECORDING=679;
     private EditText editServerUrl;
@@ -99,6 +112,9 @@ public class SettingsActivity extends Activity {
             android.view.ViewGroup content=findViewById(android.R.id.content);
             android.widget.ScrollView scroll=(android.widget.ScrollView)content.getChildAt(0);
             android.widget.LinearLayout options=(android.widget.LinearLayout)scroll.getChildAt(0);
+            Button notifications=new Button(this);notifications.setText("開啟通知以接收補送提示");
+            notifications.setOnClickListener(v->requestPendingNotifications());options.addView(notifications,1);
+            if(savedInstanceState==null&&getIntent().getBooleanExtra("request_pending_notifications",false))requestPendingNotifications();
             Button access=new Button(this);access.setText("授權 Simon LINE 語音嘴替（讀取可見對話）");
             access.setOnClickListener(v->{
                 Intent detail=new Intent("android.settings.ACCESSIBILITY_DETAILS_SETTINGS");

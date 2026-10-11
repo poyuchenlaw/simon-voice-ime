@@ -77,6 +77,7 @@ final class VoicePendingQueue {
     }
     interface Delivery {
         void deliver(String text, String startedAt);
+        default void deliver(String text,String startedAt,String textFieldIdentity,int fieldGeneration) {deliver(text,startedAt);}
         default void archiveToHistory(String text,String startedAt)throws Exception {throw new IOException("archive history sink unavailable");}
     }
     interface Observer { void event(String phase, String sessionId, long audioMs, long bytes, int attempts, String error); }
@@ -161,9 +162,10 @@ final class VoicePendingQueue {
     String beginAsync() {
         return beginAsync(null);
     }
-    String beginAsync(Runnable onFailure) {
+    String beginAsync(Runnable onFailure) {return beginAsync("",-1,onFailure);}
+    String beginAsync(String textFieldIdentity,int fieldGeneration,Runnable onFailure) {
         String id=UUID.randomUUID().toString();capturing.add(id);
-        execute(() -> {try {beginFile(id);}catch(IOException e){
+        execute(() -> {try {beginFile(id,textFieldIdentity,fieldGeneration);}catch(IOException e){
             backupFailures.add(id);capturing.remove(id);
             System.err.println("VoicePendingQueue backup failed: "+e.getClass().getSimpleName());
             if(onFailure!=null)onFailure.run();
@@ -174,12 +176,14 @@ final class VoicePendingQueue {
     String begin() throws IOException {
         String id=UUID.randomUUID().toString(); runIO(() -> {beginFile(id);return null;}); return id;
     }
-    private void beginFile(String id)throws IOException {
+    private void beginFile(String id)throws IOException {beginFile(id,"",-1);}
+    private void beginFile(String id,String textFieldIdentity,int fieldGeneration)throws IOException {
         if(discarded.contains(id))return;
         if(!pcm(id).createNewFile())throw new IOException("session file exists");
         try {
             JSONObject m=new JSONObject().put("schema_version",6).put("started_at",System.currentTimeMillis()).put("sample_rate",sampleRate)
-                    .put("state","recording").put("attempts",0).put("last_error","");
+                    .put("state","recording").put("attempts",0).put("last_error","")
+                    .put("textFieldIdentity",textFieldIdentity).put("fieldGeneration",fieldGeneration);
             writeMeta(id,m);metadata.put(id,m);sizes.put(id,0L);publish(id);
         } catch(org.json.JSONException e) {throw new IOException(e);}
     }
@@ -536,7 +540,7 @@ final class VoicePendingQueue {
                 acknowledgeDelivery(id,false);
                 if(observer!=null)observer.event("silence",id,0,0,attempts(id),"");return;
             }
-            delivery.deliver(text,String.valueOf(claim.optLong("started_at")));
+            delivery.deliver(text,String.valueOf(claim.optLong("started_at")),claim.optString("textFieldIdentity"),claim.optInt("fieldGeneration",-1));
             acknowledgeDelivery(id,true);
         } catch(Exception e) {
             String reason=e.getClass().getSimpleName()+": "+String.valueOf(e.getMessage());
