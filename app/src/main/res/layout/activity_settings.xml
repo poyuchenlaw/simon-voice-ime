@@ -365,7 +365,8 @@
         </LinearLayout>
 
         <View android:layout_width="match_parent" android:layout_height="1dp" android:background="#333333" android:layout_marginBottom="16dp" />
-        <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="注音九宮格" android:textSize="18sp" android:textColor="#e0e0e0" android:layout_marginBottom="6dp" />
+        <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="雙手滑動注音" android:textSize="18sp" android:textColor="#e0e0e0" android:layout_marginBottom="6dp" />
+        <CheckBox android:id="@+id/checkDualHandEnabled" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="啟用雙手滑動鍵盤（可切回 41 鍵與語音）"/>
         <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:text="AI 注音選項" android:textColor="#cccccc" />
         <CheckBox android:id="@+id/checkAutoCorrection" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="AI 自動套用（預覽整句校正）"/>
         <Button android:id="@+id/btnResetZhuyinLearning" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="重置注音選字學習"/>

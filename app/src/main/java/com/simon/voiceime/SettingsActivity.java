@@ -178,13 +178,16 @@ public class SettingsActivity extends Activity {
                     prefs.edit().putBoolean("auto_vocab_enabled", isChecked).apply());
         }
 
+        CheckBox dualHand=findViewById(R.id.checkDualHandEnabled);
+        dualHand.setChecked(prefs.getBoolean("dual_hand_enabled",true));
+        dualHand.setOnCheckedChangeListener((button,enabled)->prefs.edit().putBoolean("dual_hand_enabled",enabled).putBoolean("dual_hand_mode",false).apply());
         CheckBox autoCorrection=findViewById(R.id.checkAutoCorrection);
         if(autoCorrection!=null){autoCorrection.setChecked(prefs.getBoolean("ai_sentence_auto_apply",false));autoCorrection.setOnCheckedChangeListener((button,checked)->prefs.edit().putBoolean("ai_sentence_auto_apply",checked).apply());}
         Button resetWords=findViewById(R.id.btnResetZhuyinLearning);
         if(resetWords!=null)resetWords.setOnClickListener(v->new AlertDialog.Builder(this).setTitle("重置注音選字學習")
             .setMessage("清除已學習的選字與連續選字詞；已安裝的個人詞彙保留。")
             .setNegativeButton("取消",null).setPositiveButton("重置",(dialog,which)->{
-                try{RimeVocabularyInstaller.resetLearned(new java.io.File(getFilesDir(),"rime/user"));android.content.SharedPreferences t9=getSharedPreferences("simon_ime_prefs",MODE_PRIVATE);android.content.SharedPreferences.Editor reset=t9.edit();for(String key:t9.getAll().keySet())if(key.startsWith("t9_learning_"))reset.remove(key);reset.apply();Toast.makeText(this,"已重置注音選字學習",Toast.LENGTH_SHORT).show();}
+                try{RimeVocabularyInstaller.resetLearned(new java.io.File(getFilesDir(),"rime/user"));Toast.makeText(this,"已重置注音選字學習",Toast.LENGTH_SHORT).show();}
                 catch(Exception failure){android.util.Log.e("Settings","reset learning failed",failure);Toast.makeText(this,"重置未完成，請再試一次",Toast.LENGTH_SHORT).show();}
             }).show());
         android.widget.Spinner sentenceMode=findViewById(R.id.aiSentenceMode);

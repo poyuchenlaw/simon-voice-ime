@@ -13,7 +13,7 @@ import androidx.test.platform.app.InstrumentationRegistry;
 
 /** All dispatches during physical mode switch, app return and keyboard reopening. */
 public class LifecycleStall683AndroidTest extends MainStall683AndroidTest {
-    @Override void preparePreferences(){super.preparePreferences();inst.getTargetContext().getSharedPreferences("simon_ime_prefs",0).edit().putBoolean("t9_mode",false).putString("ai_sentence_mode","live").putBoolean("ai_sentence_auto_apply",true).commit();}
+    @Override void preparePreferences(){super.preparePreferences();inst.getTargetContext().getSharedPreferences("simon_ime_prefs",0).edit().putBoolean("dual_hand_mode",false).putString("ai_sentence_mode","live").putBoolean("ai_sentence_auto_apply",true).commit();}
     final JSONArray stages=new JSONArray();
     void stage(String name)throws Exception {
         stages.put(new JSONObject().put("stage",name).put("elapsed_ns",SystemClock.elapsedRealtimeNanos()).put("uptime_ms",SystemClock.uptimeMillis()));
@@ -23,6 +23,15 @@ public class LifecycleStall683AndroidTest extends MainStall683AndroidTest {
         final Rect hit=new Rect();
         inst.runOnMainSync(()->{View v=root.findViewWithTag(tag);assertNotNull("physical key "+tag,v);assertTrue("visible physical key "+tag,v.getLocalVisibleRect(hit));int[] at=new int[2];v.getLocationOnScreen(at);hit.offset(at[0],at[1]);});
         tap(hit);
+    }
+    void dualHandTo41()throws Exception {
+        final Rect hit=new Rect();final float[] density={1};
+        inst.runOnMainSync(()->{View v=root.findViewWithTag("dh-key:tools");assertNotNull(v);assertTrue(v.getLocalVisibleRect(hit));int[] at=new int[2];v.getLocationOnScreen(at);hit.offset(at[0],at[1]);density[0]=v.getResources().getDisplayMetrics().density;});
+        long down=SystemClock.uptimeMillis();float x=hit.centerX(),y=hit.centerY();
+        android.view.MotionEvent d=android.view.MotionEvent.obtain(down,down,0,x,y,0);try{assertTrue(ui.injectInputEvent(d,true));}finally{d.recycle();}
+        Thread.sleep(100);
+        android.view.MotionEvent move=android.view.MotionEvent.obtain(down,SystemClock.uptimeMillis(),2,x,y-32*density[0],0);try{assertTrue(ui.injectInputEvent(move,true));}finally{move.recycle();}
+        android.view.MotionEvent up=android.view.MotionEvent.obtain(down,SystemClock.uptimeMillis(),1,x,y-32*density[0],0);try{assertTrue(ui.injectInputEvent(up,true));}finally{up.recycle();}
     }
     void reopen()throws Exception {
         Rect input=new Rect();await("test_input").getBoundsInScreen(input);
@@ -51,8 +60,8 @@ public class LifecycleStall683AndroidTest extends MainStall683AndroidTest {
         assertEquals(1.3f,row1.getResources().getConfiguration().fontScale,.01f);
         observe();boolean complete=false;
         try {
-            stage("toggle-on");tagged("key:toT9");await("T9 1");
-            stage("toggle-off");tagged("key:t9:function:注");
+            stage("toggle-on");tagged("key:toDualHand");await("ㄅㄆㄇㄈ");
+            stage("toggle-off");dualHandTo41();
             // No extra settling pause before the first 41-key touch.
             stage("typing-ten");keys(KEYS);Thread.sleep(300);inst.waitForIdleSync();
             assertTrue("ten actual editor characters",editorText(await("test_input")).codePointCount(0,editorText(await("test_input")).length())>=10);

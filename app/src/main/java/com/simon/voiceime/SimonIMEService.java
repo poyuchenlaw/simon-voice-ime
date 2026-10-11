@@ -268,10 +268,10 @@ public class SimonIMEService extends InputMethodService {
     /** Blocks telemetry and local learning for password/no-personalized-learning editors. */
     private boolean protectedInputField = false;
     private AiSentencePhone sentencePhone;
-    private T9Page t9Page;
-    private boolean t9Selected;
-    private boolean t9Configuring;
-    private String t9ConfigurationField="";
+    private DualHandPage dualHandPage;
+    private boolean dualHandSelected;
+    private boolean dualHandConfiguring;
+    private String dualHandField="";
     private String sentenceInstalledCommit;
     private String touchSessionId = java.util.UUID.randomUUID().toString();
     private BopomofoKeyTouch pendingBopomofoKeyTouch;
@@ -798,7 +798,7 @@ public class SimonIMEService extends InputMethodService {
         try { sentencePhone=new AiSentencePhone(this,mainHandler,new AiSentencePhone.Host(){
             public ZhuyinInputController controller(){return zhuyinInput;}
             public InputConnection ownedConnection(){InputConnection ic=getCurrentInputConnection();return ic!=null&&ic==zhuyinComposingConnection?ic:null;}
-            public boolean allowed(){EditorInfo info=getCurrentInputEditorInfo();return !protectedInputField&&info!=null&&info.inputType!=0&&info.packageName!=null&&currentKeyboardMode==KeyboardMode.BOPOMOFO&&!t9Selected;}
+            public boolean allowed(){EditorInfo info=getCurrentInputEditorInfo();return !protectedInputField&&info!=null&&info.inputType!=0&&info.packageName!=null&&currentKeyboardMode==KeyboardMode.BOPOMOFO&&!dualHandSelected;}
             public void replace(ZhuyinInputController controller){controller.inheritCommitTelemetry(zhuyinInput);zhuyinInput=controller;applyZhuyinState(controller.state());}
             public void render(){renderSentenceOptions();}
             public void commitSuggestion(){applyZhuyinState(zhuyinInput.press("enter"));}
@@ -856,9 +856,8 @@ public class SimonIMEService extends InputMethodService {
             discardRetainedTextComposition();
         else if(retained&&!protectedInputField)retainedTextNeedsReclaim=true;
         retainedTextField=field;
-        boolean t9ConfigurationRestart=t9Configuring||field.equals(t9ConfigurationField);
-        if(!restarting&&!t9Configuring)t9ConfigurationField="";
-        if(t9Page!=null&&(!restarting&&!t9ConfigurationRestart||protectedInputField||wasProtected))t9Page.clear();
+        if(dualHandPage!=null&&(!field.equals(dualHandField)||protectedInputField!=wasProtected))dualHandPage.clear();
+        dualHandField=field;
         if(sentencePhone!=null)sentencePhone.changed(true);
         sentenceInstalledCommit=null;
         if(protectedInputField&&!wasProtected&&isRecording){
@@ -1048,8 +1047,8 @@ public class SimonIMEService extends InputMethodService {
 
         // 設定注音、英文鍵盤和數字鍵盤的按鍵處理
         setupTypingKeyboard(bopomofoKeyboard);
-        t9Selected=getSharedPreferences("simon_ime_prefs",MODE_PRIVATE).getBoolean("t9_mode",false);
-        if(t9Selected)ensureT9Page();
+        dualHandSelected=getSharedPreferences("simon_ime_prefs",MODE_PRIVATE).getBoolean("dual_hand_enabled",true)&&getSharedPreferences("simon_ime_prefs",MODE_PRIVATE).getBoolean("dual_hand_mode",false);
+        if(dualHandSelected)ensureDualHandPage();
         setupTypingKeyboard(englishKeyboard);
         setupTypingKeyboard(numbersKeyboard);
 
@@ -1219,7 +1218,7 @@ public class SimonIMEService extends InputMethodService {
     private void commitSymbolFromPopup(String symbol, String fallbackText) {
         try {
             InputConnection ic = getCurrentInputConnection();
-            commitPunctuation(symbol);
+            if(dualHandSelected){dualHandCommit(symbol);closePanel();}else commitPunctuation(symbol);
         } catch (Exception e) {
             Log.w(TAG, "Symbol commit failed; committing fallback punctuation", e);
             commitPunctuation(fallbackText);
@@ -2006,6 +2005,8 @@ public class SimonIMEService extends InputMethodService {
     private void showPanel(Panel panel) {
         panelContainer.removeAllViews();
         panelContainer.setVisibility(View.VISIBLE);
+        if(dualHandSelected&&dualHandPage!=null){panelContainer.getLayoutParams().height=Math.max(dp(220),dualHandPage.view().getHeight());dualHandPage.reconfigure();dualHandPage.view().setVisibility(View.GONE);}
+        else panelContainer.getLayoutParams().height=dp(220);
         activePanel = panel;
 
         switch (panel) {
@@ -2022,6 +2023,7 @@ public class SimonIMEService extends InputMethodService {
         panelContainer.removeAllViews();
         panelContainer.setVisibility(View.GONE);
         activePanel = Panel.NONE;
+        if(dualHandSelected&&dualHandPage!=null&&currentKeyboardMode==KeyboardMode.BOPOMOFO)dualHandPage.view().setVisibility(View.VISIBLE);
     }
 
     /**
@@ -2100,7 +2102,9 @@ public class SimonIMEService extends InputMethodService {
         RecyclerView recycler = view.findViewById(R.id.clipRecycler);
         recycler.setLayoutManager(new LinearLayoutManager(this));
 
-        List<String> items = clipboardHelper.getHistory();
+        List<String> history = clipboardHelper.getHistory();
+        final List<String> items=dualHandSelected?new ArrayList<>(history.subList(0,Math.min(10,history.size()))):history;
+        if(dualHandSelected)recycler.setLayoutManager(new LinearLayoutManager(this,LinearLayoutManager.HORIZONTAL,false));
         ClipAdapter adapter = new ClipAdapter(items, position -> {
             if (position >= 0 && position < items.size()) {
                 if (pasteClipboardText(items.get(position))) closePanel();
@@ -2110,6 +2114,7 @@ public class SimonIMEService extends InputMethodService {
 
         updateClipMarkFooter();
 
+        if(dualHandSelected)return;
         // 右滑 → 加入常用指令；左滑 → 標記/取消標記
         new ItemTouchHelper(new ItemTouchHelper.SimpleCallback(0,
                 ItemTouchHelper.RIGHT | ItemTouchHelper.LEFT) {
@@ -4296,28 +4301,62 @@ public class SimonIMEService extends InputMethodService {
     private void recordCommitEvent(String page,String text,String first,String ai,boolean corrected,boolean aiTaken){if(imeTelemetry==null)return;try{imeTelemetry.record("commit",page,new JSONObject().put("text",text).put("engine_top1",first==null?"":first).put("ai_suggestion",ai==null?"":ai).put("corrected",corrected).put("ai_taken",aiTaken).put("via","bopomofo".equals(page)?zhuyinCommitVia:"other").put("committed_codepoints",text.codePointCount(0,text.length())).put("ai_shown",sentencePhone!=null&&sentencePhone.correctionShown()).put("reverted_spans",sentencePhone==null?0:sentencePhone.revertedSpans()).put("candidate_taps",textCandidateTaps),protectedInputField);}catch(Exception ignored){}}
     private void recordCorrectionEvent(String page,String segment,String from,String to,String via){if(imeTelemetry==null)return;try{imeTelemetry.record("correction",page,new JSONObject().put("segment",segment).put("from",from).put("to",to).put("via",via),protectedInputField);}catch(Exception ignored){}}
 
-    private void ensureT9Page(){
-        if(t9Page==null&&!isWatchService())try{t9Page=(T9Page)Class.forName("com.simon.voiceime.T9Keyboard").getConstructor(SimonIMEService.class).newInstance(this);}
-        catch(Throwable error){Log.e(TAG,"T9 unavailable",error);t9Selected=false;updateStatus("九宮格載入失敗，可使用注音");}
-        if(t9Page!=null&&bopomofoKeyboard!=null){View view=t9Page.view();ViewGroup owner=(ViewGroup)bopomofoKeyboard.getParent();if(view.getParent()!=owner){if(view.getParent() instanceof ViewGroup)((ViewGroup)view.getParent()).removeView(view);owner.addView(view,owner.indexOfChild(bopomofoKeyboard)+1);}view.setVisibility(currentKeyboardMode==KeyboardMode.BOPOMOFO&&t9Selected?View.VISIBLE:View.GONE);}
+    private void ensureDualHandPage(){
+        if(dualHandPage==null&&!isWatchService())try{dualHandPage=(DualHandPage)Class.forName("com.simon.voiceime.DualHandKeyboard").getConstructor(SimonIMEService.class).newInstance(this);}
+        catch(Throwable error){Log.e(TAG,"Dual hand unavailable",error);dualHandSelected=false;updateStatus("雙手鍵盤載入失敗，可使用注音");}
+        if(dualHandPage!=null&&bopomofoKeyboard!=null){View view=dualHandPage.view();ViewGroup owner=(ViewGroup)bopomofoKeyboard.getParent();if(view.getParent()!=owner){if(view.getParent() instanceof ViewGroup)((ViewGroup)view.getParent()).removeView(view);owner.addView(view,owner.indexOfChild(bopomofoKeyboard)+1);}view.setVisibility(currentKeyboardMode==KeyboardMode.BOPOMOFO&&dualHandSelected?View.VISIBLE:View.GONE);}
     }
-    private void toggleT9(){
-        clearBopomofoBuffer();if(t9Page!=null)t9Page.clear();
-        t9Selected=!t9Selected;if(t9Selected)ensureT9Page();
-        getSharedPreferences("simon_ime_prefs",MODE_PRIVATE).edit().putBoolean("t9_mode",t9Selected).apply();
-        switchKeyboard(KeyboardMode.BOPOMOFO);
-        if(imeTelemetry!=null)try{imeTelemetry.record("t9_toggle","t9",new JSONObject().put("enabled",t9Selected),protectedInputField);}catch(org.json.JSONException error){Log.w(TAG,"T9 toggle telemetry",error);}
+    private void toggleDualHand(){
+        if(!getSharedPreferences("simon_ime_prefs",MODE_PRIVATE).getBoolean("dual_hand_enabled",true)){updateStatus("雙手鍵盤已在設定關閉");return;}
+        if(dualHandPage!=null&&!dualHandPage.finish())return;
+        if(dualHandPage!=null)dualHandPage.reconfigure();
+        clearBopomofoBuffer();dualHandSelected=!dualHandSelected;
+        if(dualHandSelected)ensureDualHandPage();
+        getSharedPreferences("simon_ime_prefs",MODE_PRIVATE).edit().putBoolean("dual_hand_mode",dualHandSelected).apply();
+        configureTextRows();switchKeyboard(KeyboardMode.BOPOMOFO);
     }
-    java.util.List<String> t9Vocabulary(){return zhuyinWordIndex==null?java.util.Collections.emptyList():zhuyinWordIndex.installedForms();}
-    boolean t9Allowed(){return !protectedInputField&&t9Selected&&currentKeyboardMode==KeyboardMode.BOPOMOFO&&getCurrentInputConnection()!=null&&isInputViewShown();}
-    void t9Commit(String text){InputConnection ic=getCurrentInputConnection();if(ic!=null&&!text.isEmpty()){commitTextProgrammatically(ic,text);ic.finishComposingText();}}
-    void t9Function(String key){if("toT9".equals(key))toggleT9();else onTypingKeyPressed(key);}
-    String t9Context(){if(!t9Allowed())return "";CharSequence text=getCurrentInputConnection().getTextBeforeCursor(100,0);if(text==null)return "";String s=text.toString().replace('\n',' ').replace('\r',' ');int n=s.codePointCount(0,s.length());return n<=50?s:s.substring(s.offsetByCodePoints(0,n-50));}
+    boolean dualHandProtected(){return protectedInputField;}
+    void dualHandStatus(String text){updateStatus(text);}
+    boolean dualHandCompose(String text){
+        InputConnection ic=getCurrentInputConnection();if(ic==null)return false;
+        android.text.SpannableString underlined=new android.text.SpannableString(text);
+        if(!text.isEmpty())underlined.setSpan(new android.text.style.UnderlineSpan(),0,text.length(),android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+        try{markProgrammaticTextChange();return ic.setComposingText(underlined,1);}catch(RuntimeException error){Log.w(TAG,"Dual-hand composing rejected",error);return false;}
+    }
+    boolean dualHandCommit(String text){
+        InputConnection ic=getCurrentInputConnection();if(ic==null)return false;
+        if(!text.isEmpty()&&!commitTextProgrammatically(ic,text)){updateStatus("輸入框未接受文字，草稿已保留");return false;}
+        boolean finished=dualHandFinishComposition();
+        if(!finished&&!text.isEmpty())updateStatus("文字已送入，輸入框未結束組字");
+        return !text.isEmpty()||finished;
+    }
+    boolean dualHandFinishComposition(){InputConnection ic=getCurrentInputConnection();if(ic==null)return false;try{markProgrammaticTextChange();return ic.finishComposingText();}catch(RuntimeException error){Log.w(TAG,"Dual-hand finish rejected",error);return false;}}
+    void dualHandErase(){
+        InputConnection ic=getCurrentInputConnection();if(ic==null)return;
+        try{
+            CharSequence selected=ic.getSelectedText(0);
+            if(selected!=null&&selected.length()>0){if(!commitTextProgrammatically(ic,""))updateStatus("輸入框未接受刪除");return;}
+            CharSequence before=ic.getTextBeforeCursor(2,0);int units=before==null||before.length()==0?1:Character.charCount(Character.codePointBefore(before,before.length()));
+            if(!deleteSurroundingTextProgrammatically(ic,units,0))updateStatus("輸入框未接受刪除");
+        }catch(RuntimeException error){Log.w(TAG,"Dual-hand delete rejected",error);updateStatus("輸入框未接受刪除");}
+    }
+    void dualHandFunction(String key){
+        if("to41".equals(key)){if(dualHandPage!=null)dualHandPage.reconfigure();dualHandSelected=false;getSharedPreferences("simon_ime_prefs",MODE_PRIVATE).edit().putBoolean("dual_hand_mode",false).apply();configureTextRows();switchKeyboard(KeyboardMode.BOPOMOFO);}
+        else if("enter".equals(key))handleEnterKey();else onTypingKeyPressed(key);
+    }
+    void dualHandPanel(String kind){
+        if("symbols".equals(kind)){
+            closePanel();panelContainer.setVisibility(View.VISIBLE);
+            if(dualHandPage!=null){panelContainer.getLayoutParams().height=Math.max(dp(220),dualHandPage.view().getHeight());dualHandPage.reconfigure();dualHandPage.view().setVisibility(View.GONE);}
+            LinearLayout panel=new LinearLayout(this);panel.setOrientation(LinearLayout.VERTICAL);
+            TextView back=new TextView(this);back.setText("返回鍵盤");back.setTextColor(0xFFFFFFFF);back.setPadding(dp(8),dp(8),dp(8),dp(8));back.setOnClickListener(v->closePanel());panel.addView(back);
+            panel.addView(buildSymbolPopupContent(SymbolPopupSpec.FULL_WIDTH,5,"，"));panelContainer.addView(panel);
+        }else showPanel("clipboard".equals(kind)?Panel.CLIPBOARD:Panel.COMMANDS);
+    }
     @Override public void onConfigurationChanged(android.content.res.Configuration next){
-        t9ConfigurationField=textFieldIdentity(getCurrentInputEditorInfo());
-        if(t9Page!=null)t9Page.reconfigure();t9Configuring=true;
-        try{super.onConfigurationChanged(next);}finally{t9Configuring=false;}
-        ensureT9Page();if(t9Page!=null)t9Page.reconfigure();
+        if(dualHandPage!=null)dualHandPage.reconfigure();dualHandConfiguring=true;
+        try{super.onConfigurationChanged(next);}finally{dualHandConfiguring=false;}
+        if(dualHandSelected)ensureDualHandPage();if(dualHandPage!=null)dualHandPage.reconfigure();
     }
 
     private void switchKeyboard(KeyboardMode mode) {
@@ -4326,15 +4365,19 @@ public class SimonIMEService extends InputMethodService {
             clearEnWordBuffer();
         }
         if (currentKeyboardMode == KeyboardMode.BOPOMOFO && mode != KeyboardMode.BOPOMOFO) {
-            if(t9Page!=null)t9Page.clear();
+            if(dualHandPage!=null){if(!dualHandPage.finish())return;dualHandPage.reconfigure();}
             clearBopomofoBuffer();
         }
+        if(dualHandSelected&&!getSharedPreferences("simon_ime_prefs",MODE_PRIVATE).getBoolean("dual_hand_enabled",true)){
+            if(dualHandPage!=null&&!dualHandPage.finish())return;
+            if(dualHandPage!=null)dualHandPage.reconfigure();dualHandSelected=false;configureTextRows();
+        }
+        if(dualHandSelected)ensureDualHandPage();
         currentKeyboardMode = mode;
         updateCompleteTypingHint(false);
         voiceKeyboard.setVisibility(mode == KeyboardMode.VOICE ? View.VISIBLE : View.GONE);
-        bopomofoKeyboard.setVisibility(mode == KeyboardMode.BOPOMOFO && !t9Selected ? View.VISIBLE : View.GONE);
-        if(t9Selected)ensureT9Page();
-        if(t9Page!=null)t9Page.view().setVisibility(mode==KeyboardMode.BOPOMOFO&&t9Selected?View.VISIBLE:View.GONE);
+        bopomofoKeyboard.setVisibility(mode == KeyboardMode.BOPOMOFO && !dualHandSelected ? View.VISIBLE : View.GONE);
+        if(dualHandPage!=null)dualHandPage.view().setVisibility(mode==KeyboardMode.BOPOMOFO&&dualHandSelected?View.VISIBLE:View.GONE);
         englishKeyboard.setVisibility(mode == KeyboardMode.ENGLISH ? View.VISIBLE : View.GONE);
         numbersKeyboard.setVisibility(mode == KeyboardMode.NUMBERS ? View.VISIBLE : View.GONE);
         // Close any open panel when switching keyboards
@@ -4437,8 +4480,8 @@ public class SimonIMEService extends InputMethodService {
         if (ic == null) return;
 
         switch (key) {
-            case "toT9":
-                toggleT9();return;
+            case "toDualHand":
+                toggleDualHand();return;
             case "shift":
                 toggleShift();
                 break;
@@ -4845,7 +4888,7 @@ public class SimonIMEService extends InputMethodService {
         return true;
     }
 
-    private boolean textLayoutSelected(){return !isWatchService()&&!"legacy_zhuyin".equals(getSharedPreferences("simon_ime_prefs",MODE_PRIVATE).getString("layout_mode","text_word_char"));}
+    private boolean textLayoutSelected(){return !dualHandSelected&&!isWatchService()&&!"legacy_zhuyin".equals(getSharedPreferences("simon_ime_prefs",MODE_PRIVATE).getString("layout_mode","text_word_char"));}
     private TextView boTextCount;
     private void updateTextCount(){
         if(boTextCount==null||zhuyinInput==null)return;
@@ -6570,6 +6613,7 @@ public class SimonIMEService extends InputMethodService {
     @Override
     public void onUpdateSelection(int oldSelStart, int oldSelEnd, int newSelStart, int newSelEnd,
                                   int candidatesStart, int candidatesEnd) {
+        if(dualHandSelected&&dualHandPage!=null)dualHandPage.selection(newSelStart,newSelEnd,candidatesStart,candidatesEnd);
         if(retainedTextNeedsReclaim&&reclaimTextComposition(getCurrentInputEditorInfo()))applyZhuyinState(zhuyinInput.state());
         if(textLayoutSelected()&&!protectedInputField&&zhuyinInput!=null&&zhuyinComposingConnection!=null&&zhuyinComposingConnection==getCurrentInputConnection()){
             String value=zhuyinInput.textPreview();
@@ -6667,7 +6711,7 @@ public class SimonIMEService extends InputMethodService {
         invalidateLineGhostwriter();
         flushPendingVoiceAudio(false);
         dismissSymbolPopup();
-        if(t9Page!=null)t9Page.reconfigure();
+        if(dualHandPage!=null){dualHandPage.reconfigure();if(!dualHandConfiguring)dualHandPage.finish();}
         if(textLayoutSelected()&&zhuyinInput!=null)rememberTextComposition(getCurrentInputConnection(),zhuyinInput.textPreview());
         if(textLayoutSelected()&&!protectedInputField&&zhuyinInput!=null&&!zhuyinInput.textPreview().isEmpty())retainedTextNeedsReclaim=true;
         clearRankingContext();
@@ -6694,7 +6738,7 @@ public class SimonIMEService extends InputMethodService {
         clearRankingContext();
         cancelPendingTextCandidates();lastTextKeyUptime=-1;
         if(layoutDiagnostics!=null){layoutDiagnostics.close();layoutDiagnostics=null;}
-        if(t9Page!=null){t9Page.close();t9Page=null;}
+        if(dualHandPage!=null){dualHandPage.close();dualHandPage=null;}
         if (sentencePhone != null) { sentencePhone.close(); sentencePhone = null; }
         if (zhuyinInput != null) { zhuyinInput.close(); zhuyinInput = null; }
         if (zhuyinWordIndex != null) { zhuyinWordIndex.close(); zhuyinWordIndex = null; }

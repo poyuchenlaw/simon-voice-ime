@@ -3,7 +3,7 @@ import java.io.File;
 import org.json.JSONObject;
 /** Release exam: screen taps only, first-tone syllables use the shipped space key. */
 public class Release41Sentences683AndroidTest extends Preview679AndroidTest {
-    @Override void preparePreferences(){super.preparePreferences();inst.getTargetContext().getSharedPreferences("simon_ime_prefs",0).edit().putBoolean("t9_mode",false).commit();}
+    @Override void preparePreferences(){super.preparePreferences();inst.getTargetContext().getSharedPreferences("simon_ime_prefs",0).edit().putBoolean("dual_hand_mode",false).commit();}
     void sentence(String expected,String reading)throws Exception {
         ready();out=new File(inst.getTargetContext().getFilesDir(),"v666");out.mkdirs();bind();awaitStableWindow();
         keys(reading);Thread.sleep(400);inst.waitForIdleSync();

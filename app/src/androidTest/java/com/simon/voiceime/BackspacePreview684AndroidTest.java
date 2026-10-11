@@ -9,7 +9,7 @@ import org.json.JSONObject;
 public class BackspacePreview684AndroidTest extends Preview679AndroidTest {
     @Override void preparePreferences() {
         super.preparePreferences();
-        inst.getTargetContext().getSharedPreferences("simon_ime_prefs",0).edit().putBoolean("t9_mode",false).commit();
+        inst.getTargetContext().getSharedPreferences("simon_ime_prefs",0).edit().putBoolean("dual_hand_mode",false).commit();
     }
     void replay(boolean pickCandidate,boolean telemetry) throws Exception {
         ready();out=new File(inst.getTargetContext().getFilesDir(),"v666");out.mkdirs();bind();awaitStableWindow();

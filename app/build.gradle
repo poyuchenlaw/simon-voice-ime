@@ -84,14 +84,7 @@ def buildZhuyinIndex = tasks.register("buildPhoneZhuyinIndex", Exec) {
     commandLine "/home/simon/whisper-to-input-proxy/.g2pw_venv/bin/python",
             "scripts/build_v633_zhuyin_index.py"
 }
-def buildT9RimeSchema = tasks.register("buildT9RimeSchema", Exec) {
-    workingDir rootProject.projectDir
-    inputs.files(file("src/phone/assets/rime/bopomofo_t9_simon.schema.yaml"),file("src/phone/assets/rime/grammar.yaml"),file("../scripts/build_t9_rime.sh"))
-    outputs.files(file("src/phone/assets/rime/build/bopomofo_t9_simon.schema.yaml"),file("src/phone/assets/rime/build/bopomofo_t9_simon.prism.bin"))
-    commandLine "bash", "scripts/build_t9_rime.sh"
-}
 def buildPhoneRime = tasks.register("buildPhoneRime", Exec) {
-    dependsOn buildT9RimeSchema
     workingDir rootProject.projectDir
     inputs.files(file("src/phone/cpp/rime_jni.cpp"), fileTree("src/phone/cpp/rime_headers"), file("src/phone/cpp/rime_regroup.h"), file("src/phone/jniLibs/arm64-v8a/librime.so"),
             file("../scripts/build_phone_rime_jni.sh"),
@@ -121,15 +114,7 @@ dependencies {
     implementation 'androidx.recyclerview:recyclerview:1.3.2'
 }
 
-def buildPhoneT9 = tasks.register("buildPhoneT9", Exec) {
-    workingDir rootProject.projectDir
-    inputs.files(fileTree("../native/zhuyin_t9_core") { exclude "target/**" },file("../scripts/build_t9_core.sh"),file("src/phone/assets/zhuyin_initials.db"),file("src/phone/assets/rime/build/terra_pinyin.table.bin"))
-    outputs.files(file("src/phone/jniLibs/arm64-v8a/libzhuyin_t9_core.so"),file("src/phone/jniLibs/x86_64/libzhuyin_t9_core.so"))
-    commandLine "bash", "scripts/build_t9_core.sh"
-}
-tasks.matching { it.name in ["prePhoneDebugBuild", "prePhoneReleaseBuild"] }.configureEach { dependsOn buildPhoneT9 }
-
-// Verify the delivered ZIP, including a second comparison to the T9 compiler output.
+// Verify every packaged native library against this build.
 ['Debug', 'Release'].each { kind ->
     def variant = "phone${kind}"
     def verifyNative = tasks.register("verifyPhone${kind}NativeLibraries") {
@@ -149,10 +134,6 @@ tasks.matching { it.name in ["prePhoneDebugBuild", "prePhoneReleaseBuild"] }.con
                     def actual = zip.getInputStream(entry).withCloseable { sha(it.bytes) }
                     def source = new File(built, entry.name.substring(4))
                     if (actual != sha(source.bytes)) throw new GradleException("Native library mismatch: ${entry.name}")
-                    if (entry.name.endsWith('/libzhuyin_t9_core.so')) {
-                        source = file('../native/zhuyin_t9_core/target/aarch64-linux-android/release/libzhuyin_t9_core.so')
-                        if (actual != sha(source.bytes)) throw new GradleException("Native library mismatch: ${entry.name} vs fresh compiler output")
-                    }
                     libraries[entry.name] = [sha256: actual, source: source.toString()]
                 }
             }
