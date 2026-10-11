@@ -58,6 +58,7 @@ public final class DualHandState {
     public List<String> syllables(){return Collections.unmodifiableList(new ArrayList<>(syllables));}
     public String draft(){return display!=null?display:baseDraft();}
     public String baseDraft(){StringBuilder text=new StringBuilder();for(String s:syllables)text.append(table.draft(s));return text.toString();}
+    public String aiDraft(){StringBuilder text=new StringBuilder();for(String s:syllables)text.append(table.aiDraft(s));return text.toString();}
     public enum Delete {PENDING,SYLLABLE,EDITOR}
     public Delete backspace(){if(pending!=null){pending=null;return Delete.PENDING;}if(!syllables.isEmpty()){syllables.remove(syllables.size()-1);if(display!=null)display=trimLast(display);if(aiBefore!=null)aiBefore=trimLast(aiBefore);if(syllables.isEmpty()){display=null;aiBefore=null;}revision++;return Delete.SYLLABLE;}return Delete.EDITOR;}
     public void cancelTouches(){strokes.clear();}

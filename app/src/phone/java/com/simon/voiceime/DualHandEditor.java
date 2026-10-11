@@ -19,6 +19,7 @@ final class DualHandEditor implements DualHandKeyboard.Hooks {
     private final SimonIMEService service;
     private final Handler ui;
     private DualHandTracks tracks;
+    private DualHandMemory memory;
     private boolean closed;
     private final OkHttpClient http=new OkHttpClient.Builder().retryOnConnectionFailure(false).followRedirects(false).followSslRedirects(false)
         .connectTimeout(3,TimeUnit.SECONDS).readTimeout(8,TimeUnit.SECONDS).callTimeout(8,TimeUnit.SECONDS).build();
@@ -46,7 +47,11 @@ final class DualHandEditor implements DualHandKeyboard.Hooks {
         ui.post(service::dualHandCursorUpdates);
         Thread loader=new Thread(()->{
             try(Reader words=asset("phrase_words.tsv");Reader grid=asset("grid_chars.tsv");Reader readings=asset("readings.tsv")){
-                DualHandTracks loaded=new DualHandTracks(words,grid,readings);ui.post(()->{if(!closed){tracks=loaded;changed(keyboard);}});
+                DualHandMemory personal=null;
+                try{personal=new DualHandMemory(new File(service.getFilesDir(),"dual_hand_personal.tsv"));}
+                catch(IOException failure){ui.post(()->{if(!closed)service.dualHandStatus("個人記憶未載入，本機詞庫仍可使用");});}
+                DualHandTracks loaded=new DualHandTracks(words,grid,readings,personal);final DualHandMemory learned=personal;
+                ui.post(()->{if(!closed){memory=learned;tracks=loaded;changed(keyboard);}});
             }catch(IOException failure){ui.post(()->{if(!closed)service.dualHandStatus("本機詞庫未載入，草稿已保留");});}
         },"DualHandDictionary");loader.setDaemon(true);loader.start();
     }
@@ -132,8 +137,8 @@ final class DualHandEditor implements DualHandKeyboard.Hooks {
         List<String> sounds=keyboard.buffer().syllables();List<String> used=new ArrayList<>(sounds.subList(0,choice.end));
         if(!service.dualHandCommit(choice.text))return false;
         // commitText replaces the full old composing range; immediately compose only the unused suffix.
-        committed(keyboard,choice.text,used);keyboard.buffer().consume(choice.end);
-        keyboard.compose(Collections.emptyList());keyboard.refresh();event("dh_cand","chosen",shown,rank,0,false);return true;
+        committed(keyboard,choice.text,used);remember(used,choice.text,beforeWrite.field);keyboard.buffer().consume(choice.end);
+        keyboard.compose(Collections.emptyList());keyboard.refresh();event("dh_cand","chosen",shown,rank,0,false,choice.personal);return true;
     }
     private android.content.SharedPreferences prefs(){return service.getSharedPreferences("simon_ime_prefs",0);}
     private String server(){return prefs().getString("server_url","http://100.84.86.128:8001");}
@@ -144,7 +149,7 @@ final class DualHandEditor implements DualHandKeyboard.Hooks {
         if(page.buffer().syllables().isEmpty()||call!=null)return;
         Snapshot owner=snapshot();validate(owner);String current=page.buffer().draft();
         if(owner==null||owner.start!=owner.end||compositionStart<0||owner.end!=compositionStart+current.length()||!current.equals(owner.range(compositionStart,owner.end))){service.dualHandStatus("輸入框未確認組字位置，草稿已保留");return;}
-        String left=owner.range(owner.offset,compositionStart),draft=page.buffer().baseDraft();
+        String left=owner.range(owner.offset,compositionStart),draft=page.buffer().aiDraft();
         if(left==null)return;
         try{
             JSONObject request=new JSONObject().put("context",DualHandTracks.tail(left,50)).put("draft",draft);
@@ -240,7 +245,7 @@ final class DualHandEditor implements DualHandKeyboard.Hooks {
         View content=service.buildChoiceGrid(labels,3,72,rank->{
             DualHandTracks.Choice choice=choices.get(rank);
             if(owner.same(snapshot())&&(!composing||revision==keyboard.buffer().revision())){
-                if(composing){keyboard.buffer().replace(choice.start,choice.end,choice.text);boolean replaced=keyboard.compose(warnings(keyboard));keyboard.refresh();if(replaced)event("dh_grid","replaced",index,rank,0,false);}
+                if(composing){keyboard.buffer().replace(choice.start,choice.end,choice.text);boolean replaced=keyboard.compose(warnings(keyboard));keyboard.refresh();if(replaced){remember(keyboard.buffer().syllables().subList(choice.start,choice.end),choice.text,owner.field);keyboard.refresh();event("dh_grid","replaced",index,rank,0,false,choice.personal);}}
                 else replaceCommitted(owner,base,text,choice,index,rank);
             }else {forgetPositions();service.dualHandStatus("文字已變動，請重新選字");}
             dismissGrid();
@@ -275,20 +280,27 @@ final class DualHandEditor implements DualHandKeyboard.Hooks {
             for(int cp:choice.text.codePoints().toArray()){
                 String ch=new String(Character.toChars(cp));String sound=retained.get(slot++);if(sound!=null){positions.put(at,sound);glyphs.put(at,ch);}at+=ch.length();
             }
-            event("dh_grid","replaced",index,rank,0,false);witness=replaced;
+            remember(choice.syllables,choice.text,owner.field);event("dh_grid","replaced",index,rank,0,false,choice.personal);witness=replaced;
         }catch(RuntimeException unavailable){service.dualHandStatus("輸入框未接受校正");}
         finally{try{if(selected){int delta=choice.text.length()-(right-left);int restoreStart=owner.start>=right?owner.start+delta:owner.start>left?left+choice.text.length():owner.start;int restoreEnd=owner.end>=right?owner.end+delta:owner.end>left?left+choice.text.length():owner.end;connection.setSelection(restoreStart,restoreEnd);}}finally{connection.endBatchEdit();witness=snapshot();}}
+    }
+    private void remember(List<String> sounds,String text,long field){
+        if(memory==null||field!=service.dualHandFieldGeneration())return;
+        try{memory.remember(sounds,text,service.dualHandProtected());}
+        catch(IOException failure){service.dualHandStatus("個人記憶未儲存，文字已保留");}
     }
     private void dismissGrid(){if(popup!=null){popup.dismiss();popup=null;}}
     @Override public void cancel(DualHandKeyboard page,boolean clear){cancelCall("cancelled");dismissGrid();if(selectionTask!=null)ui.removeCallbacks(selectionTask);selectionTask=null;if(clear){forgetPositions();witness=null;compositionStart=compositionEnd=-1;anchor=null;}}
     @Override public void close(DualHandKeyboard page){closed=true;}
     @Override public List<Integer> warnings(DualHandKeyboard page){return page.buffer().aiShown()?tracks==null?allIndices(page.buffer().syllables().size()):tracks.mismatches(page.buffer().draft(),page.buffer().syllables()):Collections.emptyList();}
-    private void event(String name,String action,int count,int rank,long latency,boolean restored){
+    private void event(String name,String action,int count,int rank,long latency,boolean restored){event(name,action,count,rank,latency,restored,false);}
+    private void event(String name,String action,int count,int rank,long latency,boolean restored,boolean personal){
         try{
             JSONObject fields=new JSONObject();
             if("dh_cand".equals(name))fields.put("action",action).put("shown",Math.min(3,count)).put("chosen_index",rank);
             else if("dh_grid".equals(name))fields.put("action",action).put("index",Math.max(0,count)).put("chosen_index",rank);
             else fields.put("outcome",action).put("chars",count).put("latency_ms",Math.max(0,latency)).put("restored",restored);
+            if("dh_cand".equals(name)||"dh_grid".equals(name))fields.put("personal",personal);
             keyboard.event(name,fields);
         }catch(JSONException invalid){throw new IllegalStateException(invalid);}
     }

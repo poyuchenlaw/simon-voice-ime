@@ -50,7 +50,7 @@ public final class DualHandKeyboard implements DualHandPage {
     }
     public DualHandKeyboard(SimonIMEService service)throws IOException {
         this.service=service;
-        try(Reader map=asset("dual_hand_map.tsv");Reader initial=asset("left_hand.tsv");Reader chars=asset("draft_chars.tsv")) {table=new DualHandTable(map,initial,chars);}
+        try(Reader map=asset("dual_hand_map.tsv");Reader initial=asset("left_hand.tsv");Reader chars=asset("draft_chars.tsv");Reader aiChars=asset("draft_chars_ai.tsv")) {table=new DualHandTable(map,initial,chars,aiChars);}
         state=new DualHandState(table);
         root=new Surface();root.setOrientation(LinearLayout.VERTICAL);root.setTag("dual-hand-keyboard");
         root.setPadding(dp(3),0,dp(3),dp(3));

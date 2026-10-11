@@ -8,8 +8,9 @@ public final class DualHandTable {
     public static final String[] DIRECTIONS={"tap","up","left","down","right"};
     public static final String[] RIGHT_KEYS={"A","B","C","D","E","F","Ø"};
     public static final String[] STATES={"ㄅ","ㄆ","ㄇ","ㄈ","ㄉ","ㄊ","ㄋ","ㄌ","ㄍ","ㄎ","ㄏ","ㄐ","ㄑ","ㄒ","ㄓ","ㄔ","ㄕ","ㄖ","ㄗ","ㄘ","ㄙ","Ø","ㄧ","ㄨ","ㄩ"};
-    private final Map<String,String> right=new HashMap<>(), left=new HashMap<>(), drafts=new HashMap<>();
-    public DualHandTable(Reader map, Reader initial, Reader chars) throws IOException {
+    private final Map<String,String> right=new HashMap<>(), left=new HashMap<>(), drafts=new HashMap<>(), aiDrafts=new HashMap<>();
+    public DualHandTable(Reader map, Reader initial, Reader chars) throws IOException {this(map,initial,chars,null);}
+    public DualHandTable(Reader map, Reader initial, Reader chars, Reader aiChars) throws IOException {
         read(map,"state\tkey\tgesture\tsyllable",4,v->{
             if(!Arrays.asList(STATES).contains(v[0])||!Arrays.asList(RIGHT_KEYS).contains(v[1])||!direction(v[2]))throw new IOException("Invalid map coordinate");
             put(right,v[0]+":"+v[1]+":"+v[2],v[3]);
@@ -22,6 +23,12 @@ public final class DualHandTable {
             if(!v[0].matches("[ㄅ-ㄩ]+")||v[1].codePointCount(0,v[1].length())!=1)throw new IOException("Invalid draft row");
             put(drafts,v[0],v[1]);
         });
+        if(aiChars==null)aiDrafts.putAll(drafts);
+        else read(aiChars,"syllable\tchar",2,v->{
+            if(!v[0].matches("[ㄅ-ㄩ]+")||v[1].codePointCount(0,v[1].length())!=1)throw new IOException("Invalid AI draft row");
+            put(aiDrafts,v[0],v[1]);
+        });
+        if(!aiDrafts.keySet().equals(drafts.keySet()))throw new IOException("Incomplete AI draft assets");
         if(right.size()!=875||left.size()!=30||drafts.size()!=415)throw new IOException("Incomplete dual-hand assets");
         for(String syllable:right.values())if(!syllable.isEmpty()&&!drafts.containsKey(syllable))throw new IOException("Missing draft character");
     }
@@ -39,5 +46,6 @@ public final class DualHandTable {
     public static boolean isRight(String key){return Arrays.asList(RIGHT_KEYS).contains(key);}
     public String left(String key,String direction){return left.getOrDefault(key+":"+direction,"");}
     public String right(String state,String key,String direction){return right.getOrDefault((state==null?"Ø":state)+":"+key+":"+direction,"");}
+    public String aiDraft(String syllable){String value=aiDrafts.get(syllable);if(value==null)throw new IllegalArgumentException("Unknown syllable");return value;}
     public String draft(String syllable){String value=drafts.get(syllable);if(value==null)throw new IllegalArgumentException("Unknown syllable");return value;}
 }

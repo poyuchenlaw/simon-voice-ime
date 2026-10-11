@@ -46,6 +46,24 @@ public class DualHandTracks686AndroidTest extends DualHand686AndroidTest {
         inst.runOnMainSync(()->page.requestGrid(0));Thread.sleep(150);screenshot("dh-grid");
         swipe("core","right");assertEquals("確認八",editorText(await("test_input")));
     }
+    public void testManualMemoryDoesNotReachAiRequest()throws Exception {
+        gateway("確認",200);
+        File personal=new File(inst.getTargetContext().getFilesDir(),"dual_hand_personal.tsv");
+        byte[] previous=personal.isFile()?java.nio.file.Files.readAllBytes(personal.toPath()):null;
+        try{startDual();confirmation();waitCandidates();tap("確認");
+        confirmation();waitCandidates();
+        final String[] baseline={null};inst.runOnMainSync(()->{
+            try{
+                var f=DualHandKeyboard.class.getDeclaredField("hooks");f.setAccessible(true);var editor=(DualHandEditor)f.get(page);
+                var m=DualHandEditor.class.getDeclaredField("memory");m.setAccessible(true);
+                ((DualHandMemory)m.get(editor)).remember(java.util.List.of("ㄑㄩㄝ","ㄖㄣ"),"卻仁",false);
+                baseline[0]=page.buffer().aiDraft();page.requestGrid(0);
+            }catch(Exception e){throw new RuntimeException(e);}
+        });
+        tap("卻仁");assertEquals("確認卻仁",editorText(await("test_input")));swipe("core","down");awaitGateway();
+        assertEquals(2,received.length());assertEquals("確認",received.getString("context"));assertEquals(baseline[0],received.getString("draft"));assertFalse(received.toString().contains("卻仁"));
+        }finally{if(previous==null)java.nio.file.Files.deleteIfExists(personal.toPath());else java.nio.file.Files.write(personal.toPath(),previous);}
+    }
     public void testAiEqualLengthMismatchIsKeptAndUndoPreservesSounds()throws Exception {
         gateway("確天",200);startDual();confirmation();String[] original={null};inst.runOnMainSync(()->original[0]=page.buffer().draft());swipe("core","down");
         long end=SystemClock.uptimeMillis()+5000;while(!"確天".equals(editorText(await("test_input")))&&SystemClock.uptimeMillis()<end)Thread.sleep(30);

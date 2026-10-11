@@ -32,6 +32,10 @@
     "phrase_words.tsv": {
       "sha256": "7b0fbc2a1c38fa8088cf7ddaa3797901795c2b102ffdf37f6211994553b79868",
       "bytes": 3547192
+    },
+    "draft_chars_ai.tsv": {
+      "sha256": "437328def90605faeaae6ca57ca32cb9f0a7f5e6b000c35198ae17648f90323c",
+      "bytes": 5011
     }
   }
 }
