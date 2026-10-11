@@ -1,0 +1,37 @@
+{
+  "generator_sha256": "03605050c587c0b61b23563d00e57634e1013adc912a641dd7e5ae69b41a7411",
+  "python": "3.12.3",
+  "scipy": "1.17.1",
+  "sources": {
+    "app/src/phone/assets/zhuyin_initials.db": "0f3cb5e9522908ce561f0f1f64b97f4dfcb239c34a92159ed58152cf79e819ed",
+    "native/zhuyin_t9_core/rime_single_chars.tsv": "e5fd87c9002c4c308fcb1085b00dcd7dac5e746670935513c1508d84302c67a9",
+    "native/zhuyin_t9_core/generated/legal_syllables.tsv": "84d66be47c8c79b0b1444a9172a30971d75fb0024bded1b288825d9f9abf9a2b",
+    "native/zhuyin_t9_core/generated/code_to_syllables.tsv": "da537522925876ea70ed8c1dc055cdad1c144e1f67226dc25a321bedbbac820e",
+    "native/zhuyin_t9_core/generated/MANIFEST.json": "e980aaed7157388110a6c98e1d4bc2c9f919dbb9d3346488bcf99cd16ebbad7d",
+    "native/zhuyin_t9_core/generate.py": "94cebbc4d947f25d5cdb7da0af7fa9a751fa7ce58dbae8a72234e1ce21a2fe0e",
+    "native/zhuyin_t9_core/extract_rime.py": "5afb6807e0ef1a1c44f0074993a90cb25d951330a1ef32ef6296e04f35a9031f",
+    "app/src/phone/assets/rime/build/terra_pinyin.table.bin": "c45ab3b881be790240e59a9335f9346e227c9eecc38ee0fc142543e9b95c46ca"
+  },
+  "artifacts": {
+    "draft_chars.tsv": {
+      "sha256": "24fd2d94a3bb9646b167e91e4dc8e16c79499627480c6641a559557d771c86ca",
+      "bytes": 5011
+    },
+    "dual_hand_map.tsv": {
+      "sha256": "f7526d907c77bd0e9be34d77d17cd9e6a5bb03b6bbb37647b7b90c87f727c452",
+      "bytes": 13357
+    },
+    "grid_chars.tsv": {
+      "sha256": "dc4db1984fafd7d2f9a8abfcc073845d33885f70423397ebf9cc40b4f9a4ce9c",
+      "bytes": 17644
+    },
+    "left_hand.tsv": {
+      "sha256": "95dc6b66367e0e4b696481f331314dfc384f4bbc294b9cc87c75f22fc90fe2ba",
+      "bytes": 320
+    },
+    "phrase_words.tsv": {
+      "sha256": "7b0fbc2a1c38fa8088cf7ddaa3797901795c2b102ffdf37f6211994553b79868",
+      "bytes": 3547192
+    }
+  }
+}
