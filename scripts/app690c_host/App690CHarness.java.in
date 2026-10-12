@@ -1,0 +1,36 @@
+package com.simon.voiceime;
+import java.util.*;import java.awt.Font;import java.awt.font.FontRenderContext;import java.awt.Rectangle;import java.io.File;
+public class App690CHarness {
+ enum Mode{APPEND,REPLACE,SPELL,TRANSLATE}Mode currentMode=Mode.APPEND;boolean dark;int saved;
+ static class R {static class id {/* IDS */}}
+ static class TextView {String text,face;float size;boolean single,tintCleared;Map<Integer,Object> tags=new HashMap<>();int color;TextView(String t,float s){text=t;size=s;}CharSequence getText(){return text;}void setText(String t){text=t;}void setTextColor(int c){color=c;}void setTag(int k,Object v){tags.put(k,v);}void setTextSize(float s){size=s;}void setSingleLine(boolean s){single=s;}void setTypeface(String s){face=s;}void setBackgroundTintList(Object o){tintCleared=o==null;}}
+ static class Root {Map<Integer,TextView> views=new HashMap<>();TextView findViewById(int id){return views.get(id);}}
+ static class KeyboardRoles {static boolean dark(App690CHarness c){return c.dark;}}
+ static class KeyboardTypeface {static String forLabel(App690CHarness c,String s,boolean fixed){return "␣全半追換拼譯注，。".contains(s)?"bundled":"system";}}
+ /* LABELS */
+ Root rootView=new Root();TextView btnMode=new TextView("追",12);void saveMode(){saved++;}
+ /* MODES */
+ void init(){/* INIT */}
+ static void check(boolean ok,String message){if(!ok)throw new AssertionError(message);}
+ public static void main(String[] args)throws Exception {
+  App690CHarness c=new App690CHarness();/* FIXTURE */c.init();
+  for(TextView v:c.rootView.views.values()){check(v.single&&v.tintCleared,"single line/no Button tint");check(v.face!=null,"Typeface set");check(Integer.valueOf(0).equals(v.tags.get(R.id.keyboard_visible_inset)),"numeric zero inset for role bridge");}
+  for(boolean theme:new boolean[]{false,true}){c.dark=theme;c.currentMode=Mode.APPEND;c.updateModeUI();
+   for(String text:new String[]{"換","拼","譯","追"}){c.cycleMode();check(text.equals(c.btnMode.text),"cycle mode order/text");String role="mode_"+c.currentMode.name().toLowerCase(Locale.ROOT);check(role.equals(c.btnMode.tags.get(R.id.keyboard_text_role)),"persistent mode foreground role");check(c.btnMode.color==DualHandVisuals.color(theme,role),"theme color");}
+  }check(c.saved==8,"save once per mode change");System.out.println("R6: 8 transitions, exact order/text/save and dark/light role readback");
+  check("function".equals(KeyboardLabels.labelClass("，",false)),"comma function");check("function".equals(KeyboardLabels.labelClass("。",false)),"period function");check("icon".equals(KeyboardLabels.labelClass("␣",false)),"space icon");
+  Font font=Font.createFont(Font.TRUETYPE_FONT,new File(args[0]));FontRenderContext frc=new FontRenderContext(null,true,true);float minimum=Float.MAX_VALUE;
+  for(int width:new int[]{320,360,400,600,800})for(float density:new float[]{1.3f,1.5f,2.625f,2.75f,3f})for(float scale:new float[]{1,1.3f}){
+   int total=Math.round(width*density)-Math.round(3*density)-Math.round(2*density);int left=Math.round((total-Math.round(2*density))*3/4f);
+   int top=(left-5*Math.round(2*density))/6;int edit=(left-Math.round(44*density)-5*Math.round(2*density))/5;
+   for(String text:new String[]{"全","半","追","換","拼","譯","注","，","。"}){
+    float cell="注".equals(text)?Math.round(44*density):"，。".contains(text)?edit:top;float height=Math.round(("注，。".contains(text)?38:34)*density);
+    TextView v=c.rootView.views.values().stream().filter(x->x.text.equals(text)).findFirst().orElse(c.btnMode);
+    check(v.size==12,"function size 12: "+text);Rectangle ink=font.deriveFont(v.size*density*scale).createGlyphVector(frc,text).getPixelBounds(frc,0,0);
+    check(font.canDisplayUpTo(text)==-1,"bundled glyph: "+text);float margin=Math.min(cell-ink.width,height-ink.height)/2/density;minimum=Math.min(minimum,margin);check(margin>=0,"ink outside cap: "+text+" "+width+"/"+density+"/"+scale+" margin="+margin);
+   }
+   System.out.printf(Locale.ROOT,"R4 grid width=%d density=%.3f fontScale=%.1f function=12sp min_margin_so_far_dp=%.3f%n",width,density,scale,minimum);
+  }
+  System.out.printf(Locale.ROOT,"A2-4: 50 grids x 9 function labels; min ink margin=%.3fdp; voice character fit=none; reference function=12sp icons=14/16/28sp%n",minimum);
+ }
+}

@@ -978,6 +978,23 @@ public class SimonIMEService extends InputMethodService {
         renderPendingVoiceNotices();
         previewText = rootView.findViewById(R.id.previewText);
         btnMic = rootView.findViewById(R.id.btnMic);
+        final float VOICE_TOOL_ICON_SP = 14, VOICE_EDIT_ICON_SP = 16, VOICE_MIC_ICON_SP = 28;
+        int[] voiceKeyIds = {R.id.btnSettings, R.id.btnFullWidth, R.id.btnHalfWidth,
+                R.id.btnClipboard, R.id.btnCommands, R.id.btnMode, R.id.btnSwitchIME,
+                R.id.btnSpace, R.id.btnComma, R.id.btnPeriod, R.id.btnBackspace, R.id.btnEnter, R.id.btnMic};
+        for (int id : voiceKeyIds) {
+            TextView key = rootView.findViewById(id);
+            String label = key.getText().toString();
+            boolean icon = "icon".equals(KeyboardLabels.labelClass(label, false));
+            if (!icon) key.setText(KeyboardLabels.functionLabel(label, "tap", false));
+            key.setTypeface(KeyboardTypeface.forLabel(this, key.getText().toString(), true));
+            key.setTextSize(icon ? (id == R.id.btnMic ? VOICE_MIC_ICON_SP
+                    : id == R.id.btnSettings || id == R.id.btnClipboard || id == R.id.btnCommands
+                    ? VOICE_TOOL_ICON_SP : VOICE_EDIT_ICON_SP) : KeyboardLabels.FUNCTION_TEXT_SP);
+            key.setSingleLine(true);
+            key.setTag(R.id.keyboard_visible_inset, 0);
+            key.setBackgroundTintList(null);
+        }
         btnMode = rootView.findViewById(R.id.btnMode);
         panelContainer = rootView.findViewById(R.id.panelContainer);
         View btnSpace = rootView.findViewById(R.id.btnSpace);
@@ -2885,7 +2902,7 @@ public class SimonIMEService extends InputMethodService {
         }
 
         updateStatus("🔴 錄音中...");
-        btnMic.setBackgroundColor(getResources().getColor(R.color.mic_active, null));
+        KeyboardKeycaps.apply(btnMic, KeyboardRoles.dark(this), "recording", 0);
         if (btnMic instanceof Button) ((Button) btnMic).setText("⏹");
 
         final String recordingSessionId=activePendingSessionId;
@@ -3496,7 +3513,7 @@ public class SimonIMEService extends InputMethodService {
         for(Runnable callback:waiting)callback.run();
 
         mainHandler.post(() -> {
-            btnMic.setBackgroundColor(getResources().getColor(R.color.mic_idle, null));
+            KeyboardKeycaps.apply(btnMic, KeyboardRoles.dark(this), "core", 0);
             if (btnMic instanceof Button) ((Button) btnMic).setText("🎤");
             if (!isWatchService() && !guardStoppedGenerations.contains(myGen)) updateStatus("辨識中...");
         });
@@ -5883,19 +5900,23 @@ public class SimonIMEService extends InputMethodService {
         switch (currentMode) {
             case APPEND:
                 btnMode.setText("追");
-                btnMode.setTextColor(getResources().getColor(R.color.mode_append, null));
+                btnMode.setTag(R.id.keyboard_text_role, "mode_append");
+                btnMode.setTextColor(DualHandVisuals.color(KeyboardRoles.dark(this), "mode_append"));
                 break;
             case REPLACE:
                 btnMode.setText("換");
-                btnMode.setTextColor(getResources().getColor(R.color.mode_replace, null));
+                btnMode.setTag(R.id.keyboard_text_role, "mode_replace");
+                btnMode.setTextColor(DualHandVisuals.color(KeyboardRoles.dark(this), "mode_replace"));
                 break;
             case SPELL:
                 btnMode.setText("拼");
-                btnMode.setTextColor(getResources().getColor(R.color.mode_spell, null));
+                btnMode.setTag(R.id.keyboard_text_role, "mode_spell");
+                btnMode.setTextColor(DualHandVisuals.color(KeyboardRoles.dark(this), "mode_spell"));
                 break;
             case TRANSLATE:
                 btnMode.setText("譯");
-                btnMode.setTextColor(0xFF6bc5f0);
+                btnMode.setTag(R.id.keyboard_text_role, "mode_translate");
+                btnMode.setTextColor(DualHandVisuals.color(KeyboardRoles.dark(this), "mode_translate"));
                 break;
         }
     }
