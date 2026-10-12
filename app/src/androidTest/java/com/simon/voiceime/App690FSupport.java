@@ -56,6 +56,7 @@ public abstract class App690FSupport extends TestCase {
         shell("ime enable com.simon.voiceime/.SimonIMEService; ime set com.simon.voiceime/.SimonIMEService");
         shell("am start -W -n com.simon.ime.host690/.App690HostActivity");
         hostCall("reopen",new Bundle());
+        String selected=shell("ime set com.simon.voiceime/.SimonIMEService; settings get secure default_input_method");save("ime-selection.txt",selected);assertTrue("selected IME readback: "+selected,selected.strip().endsWith("com.simon.voiceime/.SimonIMEService"));
         long end=SystemClock.uptimeMillis()+5000;
         do{service=main(()->((java.lang.ref.WeakReference<?>)field(api("SimonIMEService"),"notificationVoiceService")).get());if(service!=null){root=main(()->(View)field(service,"rootView"));if(root!=null&&main(()->root.isShown()))break;}Thread.sleep(40);}while(SystemClock.uptimeMillis()<end);
         assertNotNull("IME must be enabled/selected before instrumentation",service);assertNotNull(root);inst.waitForIdleSync();
