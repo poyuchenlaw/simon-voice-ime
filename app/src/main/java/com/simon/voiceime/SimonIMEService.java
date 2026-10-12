@@ -1190,7 +1190,7 @@ public class SimonIMEService extends InputMethodService {
             boolean character="right".equals(key.getTag(R.id.keyboard_role));
             String text=key.getText().toString(),kind=KeyboardLabels.labelClass(text,character);
             if("function".equals(kind)){
-                text=KeyboardLabels.functionLabel(text,"tap",false);key.setText(text);
+                text=KeyboardLabels.fallbackFunctionLabel(text);key.setText(text);
                 key.setTextSize(KeyboardLabels.FUNCTION_TEXT_SP);
             }
             key.setTypeface(KeyboardTypeface.forLabel(this,text,true,character));

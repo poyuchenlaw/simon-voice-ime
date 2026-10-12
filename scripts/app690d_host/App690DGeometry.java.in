@@ -14,11 +14,13 @@ public class App690DGeometry {
  static class R {static class id {static final int keyboard_role=1;}}
  static class Metrics {float density,scaledDensity;}
  static class Resources {Metrics m=new Metrics();Metrics getDisplayMetrics(){return m;}}
- static class View {int width,height;Resources resources;int getWidth(){return width;}int getHeight(){return height;}Resources getResources(){return resources;}}
- static class TextView extends View {String text,route,role;float sp;TextView(String t,String r,float s){text=t;route=r;sp=s;role=r.length()==5&&!t.equals(".")?"right":"tools";}Object getTag(int id){return role;}Object getTag(){return route;}String getText(){return text;}Paint getPaint(){return new Paint();}void setTextSize(float s){sp=s;}}
- static class KeyboardTypeface {static Typeface get(Object context){return Typeface.DEFAULT;}}
+ static class View {int width,height;Resources resources;int getWidth(){return width;}int getHeight(){return height;}Resources getResources(){return resources;}Object getTag(){return null;}}
+ static class ViewGroup extends View {int getChildCount(){return 0;}View getChildAt(int i){throw new AssertionError(i);}}
+ static class TextView extends View {String text,route,role;float sp;TextView(String t,String r,float s){text=t;route=r;sp=s;role=r.length()==5&&!t.equals(".")?"right":"tools";}Object getTag(int id){return role;}Object getTag(){return route;}String getText(){return text;}Paint getPaint(){return new Paint();}void setTextSize(float s){sp=s;}void setText(String s){text=s;}void setTypeface(Typeface t){}void setSingleLine(boolean b){}void setEllipsize(Object o){}}
+ static class KeyboardTypeface {static Typeface get(Object context){return Typeface.DEFAULT;}static Typeface forLabel(Object c,String t,boolean fixed,boolean character){return Typeface.DEFAULT;}}
  /* LABELS */
  /* FIT */
+ /* COLLECT */
  static class KeySpec {String text,route;float fixed,weight,margin,sp;KeySpec(String t,String r,float f,float w,float m,float s){text=t;route=r;fixed=f;weight=w;margin=m;sp=s;}}
  static class Row {String page;List<KeySpec> keys;Row(String p,List<KeySpec> k){page=p;keys=k;}}
  public static void main(String[] args){new App690DGeometry().check();}
@@ -33,8 +35,10 @@ public class App690DGeometry {
     for(KeySpec k:row.keys){available-=Math.round(k.fixed*density)+Math.round(k.margin*density);total+=k.weight;}
     int left=available;float remaining=total;
     for(KeySpec k:row.keys){TextView v=new TextView(k.text,k.route,k.sp);v.resources=resources;v.height=Math.round(42*density);
-     int share=remaining>0?(int)(left*k.weight/remaining):0;v.width=k.fixed>0?Math.round(k.fixed*density):share;left-=share;remaining-=k.weight;keys.add(v);}
+     int share=remaining>0?(int)(left*k.weight/remaining):0;v.width=k.fixed>0?Math.round(k.fixed*density):share;left-=share;remaining-=k.weight;collectDTypingLabels(v,new ArrayList<>());keys.add(v);}
    }
+   TextView numbers=keys.stream().filter(k->k.route.equals("key:toNumbers")).findFirst().orElse(null);
+   if(name.equals("keyboard_english")){assert numbers!=null;assert KeyboardLabels.fallbackFunctionLabel("123").equals("數");assert numbers.text.equals(KeyboardLabels.fallbackFunctionLabel("123")):"English numbers label="+numbers.text+" expected=數";}
    KeyboardLabels.Cache cache=new KeyboardLabels.Cache();fitDTypingPage(page,keys,cache);
    float letter=keys.stream().filter(k->k.role.equals("right")).findFirst().get().sp,margin=Float.MAX_VALUE;
    for(int reopen=0;reopen<30;reopen++)fitDTypingPage(page,keys,cache);
@@ -44,6 +48,7 @@ public class App690DGeometry {
     if(character&&k.sp!=letter)failures++;
     Paint paint=new Paint();paint.setTextSize(k.sp*density*scale);Rect ink=new Rect();paint.getTextBounds(k.text,0,k.text.length(),ink);
     float mx=(k.width-ink.width())/2f-Math.round(density),my=(k.height-ink.height())/2f-Math.round(density);margin=Math.min(margin,Math.min(mx,my)/density);
+    if(k==numbers)System.out.println("NUMBERS_KEY,"+width+","+density+","+scale+","+k.text+","+k.sp+","+Math.min(mx,my)/density);
     if(mx<0||my<0){System.out.println("FAIL_INK "+name+" "+k.text+" "+width+" "+density+" "+scale);failures++;}
     if(k.text.contains("\n"))failures++;
    }

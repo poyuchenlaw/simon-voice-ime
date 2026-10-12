@@ -28,9 +28,10 @@ def body(source,sig):
  while depth:depth+=(source[end]=='{')-(source[end]=='}');end+=1
  return source[start:end]
 fit=body(source,'private void fitDTypingPage(') if 'private void fitDTypingPage(' in source else 'private void fitDTypingPage(View page,List<TextView> keys,KeyboardLabels.Cache cache) {}'
+collect=body(source,'private void collectDTypingLabels(') if 'private void collectDTypingLabels(' in source else 'private void collectDTypingLabels(View view,List<TextView> keys) {}'
 labels=(w/'app/src/main/java/com/simon/voiceime/KeyboardLabels.java').read_text()
 labels='static class KeyboardLabels {'+labels[labels.index('{')+1:labels.rfind('}')].replace('public final','public final')+'}'
-t=(w/'scripts/app690d_host/App690DGeometry.java.in').read_text().replace('/* FIT */',fit).replace('/* LABELS */',labels).replace('/* ROWS */','\n'.join(java_rows))
+t=(w/'scripts/app690d_host/App690DGeometry.java.in').read_text().replace('/* FIT */',fit).replace('/* COLLECT */',collect).replace('/* LABELS */',labels).replace('/* ROWS */','\n'.join(java_rows))
 (out/'App690DGeometry.java').write_text(t)
 subprocess.run(['javac','-encoding','UTF-8','-d',str(out),str(out/'App690DGeometry.java')],cwd=w,check=True)
 raise SystemExit(subprocess.run(['java','-ea','-Djava.awt.headless=true','-cp',str(out),'App690DGeometry'],cwd=w).returncode)
