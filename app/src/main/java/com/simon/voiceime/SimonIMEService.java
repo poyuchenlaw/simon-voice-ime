@@ -1124,6 +1124,7 @@ public class SimonIMEService extends InputMethodService {
 
         // 設定注音、英文鍵盤和數字鍵盤的按鍵處理
         setupTypingKeyboard(bopomofoKeyboard);
+        configureBopomofoStyle();
         dualHandSelected=getSharedPreferences("simon_ime_prefs",MODE_PRIVATE).getBoolean("dual_hand_enabled",true)&&getSharedPreferences("simon_ime_prefs",MODE_PRIVATE).getBoolean("dual_hand_mode",false);
         if(dualHandSelected)ensureDualHandPage();
         setupTypingKeyboard(englishKeyboard);
@@ -5018,10 +5019,67 @@ public class SimonIMEService extends InputMethodService {
         boolean enabled="live".equals(p.getString("ai_sentence_mode","suggestions"))&&p.getBoolean("ai_sentence_auto_apply",false);
         boTextCount.setText(count+" 字 · "+(count<10?"滿十字可啟用整句校正":enabled?"停一秒檢查整句校正":"已達十字門檻（校正關閉）"));
     }
+    private void markBopomofoContainers(View view){
+        if(!(view instanceof ViewGroup))return;
+        KeyboardRoles.mark(view,"background","text");
+        ViewGroup group=(ViewGroup)view;for(int i=0;i<group.getChildCount();i++)markBopomofoContainers(group.getChildAt(i));
+    }
+    private void configureBopomofoStyle(){
+        if(!(bopomofoKeyboard instanceof ViewGroup))return;
+        markBopomofoContainers(bopomofoKeyboard);
+        final float BOPOMOFO_ICON_FRAME_SP=16; // 6.89.1 bottom-row icon text size; retain scaled rendering.
+        final android.graphics.Typeface face=KeyboardTypeface.get(this);
+        final KeyboardLabels.Cache cache=new KeyboardLabels.Cache();
+        final android.graphics.Paint paint=new android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG);paint.setTypeface(face);
+        final List<TextView> characterKeys=new ArrayList<>();
+        ViewGroup page=(ViewGroup)bopomofoKeyboard;
+        for(int row=0;row<page.getChildCount();row++){
+            View child=page.getChildAt(row);if(!(child instanceof LinearLayout))continue;
+            ViewGroup group=(ViewGroup)child;
+            for(int column=0;column<group.getChildCount();column++){
+                View view=group.getChildAt(column);Object route=view.getTag();
+                if(!(view instanceof TextView)||!(route instanceof String)||!((String)route).startsWith("key:"))continue;
+                TextView key=(TextView)view;String text=key.getText().toString();boolean character=isBopomofoSymbol(((String)route).substring(4));
+                String kind=KeyboardLabels.labelClass(text,character);
+                if("function".equals(kind))key.setText("123".equals(text)?KeyboardLabels.fallbackFunctionLabel(text):KeyboardLabels.functionLabel(text,"tap",false));
+                key.setTypeface(KeyboardTypeface.forLabel(this,key.getText().toString(),true,character));
+                key.setTag(R.id.keyboard_content_kind,kind);key.setSingleLine(true);key.setEllipsize(null);
+                if(character)characterKeys.add(key);else key.setTextSize("icon".equals(kind)?BOPOMOFO_ICON_FRAME_SP:KeyboardLabels.FUNCTION_TEXT_SP);
+            }
+        }
+        bopomofoKeyboard.addOnLayoutChangeListener(new View.OnLayoutChangeListener(){
+            @Override public void onLayoutChange(View v,int l,int t,int r,int b,int ol,int ot,int oldRight,int oldBottom){
+                if(v.getWidth()<=0||characterKeys.isEmpty())return;
+                android.util.DisplayMetrics metrics=getResources().getDisplayMetrics();
+                List<KeyboardLabels.Label> labels=new ArrayList<>();
+                for(TextView key:characterKeys){
+                    if(key.getWidth()<=0||key.getHeight()<=0)return;
+                    labels.add(new KeyboardLabels.Label(KeyboardLabels.contentWidth(key.getWidth(),Math.round(KeyboardLabels.KEY_MARGIN_DP*metrics.density),dp(1)),key.getHeight()-2*dp(1),Math.round(KeyboardLabels.FIT_VERTICAL_MARGIN_DP*metrics.density),key.getText().toString(),"","","",""));
+                }
+                float sp=cache.fit(v.getWidth(),metrics.density,metrics.scaledDensity,face,paint,labels);
+                for(TextView key:characterKeys)if(Math.abs(key.getTextSize()-sp*metrics.scaledDensity)>.01f)key.setTextSize(sp);
+            }
+        });
+        // Content changes need phonetic spans; the view's system typeface and layout remain untouched.
+        for(int id:new int[]{R.id.boStreamPreview,R.id.boPhoneticPreview}){
+            TextView preview=page.findViewById(id);if(preview==null)continue;preview.setTypeface(android.graphics.Typeface.DEFAULT);
+            preview.addTextChangedListener(new android.text.TextWatcher(){
+                @Override public void beforeTextChanged(CharSequence value,int start,int count,int after){}
+                @Override public void onTextChanged(CharSequence value,int start,int before,int count){}
+                @Override public void afterTextChanged(android.text.Editable value){
+                    for(android.text.style.MetricAffectingSpan span:value.getSpans(0,value.length(),android.text.style.MetricAffectingSpan.class))
+                        if(span.getClass().getName().startsWith(KeyboardTypeface.class.getName()+"$"))value.removeSpan(span);
+                    android.text.Spanned mixed=(android.text.Spanned)KeyboardTypeface.mixed(SimonIMEService.this,value);
+                    for(android.text.style.MetricAffectingSpan span:mixed.getSpans(0,mixed.length(),android.text.style.MetricAffectingSpan.class))
+                        if(span.getClass().getName().startsWith(KeyboardTypeface.class.getName()+"$"))value.setSpan(span,mixed.getSpanStart(span),mixed.getSpanEnd(span),mixed.getSpanFlags(span));
+                }
+            });
+        }
+    }
     private void configureTextRows(){
         boolean text=textLayoutSelected();if(zhuyinInput!=null)zhuyinInput.setTextLayout(text);
         if(text&&(boTextCount==null||boTextCount.getParent()!=bopomofoKeyboard)&&bopomofoKeyboard instanceof ViewGroup){
-            boTextCount=new TextView(this);boTextCount.setTag("composition-count");boTextCount.setTextSize(11);boTextCount.setTextColor(keyboardColor(R.color.key_text));boTextCount.setPadding(dp(12),0,dp(12),0);
+            boTextCount=new TextView(this);boTextCount.setTag("composition-count");boTextCount.setTextSize(11);KeyboardRoles.mark(boTextCount,"background","secondary");boTextCount.setTag(R.id.keyboard_content_kind,"content");boTextCount.setTypeface(android.graphics.Typeface.DEFAULT);KeyboardRoles.apply(this,boTextCount);boTextCount.setPadding(dp(12),0,dp(12),0);
             ((ViewGroup)bopomofoKeyboard).addView(boTextCount,1,new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,dp(18)));
         }
         if(boTextCount!=null)boTextCount.setVisibility(text?View.VISIBLE:View.GONE);updateTextCount();
@@ -5048,8 +5106,8 @@ public class SimonIMEService extends InputMethodService {
         String shown=textLayoutSelected()?zhuyinInput.textPreview():zhuyinInput.previewText();
         android.text.SpannableString marked=sentencePhone==null?new android.text.SpannableString(shown):sentencePhone.mark(shown);
         int provisional=textLayoutSelected()?zhuyinInput.provisionalCharacter():-1;
-        if(provisional>=0&&provisional<shown.codePointCount(0,shown.length())){int from=shown.offsetByCodePoints(0,provisional),to=shown.offsetByCodePoints(from,1);marked.setSpan(new android.text.style.ForegroundColorSpan(0xff999999),from,to,android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);}
-        return marked;
+        if(provisional>=0&&provisional<shown.codePointCount(0,shown.length())){int from=shown.offsetByCodePoints(0,provisional),to=shown.offsetByCodePoints(from,1);marked.setSpan(new android.text.style.ForegroundColorSpan(DualHandVisuals.color(KeyboardRoles.dark(this),"secondary")),from,to,android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);}
+        return KeyboardTypeface.mixed(this,marked);
     }
     private void applyZhuyinState(ZhuyinInputController.State state) {
         if (state == null) return;
@@ -5331,16 +5389,16 @@ public class SimonIMEService extends InputMethodService {
 
     private TextView sentenceUndo(){
         TextView item=new TextView(this);item.setText("復原");item.setTag("sentence-option");item.setContentDescription("復原 AI 選項");
-        item.setTextColor(keyboardColor(R.color.key_text));item.setTextSize(16);item.setGravity(Gravity.CENTER);item.setPadding(dp(12),0,dp(12),0);
+        KeyboardCandidates.apply(item,KeyboardRoles.dark(this),false);
         item.setOnClickListener(v->sentencePhone.undo());return item;
     }
     private final java.util.Map<Integer,View> rowEngineViews=new java.util.LinkedHashMap<>();
     private TextView sentenceOption(JSONObject candidate){
         String text=sentencePhone.optionText(candidate);
         android.text.SpannableString diff=new android.text.SpannableString(text);
-        if(!text.isEmpty())diff.setSpan(new android.text.style.BackgroundColorSpan(0xff805900),0,text.length(),android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+        if(!text.isEmpty())diff.setSpan(new android.text.style.BackgroundColorSpan(DualHandVisuals.color(KeyboardRoles.dark(this),"highlight")),0,text.length(),android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
         TextView item=new TextView(this);item.setTag("sentence-option");item.setText(diff);item.setContentDescription(("local".equals(candidate.optString("source"))?"本機校正 ":"AI 選項 ")+text);
-        item.setTextColor(keyboardColor(R.color.key_text));item.setTextSize(16);item.setGravity(Gravity.CENTER);item.setPadding(dp(12),0,dp(12),0);
+        KeyboardCandidates.apply(item,KeyboardRoles.dark(this),false);
         item.getViewTreeObserver().addOnDrawListener(new android.view.ViewTreeObserver.OnDrawListener(){
             boolean done;
             public void onDraw(){if(done||!item.isShown())return;done=true;sentencePhone.rendered(candidate,((ViewGroup)item.getParent()).indexOfChild(item)+1);item.post(()->{if(item.getViewTreeObserver().isAlive())item.getViewTreeObserver().removeOnDrawListener(this);});}
@@ -5557,7 +5615,7 @@ public class SimonIMEService extends InputMethodService {
     private String candidateReplacementStage="",candidateReplacementReason="";
     private TextView pooledTextChoice(List<TextView> pool,int index,ZhuyinInputController.TextChoice choice){
         if(index==pool.size()){
-            CandidateChoiceView item=new CandidateChoiceView(this);item.setTextSize(18);item.setGravity(Gravity.CENTER);item.setPadding(dp(12),0,dp(12),0);
+            CandidateChoiceView item=new CandidateChoiceView(this);KeyboardCandidates.apply(item,KeyboardRoles.dark(this),false);item.setTag(R.id.keyboard_style_theme,KeyboardRoles.dark(this));
             final long[] times=item.times;
             item.setOnTouchListener((v,e)->{
                 int action=e.getActionMasked();
@@ -5593,7 +5651,7 @@ public class SimonIMEService extends InputMethodService {
             else {java.util.Arrays.fill(item.times,0L);item.touchLabel=choice.label;item.bindingChanged=false;item.candidateSource=externalTextChoices.contains(choice)?"external":"preview";}
         }
         if(!choice.label.contentEquals(item.getText()))item.setText(choice.label);
-        item.setTag(choice);item.setEnabled(true);item.setTextColor(boStreamPreview.getCurrentTextColor());return item;
+        item.setTag(choice);item.setEnabled(true);KeyboardRoles.apply(this,item);return item;
     }
     private void recordCandidateTouch(TextView item,long[] times,String label,String phase,boolean accepted,int before) {
         if(imeTelemetry==null||protectedInputField)return;
@@ -5662,17 +5720,17 @@ public class SimonIMEService extends InputMethodService {
             else words.add(pooledTextChoice(textWordViewPool,wi++,choice));
         }
         if(omitted&&completeInput){
-            TextView more=new TextView(this);more.setText("更多");more.setTextSize(18);more.setGravity(Gravity.CENTER);more.setPadding(dp(12),0,dp(12),0);more.setTextColor(boStreamPreview.getCurrentTextColor());
+            TextView more=new TextView(this);more.setText("更多");KeyboardCandidates.apply(more,KeyboardRoles.dark(this),false);
             more.setOnClickListener(v->{showFullTextCandidates=true;renderTextCandidateRows();});characters.add(more);
         }
         if(cursorChoices&&zhuyinWordIndex!=null){
             int[] target=zhuyinWordIndex.cursorWordRange(externalText,selectionStart-externalOffset);
             if(target!=null&&zhuyinWordIndex.homophoneCandidates(externalText.substring(target[0],target[1]),false).isEmpty()){
-                TextView status=new TextView(this);status.setText("此詞無同音詞；以下為字首聯想");status.setEnabled(false);status.setTextColor(boStreamPreview.getCurrentTextColor());status.setGravity(Gravity.CENTER);status.setPadding(dp(12),0,dp(12),0);words.add(0,status);
+                TextView status=new TextView(this);status.setText("此詞無同音詞；以下為字首聯想");status.setEnabled(false);KeyboardCandidates.apply(status,KeyboardRoles.dark(this),false);status.setTag(R.id.keyboard_text_role,"secondary");status.setTextColor(DualHandVisuals.color(KeyboardRoles.dark(this),"secondary"));words.add(0,status);
             }
         }
         if(externalConnection!=null&&textChoices.isEmpty()){
-            TextView status=new TextView(this);status.setText("此詞暫無本機候選");status.setEnabled(false);status.setTextColor(boStreamPreview.getCurrentTextColor());status.setGravity(Gravity.CENTER);status.setPadding(dp(12),0,dp(12),0);words.add(status);
+            TextView status=new TextView(this);status.setText("此詞暫無本機候選");status.setEnabled(false);KeyboardCandidates.apply(status,KeyboardRoles.dark(this),false);status.setTag(R.id.keyboard_text_role,"secondary");status.setTextColor(DualHandVisuals.color(KeyboardRoles.dark(this),"secondary"));words.add(status);
         }
         // Use the same current-generation AI options and manual transaction as the phonetic layout.
         List<JSONObject> options=sentencePhone==null||externalConnection!=null?Collections.emptyList():sentencePhone.rowOptions();
@@ -5754,8 +5812,7 @@ public class SimonIMEService extends InputMethodService {
         String[] labels={"📋 剪貼簿","⚡ 常用詞"};Panel[] panels={Panel.CLIPBOARD,Panel.COMMANDS};
         for(int i=0;i<labels.length;i++){
             TextView chip=new TextView(this);chip.setText(labels[i]);chip.setContentDescription(labels[i]);
-            chip.setGravity(Gravity.CENTER);chip.setTextSize(15f);chip.setTextColor(keyboardColor(R.color.key_text));
-            chip.setBackgroundResource(R.color.key_bg);chip.setPadding(dp(12),0,dp(12),0);
+            KeyboardCandidates.apply(chip,KeyboardRoles.dark(this),false);
             final Panel panel=panels[i];chip.setOnClickListener(v->togglePanel(panel));
             boCandidateItems.addView(chip,new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT,dp(48)));
         }
@@ -5780,13 +5837,7 @@ public class SimonIMEService extends InputMethodService {
         for (int i = renderedZhuyinCandidateCount; i < end; i++) {
             final int candidateIndex = i;
             TextView candidate = new CandidateChoiceView(this);
-            candidate.setGravity(Gravity.CENTER);
-            candidate.setTextSize(15f);
-            candidate.setTextColor(keyboardColor(R.color.key_text));
-            candidate.setBackgroundResource(R.color.key_bg);
-            candidate.setSingleLine(true);
-            candidate.setEllipsize(android.text.TextUtils.TruncateAt.END);
-            candidate.setPadding(dp(12), 0, dp(12), 0);
+            KeyboardCandidates.apply(candidate,KeyboardRoles.dark(this),false);
             String value = renderedZhuyinCandidates.get(i);
             String origin=zhuyinInput==null?"engine":zhuyinInput.candidateOrigin(i);
             candidate.setText(value);
