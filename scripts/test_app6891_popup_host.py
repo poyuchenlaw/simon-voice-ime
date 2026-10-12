@@ -4,7 +4,7 @@ import argparse, pathlib, re, subprocess
 p=argparse.ArgumentParser();p.add_argument('--out',required=True);p.add_argument('--baseline',action='store_true');a=p.parse_args()
 w=pathlib.Path(__file__).resolve().parents[1];out=w/a.out;out.mkdir(parents=True,exist_ok=True)
 k=(w/'app/src/phone/java/com/simon/voiceime/DualHandKeyboard.java').read_text()
-e=(w/'app/src/phone/java/com/simon/voiceime/DualHandEditor.java').read_text()
+e=(w/'app/src/main/java/com/simon/voiceime/CorrectionEditor.java').read_text()
 s=(w/'app/src/main/java/com/simon/voiceime/SimonIMEService.java').read_text()
 if a.baseline:
  def old(rel):return subprocess.check_output(['git','-C',str(w),'show','68a3756:'+rel],text=True)
@@ -18,14 +18,14 @@ def block(src,sig):
    if depth==0:return src[start:opening+m.end()]
  raise ValueError(sig)
 f=block(k,'private void feedback(');f=f[f.index('bubbleLabel.setText(value);'):];f='void bubblePosition(){'+f
-m=block(e,'private void showMarker(');m=m[m.index('if(bounds!=null&&Float.isFinite'):m.index('markerExpiry=this::dismissMarker')];m='void markerPosition(){'+m+'}'
-m=m.replace('android.util.DisplayMetrics','DisplayMetrics')
+m=block(e,'private void showMarker(' if a.baseline else 'protected void showMarker(');m=m[m.index('if(bounds!=null&&Float.isFinite'):m.index('markerExpiry=this::dismissMarker')];m='void markerPosition(){'+m+'}'
+m=m.replace('android.util.DisplayMetrics','DisplayMetrics').replace('page.view()','keyboard.view()').replace('fallbackMarker(width,height)','keyboard.candidateRow().addView(marker,new LinearLayout.LayoutParams(width,height))')
 start=block(s,'public void onStartInput(');start=start[:start.index('cursorTapGuard.reset();')]+'}';start=start.replace('try {','').replace('@Override','').replace('public void onStartInput','void onStartInput')
 request=block(s,'void dualHandCursorUpdates(')
 stop=block(s,'private void dualHandStopCursorUpdates(') if 'private void dualHandStopCursorUpdates(' in s else 'private void dualHandStopCursorUpdates(){}'
 finish=block(s,'public void onFinishInputView(');finish=finish[finish.index('if (rootView != null) rootView.setKeepScreenOn(false);'):finish.index('super.onFinishInputView')];finish='void finishInputView(){'+finish+'}'
 anchor=block(e,'public void cursorAnchor(').replace('CursorAnchorInfo','Object')
-dismiss=block(e,'private void dismissMarker(')
+dismiss=block(e,'private void dismissMarker(' if a.baseline else 'protected void dismissMarker(')
 # Palette and dispatched-inset bodies are actual production statements.
 palette=block(k,'private void applyPalette(');palette='void applyPalette(){'+palette[palette.index('{')+1:palette.index('topBar.')]+ '}'
 listener=k[k.index('root.setOnApplyWindowInsetsListener'):];listener=listener[listener.index('{')+1:listener.index('});')];listener=listener.replace('android.graphics.Insets','Insets');listener='Object inset(WindowInsets in){'+listener+'}'
@@ -37,6 +37,8 @@ shared=(w/'app/src/main/java/com/simon/voiceime/KeyboardInsets.java').read_text(
 owned=block(shared,'public static boolean ownedByParent(').replace('ViewParent p','Object p').replace('p=p.getParent()','p=((View)p).getParent()')
 t=t.replace('/* SHARED_INSETS */','static class KeyboardInputLayout extends View {} static class KeyboardInsets {'+owned+'}')
 
+position=block((w/'app/src/main/java/com/simon/voiceime/CorrectionPosition.java').read_text(),'static int[] place(')
+t=t.replace('/* POSITION */','static class CorrectionPosition {'+position+'}')
 for n,body in [('BUBBLE',f),('MARKER',m),('START',start),('REQUEST',request),('PALETTE',palette),('INSET',listener),('LAYOUT',layout),('STOP',stop),('FINISH',finish),('ANCHOR',anchor),('DISMISS',dismiss)]:t=t.replace('/* '+n+' */',body)
 (out/'App6891PopupHarness.java').write_text(t)
 cp=':'.join(str(w/'out/test-libs'/n) for n in ['junit-4.13.2.jar','hamcrest-core-1.3.jar'])

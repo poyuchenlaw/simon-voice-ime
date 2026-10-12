@@ -8,7 +8,7 @@ public class App688Harness {
  static class LinearLayout extends View {static final int HORIZONTAL=0,VERTICAL=1;LinearLayout(Object c){}void setOrientation(int v){}void addView(View v,LayoutParams p){}static class LayoutParams{LayoutParams(int w,int h){}LayoutParams(int w,int h,int weight){}void setMargins(int a,int b,int c,int d){} } }
  static class Gravity{static final int CENTER=1,TOP=2,BOTTOM=4,LEFT=8,RIGHT=16,CENTER_HORIZONTAL=32,CENTER_VERTICAL=64;}
  static class R{static class id{static final int keyboard_text_role=1,keyboard_role=2;}static class color{static final int keyboard_key_text=1,keyboard_bg=2,mode_append=3;}static class drawable{static final int keyboard_key=1;}}
- static class SimonIMEService {List<String> calls=new ArrayList<>();SharedPreferences getSharedPreferences(String s,int i){return new SharedPreferences();}int keyboardColor(int i){return i;}Resources getResources(){return new Resources();}boolean dualHandProtected(){return false;}Integer dualHandBackspaceLength(){return 0;}void dualHandBackspaceTelemetry(String a,Integer b,int c){}void dualHandErase(){calls.add("erase");}void dualHandStatus(String s){}void dualHandFunction(String s){calls.add(s);}void requestHideSelf(int v){calls.add("hide");}void dualHandPanel(String s){calls.add(s);}boolean dualHandCommit(String s){calls.add(s);return true;}boolean dualHandSelfUpdate(){return false;}void dualHandFinishComposition(){} }
+ static class SimonIMEService {List<String> calls=new ArrayList<>();SharedPreferences getSharedPreferences(String s,int i){return new SharedPreferences();}int keyboardColor(int i){return i;}Resources getResources(){return new Resources();}boolean dualHandProtected(){return false;}Integer dualHandBackspaceLength(){return 0;}void dualHandBackspaceTelemetry(String a,Integer b,int c){}void dualHandErase(){calls.add("erase");}void dualHandStatus(String s){}void dualHandFunction(String s){calls.add(s);}void requestHideSelf(int v){calls.add("hide");}void dualHandPanel(String s){calls.add(s);}boolean dualHandCommit(String s){calls.add(s);return true;}boolean correctionSelfUpdate(){return false;}boolean dualHandSelfUpdate(){return false;}void dualHandFinishComposition(){} }
  static class Resources {int getColor(int i,Object o){return 1;}android.util.DisplayMetrics getDisplayMetrics(){return new android.util.DisplayMetrics();}}static class Metrics{float density=1,scaledDensity=1;}
  static class Hooks {boolean space(App688Harness k){k.service.calls.add("space");return true;}void ai(App688Harness k){k.service.calls.add("ai");}boolean restore(App688Harness k){k.service.calls.add("restore");return true;}}
  static class Touch{DualHandState.Stroke stroke;DualHandGesture.Result result;}
@@ -68,6 +68,7 @@ public class App688Harness {
   assertEquals("ㄧㄢ",suffix("ㄐ","ㄐㄧㄢ"));assertEquals("ㄩㄢ",suffix("ㄐ","ㄐㄩㄢ"));
  }
  /* KEYBOARD */
+ boolean dual(){return true;}boolean blocked(){return false;}void cancel(boolean clear){}
  /* SELECTION */
  /* THEME */
  static class Recycler{int orientation=1;void setLayoutManager(LinearLayoutManager m){orientation=m.orientation;}}

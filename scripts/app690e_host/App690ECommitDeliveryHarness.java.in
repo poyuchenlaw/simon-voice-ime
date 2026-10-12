@@ -1,0 +1,19 @@
+package com.simon.voiceime;
+import org.junit.*;import static org.junit.Assert.*;import java.util.*;import java.io.*;
+public class App690ECommitDeliveryHarness {
+ static class InputConnection {boolean accepted=true;int writes;}
+ static class ZhuyinInputController {static class State {String commitText="行",engineTop1="行",aiSuggestion="";boolean corrected,aiTaken;}}
+ static class Sentence {void resetFeedback(){}}
+ boolean mIgnoreNextUpdateSelection;final CursorTapGuard cursorTapGuard=new CursorTapGuard();void markProgrammaticTextChange(){mIgnoreNextUpdateSelection=true;}
+ final Object zhuyinInput=new Object();final InputConnection connection=new InputConnection();final CorrectionRecords records=new CorrectionRecords();DualHandTracks tracks;boolean protectedInputField;int textCandidateTaps;Sentence sentencePhone;
+ @Before public void ready()throws Exception {CorrectionCommitRecord.clear();tracks=new DualHandTracks(new FileReader("src/phone/assets/dual_hand/phrase_words.tsv"),new FileReader("src/phone/assets/dual_hand/grid_chars.tsv"),new FileReader("src/phone/assets/dual_hand/readings.tsv"));}
+ boolean commitTextProgrammatically(InputConnection ic,String text){if(!ic.accepted)return false;ic.writes++;return true;}
+ void recordCommitEvent(String p,String t,String first,String ai,boolean corrected,boolean taken){}boolean textLayoutSelected(){return false;}
+ class Correction {void recordCommit(String text,List<String> sounds){assertEquals("record only after host accepts",1,connection.writes);records.record(0,text,sounds,tracks,false);}}
+ Correction correctionEditor(){return new Correction();}
+ /* METHOD */
+ @Test public void correctionOwnSelectionDoesNotSuppressVoiceCapture(){correctionSelfWrite(1,1);assertFalse("manual 3x3 correction must retain existing capture path",mIgnoreNextUpdateSelection);assertFalse(cursorTapGuard.allow(2,2,1,1,false,false));assertTrue(cursorTapGuard.selfUpdate());}
+ @Test public void missingReadingSourceInvalidatesOldExactRecord(){records.record(0,"行",Collections.singletonList("ㄏㄤ"),tracks,false);assertTrue(commitZhuyinText(connection,new ZhuyinInputController.State()));assertNull(records.reading(0,"行"));}
+ @Test public void acceptedHostCommitReceivesItsReading(){CorrectionCommitRecord.capture(zhuyinInput,"行",Collections.singletonList("ㄏㄤˊ"),1);assertTrue(commitZhuyinText(connection,new ZhuyinInputController.State()));assertEquals("ㄏㄤ",records.reading(0,"行"));}
+ @Test public void rejectingHostNeverStoresOrKeepsPendingReading(){connection.accepted=false;CorrectionCommitRecord.capture(zhuyinInput,"行",Collections.singletonList("ㄏㄤˊ"),1);assertFalse(commitZhuyinText(connection,new ZhuyinInputController.State()));assertEquals(0,records.size());assertNull(CorrectionCommitRecord.take(zhuyinInput,"行"));}
+}

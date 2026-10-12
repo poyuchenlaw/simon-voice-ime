@@ -1,0 +1,13 @@
+class App690EBase {public void onUpdateCursorAnchorInfo(Object info){}}
+public class App690EDispatch extends App690EBase {
+ enum KeyboardMode {VOICE,BOPOMOFO,ENGLISH,NUMBERS}
+ static class Page {Object anchor;void cursorAnchor(Object value){anchor=value;}}
+ boolean dualHandSelected;Page dualHandPage=new Page(),extra=new Page();KeyboardMode currentKeyboardMode=KeyboardMode.VOICE;
+ boolean correctionEnabled(){return currentKeyboardMode==KeyboardMode.VOICE||currentKeyboardMode==KeyboardMode.BOPOMOFO;}
+ Page correctionEditor(){return extra;}
+ /* METHOD */
+ public static void main(String[] args){App690EDispatch s=new App690EDispatch();Object anchor=new Object();
+ s.onUpdateCursorAnchorInfo(anchor);if(s.extra.anchor!=anchor)throw new AssertionError("voice correction did not receive host cursor anchor");
+ s.extra.anchor=null;s.currentKeyboardMode=KeyboardMode.BOPOMOFO;s.onUpdateCursorAnchorInfo(anchor);if(s.extra.anchor!=anchor)throw new AssertionError("41-key correction did not receive host cursor anchor");
+ s.extra.anchor=null;s.currentKeyboardMode=KeyboardMode.ENGLISH;s.onUpdateCursorAnchorInfo(anchor);if(s.extra.anchor!=null)throw new AssertionError("English received correction anchor");
+ System.out.println("PASS 3 active-page cursor anchor cases");}}

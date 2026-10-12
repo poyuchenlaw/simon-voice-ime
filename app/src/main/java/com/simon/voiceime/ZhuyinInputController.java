@@ -120,6 +120,7 @@ final class ZhuyinInputController {
         commitBaseline=before.commitBaseline==null?before.previewText():before.commitBaseline;
         shownAi=before.shownAi;
     }
+    private void recordCorrectionCommit(String text,List<String> reading,int span){if(learningEnabled)CorrectionCommitRecord.capture(this,text,reading,span);}
     private State commitTransition(java.util.function.Supplier<State> operation,boolean edit){
         String preview=previewText(),keys=sentenceKeys();
         String baseline=commitBaseline==null?preview:commitBaseline,ai=shownAi;
@@ -142,6 +143,7 @@ final class ZhuyinInputController {
             if(top.isEmpty()&&preview.isEmpty())top=after.commitText; // literal punctuation
             commitBaseline=after.composingText.isEmpty()?null:baseline.substring(cut);
             shownAi="";
+            recordCorrectionCommit(after.commitText,reading,span);
             return new State(after.composingText,after.candidates,after.commitText,after.accepted,after.cursorPosition,
                 after.candidateKind,after.abbreviationEntries,after.targetStart,after.targetEnd,true,top,ai);
         }
