@@ -1,13 +1,14 @@
 package com.simon.voiceime;
 import java.util.*;import org.junit.Test;import static org.junit.Assert.*;
 public class App6891PopupHarness extends App6891PopupBase {
+ static class R{static class id{static int keyboard_role=1;}}
  static class Build{static class VERSION{static int SDK_INT=34;}}
  static class Gravity{static int TOP=48,LEFT=3;}
  static class Color{static int TRANSPARENT=0;}
  static class ColorDrawable{ColorDrawable(int c){}}
  static class DisplayMetrics{int widthPixels=1050,heightPixels=2376;float density=2.625f;}
  static class Resources{DisplayMetrics metrics=new DisplayMetrics();DisplayMetrics getDisplayMetrics(){return metrics;}}
- static class View{static final int VISIBLE=0;int visibleTop;void getWindowVisibleDisplayFrame(Rect r){r.set(0,visibleTop,1050,2376);}WindowInsets insets;WindowInsets getRootWindowInsets(){return insets;}int sx=17,sy=1254,wx=17,wy=0,pad;void getLocationOnScreen(int[] o){o[0]=sx;o[1]=sy;}void getLocationInWindow(int[] o){o[0]=wx;o[1]=wy;}Object getParent(){return null;}void setKeepScreenOn(boolean b){}void setText(String s){}void setTextSize(float f){}void setBackgroundColor(int c){}void setPadding(int l,int t,int r,int b){pad=b;}}
+ static class View{static final int VISIBLE=0;int visibleTop;void getWindowVisibleDisplayFrame(Rect r){r.set(0,visibleTop,1050,2376);}WindowInsets insets;WindowInsets getRootWindowInsets(){return insets;}int sx=17,sy=1254,wx=17,wy=0,pad;void getLocationOnScreen(int[] o){o[0]=sx;o[1]=sy;}void getLocationInWindow(int[] o){o[0]=wx;o[1]=wy;}Object getParent(){return null;}void setTag(int id,Object value){}void setKeepScreenOn(boolean b){}void setText(String s){}void setTextSize(float f){}void setBackgroundColor(int c){}void setPadding(int l,int t,int r,int b){pad=b;}}
  static class InputConnection{static final int CURSOR_UPDATE_IMMEDIATE=1,CURSOR_UPDATE_MONITOR=2;List<Integer> requests=new ArrayList<>();boolean refuse,throwsUnsupported;boolean requestCursorUpdates(int f){requests.add(f);if(throwsUnsupported)throw new RuntimeException("unsupported");return !refuse;}}
  static class Service{Resources r=new Resources();Resources getResources(){return r;}}
  static class PopupWindow{int x,y,w,h,flags;boolean screen,showing;PopupWindow(View v,int w,int h,boolean f){this.w=w;this.h=h;}void setBackgroundDrawable(ColorDrawable d){}void setOutsideTouchable(boolean b){}void setClippingEnabled(boolean b){}void setIsLaidOutInScreen(boolean b){screen=b;}void setIsClippedToScreen(boolean b){}void setInputMethodMode(int m){}static final int INPUT_METHOD_NOT_NEEDED=2;void showAtLocation(View v,int g,int a,int b){x=a+(screen?0:v.sx-v.wx);y=b+(screen?0:v.sy-v.wy);showing=true;}boolean isShowing(){return showing;}void update(int a,int b,int w,int h){showAtLocation(currentRoot,0,a,b);}void dismiss(){showing=false;}static View currentRoot;}
@@ -32,6 +33,7 @@ public class App6891PopupHarness extends App6891PopupBase {
  /* MARKER */
  /* START */
  /* REQUEST */
+ /* SHARED_INSETS */
  /* PALETTE */
  /* INSET */
  /* LAYOUT */

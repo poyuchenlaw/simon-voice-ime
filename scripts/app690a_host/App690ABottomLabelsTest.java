@@ -106,6 +106,6 @@ public class App690ABottomLabelsTest {
         // Addendum 1 §5a preserves dual-hand output; §5b's no-overlap rule is for other pages.
         if (Boolean.getBoolean("app690a.mutateFunctionalSize"))
             assertTrue("single-size mutation must fail geometry: " + (failed.isEmpty() ? "none" : failed.get(0)), failed.isEmpty());
-        else System.out.println("BASELINE_INVARIANCE_ONLY: existing bottom overlaps are diagnostic, not claimed repaired");
+        else {assertTrue("A2-5: no more than 26 baseline overlap records",failed.size()<=26);System.out.println("BASELINE_INVARIANCE_ONLY: existing bottom overlaps are diagnostic, not claimed repaired");}
     }
 }

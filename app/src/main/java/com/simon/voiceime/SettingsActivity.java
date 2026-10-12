@@ -205,7 +205,7 @@ public class SettingsActivity extends Activity {
             public void onItemSelected(android.widget.AdapterView<?> parent,android.view.View view,int position,long id){prefs.edit().putString("keyboard_theme",themeModes[position]).apply();}
         });
 
-        CheckBox dualHaptics=new CheckBox(this);dualHaptics.setText("滑動觸覺回饋（含按下與拒絕）");dualHaptics.setChecked(prefs.getBoolean("dual_hand_haptics",true));voiceSettings.addView(dualHaptics);dualHaptics.setOnCheckedChangeListener((button,enabled)->prefs.edit().putBoolean("dual_hand_haptics",enabled).apply());
+        CheckBox dualHaptics=new CheckBox(this);dualHaptics.setText(getString(R.string.keyboard_haptics_description));dualHaptics.setChecked(prefs.getBoolean("dual_hand_haptics",true));voiceSettings.addView(dualHaptics);dualHaptics.setOnCheckedChangeListener((button,enabled)->prefs.edit().putBoolean("dual_hand_haptics",enabled).apply());
         CheckBox splitKeyboard=new CheckBox(this);splitKeyboard.setText("橫向分離鍵盤");splitKeyboard.setChecked(prefs.getBoolean("dual_hand_landscape_split",true));voiceSettings.addView(splitKeyboard);splitKeyboard.setOnCheckedChangeListener((button,enabled)->prefs.edit().putBoolean("dual_hand_landscape_split",enabled).apply());
         CheckBox dualHand=findViewById(R.id.checkDualHandEnabled);
         dualHand.setChecked(prefs.getBoolean("dual_hand_enabled",true));

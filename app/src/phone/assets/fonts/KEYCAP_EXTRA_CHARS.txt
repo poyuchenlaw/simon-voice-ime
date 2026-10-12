@@ -1,0 +1,5 @@
+# UTF-8 fixed keycap characters, one literal string per line; blank lines ignored.
+# Each line appends a section '# <A|B|C|D|E|F>' at EOF; never edit another section.
+# Only fixed labels not statically extractable belong here; no user content.
+# A
+⬆␣

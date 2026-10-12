@@ -1,0 +1,195 @@
+{
+  "source": "/home/simon/.local/share/fonts/NotoSansTC-VF.ttf",
+  "source_sha256": "c6481c5d93420aeac11087367dae56ae7492eb1989ce42f4ca5d5aa5e2db3116",
+  "fonttools_version": "4.61.1",
+  "weight": 500,
+  "character_count": 361,
+  "characters": " !\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~Øˇˊˋ˙—…›←→↵⌫⏹␣─⚙⚠⚡✓✕⬆、。〈〉《》「」『』ㄅㄆㄇㄈㄉㄊㄋㄌㄍㄎㄏㄐㄑㄒㄓㄔㄕㄖㄗㄘㄙㄚㄛㄜㄝㄞㄟㄠㄡㄢㄣㄤㄥㄦㄧㄨㄩ一上下中仍令以份使個候備傳先克入內全共再出初別刪到則剩剪加化半占即原去取只可同名和啟嘴回在境多天太失夾始字完容對尚尾左已常庫建彙得復想或打批把拉拼指按換擇收效敗整數料新時暫更替本果校框標機權次正此每沒注消清游滑為無牙理用白的盤目看短確稍稱空立符簿籤組結繼續群耗耳聊聯聲至英著藍號要訊記詞試話認語說調請識譯貼資起輸辨返追送過選還重錄錯鍵開限除雙需音項風餘首麥️！＃％＆（）＊＋，：；？＠～🎙🎤📋📚🔴",
+  "source_missing_characters": "↵⌫⏹⚙⚡✕️🎙🎤📋📚🔴",
+  "source_missing_codepoints": [
+    "U+21B5",
+    "U+232B",
+    "U+23F9",
+    "U+2699",
+    "U+26A1",
+    "U+2715",
+    "U+FE0F",
+    "U+1F399",
+    "U+1F3A4",
+    "U+1F4CB",
+    "U+1F4DA",
+    "U+1F534"
+  ],
+  "output_sha256": "6f17bc5d73215db579933ae843a4d4a038022d23c0ea3fa7eea9a1b4213fc002",
+  "bytes": 79468,
+  "command": "python3 scripts/font_subset_690.py",
+  "extraction": [
+    {
+      "path": "app/src/main/res/layout/keyboard_view.xml",
+      "method": "XML android:text/android:hint; referenced @string resolved in values*/strings.xml"
+    },
+    {
+      "path": "app/src/main/res/layout/keyboard_bopomofo.xml",
+      "method": "XML android:text/android:hint; referenced @string resolved in values*/strings.xml"
+    },
+    {
+      "path": "app/src/main/res/layout/keyboard_english.xml",
+      "method": "XML android:text/android:hint; referenced @string resolved in values*/strings.xml"
+    },
+    {
+      "path": "app/src/main/res/layout/keyboard_numbers.xml",
+      "method": "XML android:text/android:hint; referenced @string resolved in values*/strings.xml"
+    },
+    {
+      "path": "app/src/main/res/layout/clipboard_panel.xml",
+      "method": "XML android:text/android:hint; referenced @string resolved in values*/strings.xml"
+    },
+    {
+      "path": "app/src/main/res/layout/commands_panel.xml",
+      "method": "XML android:text/android:hint; referenced @string resolved in values*/strings.xml"
+    },
+    {
+      "path": "app/src/main/res/layout/clip_item.xml",
+      "method": "XML android:text/android:hint; referenced @string resolved in values*/strings.xml"
+    },
+    {
+      "path": "app/src/main/res/layout/cmd_item.xml",
+      "method": "XML android:text/android:hint; referenced @string resolved in values*/strings.xml"
+    },
+    {
+      "path": "app/src/phone/assets/dual_hand/dual_hand_map.tsv",
+      "method": "last TSV output column"
+    },
+    {
+      "path": "app/src/phone/assets/dual_hand/left_hand.tsv",
+      "method": "last TSV output column"
+    },
+    {
+      "path": "app/src/main/java/com/simon/voiceime/SymbolPopupSpec.java",
+      "method": "all Java string literals (symbol lists)"
+    },
+    {
+      "path": "app/src/phone/java/com/simon/voiceime/DualHandKeyboard.java",
+      "method": "functionLabels/text invocation string literals"
+    },
+    {
+      "path": "app/src/main/java/com/simon/voiceime/SimonIMEService.java",
+      "method": "Java strings in scoped renderTextCandidateRows"
+    },
+    {
+      "path": "app/src/main/java/com/simon/voiceime/SimonIMEService.java",
+      "method": "Java strings in scoped pooledTextChoice"
+    },
+    {
+      "path": "app/src/main/java/com/simon/voiceime/SimonIMEService.java",
+      "method": "Java strings in scoped renderZhuyinCandidates"
+    },
+    {
+      "path": "app/src/main/java/com/simon/voiceime/SimonIMEService.java",
+      "method": "Java strings in scoped appendZhuyinCandidateBatch"
+    },
+    {
+      "path": "app/src/main/java/com/simon/voiceime/SimonIMEService.java",
+      "method": "Java strings in scoped sentenceOption"
+    },
+    {
+      "path": "app/src/main/java/com/simon/voiceime/SimonIMEService.java",
+      "method": "Java strings in scoped sentenceUndo"
+    },
+    {
+      "path": "app/src/main/java/com/simon/voiceime/SimonIMEService.java",
+      "method": "Java strings in scoped shownTextPreview"
+    },
+    {
+      "path": "app/src/main/java/com/simon/voiceime/SimonIMEService.java",
+      "method": "Java strings in scoped renderZhuyinShortcuts"
+    },
+    {
+      "path": "app/src/main/java/com/simon/voiceime/SimonIMEService.java",
+      "method": "Java strings in scoped configureTextRows"
+    },
+    {
+      "path": "app/src/main/java/com/simon/voiceime/SimonIMEService.java",
+      "method": "Java strings in scoped configurePreviewViewport"
+    },
+    {
+      "path": "app/src/main/java/com/simon/voiceime/SimonIMEService.java",
+      "method": "Java strings in scoped cycleMode"
+    },
+    {
+      "path": "app/src/main/java/com/simon/voiceime/SimonIMEService.java",
+      "method": "Java strings in scoped updateModeUI"
+    },
+    {
+      "path": "app/src/main/java/com/simon/voiceime/SimonIMEService.java",
+      "method": "Java strings in scoped startRecording"
+    },
+    {
+      "path": "app/src/main/java/com/simon/voiceime/SimonIMEService.java",
+      "method": "Java strings in scoped finishStoppedRecordingAndSend"
+    },
+    {
+      "path": "app/src/main/java/com/simon/voiceime/SimonIMEService.java",
+      "method": "Java strings in scoped updateSuggestionBar"
+    },
+    {
+      "path": "app/src/main/java/com/simon/voiceime/SimonIMEService.java",
+      "method": "Java strings in scoped showClipboardPanel"
+    },
+    {
+      "path": "app/src/main/java/com/simon/voiceime/SimonIMEService.java",
+      "method": "Java strings in scoped ClipAdapter"
+    },
+    {
+      "path": "app/src/main/java/com/simon/voiceime/SimonIMEService.java",
+      "method": "Java strings in scoped showCommandsPanel"
+    },
+    {
+      "path": "app/src/main/java/com/simon/voiceime/SimonIMEService.java",
+      "method": "Java strings in scoped showSymbolPopupOrFallback"
+    },
+    {
+      "path": "app/src/main/java/com/simon/voiceime/SimonIMEService.java",
+      "method": "Java strings in scoped buildSymbolPopupContent"
+    },
+    {
+      "path": "app/src/main/java/com/simon/voiceime/SimonIMEService.java",
+      "method": "Java strings in scoped buildChoiceGrid"
+    },
+    {
+      "path": "app/src/main/java/com/simon/voiceime/SimonIMEService.java",
+      "method": "Java strings in scoped updateShiftUI"
+    },
+    {
+      "path": "app/src/main/java/com/simon/voiceime/SimonIMEService.java",
+      "method": "Java strings in scoped dualHandPanel"
+    },
+    {
+      "path": "app/src/main/java/com/simon/voiceime/SimonIMEService.java",
+      "method": "Java strings in scoped showAddToCommandsInline"
+    },
+    {
+      "path": "app/src/main/java/com/simon/voiceime/SimonIMEService.java",
+      "method": "Java strings in scoped showPanel"
+    },
+    {
+      "path": "app/src/main/java/com/simon/voiceime/SimonIMEService.java",
+      "method": "Java strings in scoped showBatchAddToCommandsInline"
+    },
+    {
+      "path": "app/src/main/java/com/simon/voiceime/SimonIMEService.java",
+      "method": "Java strings in scoped showVocabListInline"
+    },
+    {
+      "path": "app/src/phone/assets/fonts/KEYCAP_EXTRA_CHARS.txt",
+      "method": "non-comment UTF-8 literal lines",
+      "present": true
+    },
+    {
+      "path": "scripts/app690_host/PROBE_KEYCAP_CHARS.txt",
+      "method": "non-comment UTF-8 literal lines",
+      "present": false
+    }
+  ],
+  "probe_present": false
+}

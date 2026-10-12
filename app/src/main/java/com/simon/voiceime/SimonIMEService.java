@@ -1167,7 +1167,7 @@ public class SimonIMEService extends InputMethodService {
         updateCompleteTypingHint(false);
         updateModeUI();
         updateArmedIndicator();
-        KeyboardTheme.apply(this,rootView);
+        KeyboardTypeface.get(this);KeyboardTheme.apply(this,rootView);KeyboardHaptics.sync(this,rootView);
         return rootView;
 
         } finally {if(mainDispatchMonitor!=null)mainDispatchMonitor.endLifecycle(SystemClock.uptimeMillis());}
@@ -6793,7 +6793,7 @@ public class SimonIMEService extends InputMethodService {
         if(dualHandSelected&&currentKeyboardMode==KeyboardMode.BOPOMOFO)dualHandCursorUpdates();
         if(clipboardHelper!=null){clipboardHelper.setPasswordField(protectedInputField);clipboardHelper.captureCurrent("onStartInputView");}
         String currentPalette=getSharedPreferences("simon_ime_prefs",0).getString("keyboard_theme","system")+":"+getResources().getConfiguration().uiMode;
-        if(!currentPalette.equals(dualHandAppliedPalette)){if(rootView!=null)KeyboardTheme.apply(this,rootView);dualHandAppliedPalette=currentPalette;}
+        if(!currentPalette.equals(dualHandAppliedPalette)){if(rootView!=null)KeyboardTheme.apply(this,rootView);dualHandAppliedPalette=currentPalette;}KeyboardHaptics.sync(this,rootView);
         if(dualHandPage!=null){dualHandPage.reconfigure();boolean split=dualHandSelected&&dualHandPage.landscapeSplit();if(rootView!=null)rootView.setBackgroundColor(split?android.graphics.Color.TRANSPARENT:keyboardColor(R.color.keyboard_bg));if(getWindow()!=null&&getWindow().getWindow()!=null)getWindow().getWindow().setBackgroundDrawable(new ColorDrawable(split?android.graphics.Color.TRANSPARENT:keyboardColor(R.color.keyboard_bg)));}
         if (isWatchService()) return;
         drainPendingVoiceQueue();

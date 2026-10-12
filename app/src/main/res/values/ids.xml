@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <item type="id" name="keyboard_role" />
+    <item type="id" name="keyboard_text_role" />
+    <item type="id" name="keyboard_keycap_factory" />
+    <item type="id" name="keyboard_visible_inset" />
+    <item type="id" name="keyboard_style_theme" />
+    <item type="id" name="keyboard_haptic_gate" />
+    <item type="id" name="keyboard_content_kind" />
+</resources>

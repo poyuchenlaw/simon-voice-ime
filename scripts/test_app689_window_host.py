@@ -19,6 +19,12 @@ if a.baseline:
            'HAPTIC':block(old,'private void vibrate(').replace('private void vibrate()','private void haptic(int kind)')}
     # In 814086d Insets/fullscreen are inherited; Base models their boundary, not a new product implementation.
 t=(root/'scripts/app689_host/App689WindowHarness.java.in').read_text()
+if not a.baseline:
+    shared=(root/'app/src/main/java/com/simon/voiceime/KeyboardHaptics.java').read_text()
+    methods=block(shared,'public static boolean enabled(').replace('Context c','Service c').replace('SharedPreferences p','Prefs p')+'\n'+block(shared,'public static boolean perform(')
+    t=t.replace('/* SHARED_HAPTIC */','static class KeyboardHaptics {static int requests,calls,emitted;'+methods+'}')
+else:t=t.replace('/* SHARED_HAPTIC */','')
+
 for name,body in parts.items():t=t.replace('/* '+name+' */',body.replace('android.graphics.Region','Region').replace('android.inputmethodservice.InputMethodService.Insets','Insets').replace('HapticFeedbackConstants.CLOCK_TICK','4'))
 (out/'App689WindowHarness.java').write_text(t);(out/'extraction.sha256').write_text('\n'.join(hashlib.sha256(body.encode()).hexdigest()+' '+name for name,body in parts.items())+'\n')
 cp=':'.join(str(root/'out/test-libs'/n) for n in ['junit-4.13.2.jar','hamcrest-core-1.3.jar'])
