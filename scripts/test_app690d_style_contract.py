@@ -55,11 +55,11 @@ class App690DStyleContract(unittest.TestCase):
         self.assertIn('KeyboardCandidates.applyGrid(', body, '3x3 needs tools keycaps/system font/18sp')
         self.assertNotRegex(body, r'setTextSize\(\s*\d', 'R4-d forbids inline numeric text sizes')
 
-    def test_r8_clip_bind_does_not_apply_style(self):
+    def test_r8_clip_holder_initialized_at_creation(self):
         source = SERVICE.read_text()
         start = source.index('private class ClipAdapter ')
-        bind = method(source[start:], '@Override public void onBindViewHolder(')
-        self.assertNotIn('KeyboardTheme.apply(', bind, 'Style belongs in onCreateViewHolder')
+        create = method(source[start:], '@Override public VH onCreateViewHolder(')
+        self.assertIn('KeyboardTheme.apply(', create, 'R8: initialize style when holder is inflated')
 
 
 if __name__ == '__main__':
