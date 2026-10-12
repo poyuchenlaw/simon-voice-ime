@@ -80,7 +80,7 @@ public final class DualHandKeyboard implements DualHandPage {
                 box.addView(main,new FrameLayout.LayoutParams(-2,-2,Gravity.CENTER));
                 for(String direction:new String[]{"up","left","down","right"}){
                     TextView edge=text("",function?8:labelSizeSp,!function);edge.setIncludeFontPadding(false);if(compact)edge.setSingleLine();parts.put(direction,edge);int gravity="up".equals(direction)?Gravity.TOP|Gravity.CENTER_HORIZONTAL:"down".equals(direction)?Gravity.BOTTOM|Gravity.CENTER_HORIZONTAL:"left".equals(direction)?Gravity.LEFT|Gravity.CENTER_VERTICAL:Gravity.RIGHT|Gravity.CENTER_VERTICAL;
-                    FrameLayout.LayoutParams p=new FrameLayout.LayoutParams(-2,-2,gravity);int margin=dp(compact?1:2);p.setMargins(margin,margin,margin,margin);box.addView(edge,p);
+                    FrameLayout.LayoutParams p=new FrameLayout.LayoutParams(-2,-2,gravity);int margin=function?dp(1):0;p.setMargins(margin,margin,margin,margin);box.addView(edge,p);
                 }
                 LinearLayout.LayoutParams p=new LinearLayout.LayoutParams(0,-1,1);p.setMargins(dp(2),dp(2),dp(2),dp(2));line.addView(box,p);keys.put(key,box);labels.put(key,parts);
                 box.setOnClickListener(v->activate(key,"tap"));
@@ -105,12 +105,12 @@ public final class DualHandKeyboard implements DualHandPage {
                         else if(!sound.isEmpty())sound=suffix(pending,sound);
                         sizes[i]=DualHandLabelView.extent(sound,paint);
                     }
-                    if(!DualHandLabelView.fits(width,height,sizes,dp(2))){fits=false;break;}
+                    if(!DualHandLabelView.fits(width,height,sizes,0)){fits=false;break;}
                 }
                 if(!fits)break;
             }
             if(fits){
-                for(int key=1;key<=6;key++){float[][] sizes=new float[5][];for(int i=0;i<5;i++)sizes[i]=DualHandLabelView.extent(table.left(""+key,DualHandTable.DIRECTIONS[i]),paint);if(!DualHandLabelView.fits(width,height,sizes,dp(1))){fits=false;break;}}
+                for(int key=1;key<=6;key++){float[][] sizes=new float[5][];for(int i=0;i<5;i++)sizes[i]=DualHandLabelView.extent(table.left(""+key,DualHandTable.DIRECTIONS[i]),paint);if(!DualHandLabelView.fits(width,height,sizes,0)){fits=false;break;}}
             }
             if(fits){android.util.Log.i("DualHandLabels","uniform_sp="+sp+" font_scale="+metrics.scaledDensity/metrics.density+" key_dp="+width/metrics.density+"x72");return sp;}
         }

@@ -2,8 +2,8 @@ package com.simon.voiceime;
 import java.util.*;import java.io.*;import java.nio.file.*;import org.junit.Test;import static org.junit.Assert.*;
 public class App688Harness {
  static class View {static final int GONE=8,VISIBLE=0;int visibility;void setVisibility(int v){visibility=v;}void setContentDescription(Object v){}void setActivated(boolean v){}void setClickable(boolean v){}void setBackgroundResource(int v){}void setTag(Object v){}void setOnClickListener(java.util.function.Consumer<View> v){} }
- static class TextView extends View {String value="";float size,alpha;TextView(Object c){}void setText(String s){value=s;}String getText(){return value;}void setTextSize(float v){size=v;}android.graphics.Paint getPaint(){return new android.graphics.Paint();}void setTextColor(int v){}void setGravity(int v){}void setFocusable(boolean v){}void setSingleLine(){}void setIncludeFontPadding(boolean v){}void setAlpha(float v){alpha=v;}void setLineSpacing(float a,float b){}void setPadding(int a,int b,int c,int d){} }
- static class FrameLayout extends View {List<TextView> children=new ArrayList<>();FrameLayout(Object c){}void addView(TextView v,LayoutParams p){children.add(v);}static class LayoutParams {LayoutParams(int w,int h,int g){}void setMargins(int a,int b,int c,int d){} } }
+ static class TextView extends View {String value="";float size,alpha;FrameLayout.LayoutParams layout;TextView(Object c){}void setText(String s){value=s;}String getText(){return value;}void setTextSize(float v){size=v;}android.graphics.Paint getPaint(){return new android.graphics.Paint();}void setTextColor(int v){}void setGravity(int v){}void setFocusable(boolean v){}void setSingleLine(){}void setIncludeFontPadding(boolean v){}void setAlpha(float v){alpha=v;}void setLineSpacing(float a,float b){}void setPadding(int a,int b,int c,int d){} }
+ static class FrameLayout extends View {List<TextView> children=new ArrayList<>();FrameLayout(Object c){}void addView(TextView v,LayoutParams p){children.add(v);v.layout=p;}static class LayoutParams {int gravity,margin;LayoutParams(int w,int h,int g){gravity=g;}void setMargins(int a,int b,int c,int d){margin=a;} } }
  static class LinearLayout extends View {static final int HORIZONTAL=0,VERTICAL=1;LinearLayout(Object c){}void setOrientation(int v){}void addView(View v,LayoutParams p){}static class LayoutParams{LayoutParams(int w,int h){}LayoutParams(int w,int h,int weight){}void setMargins(int a,int b,int c,int d){} } }
  static class Gravity{static final int CENTER=1,TOP=2,BOTTOM=4,LEFT=8,RIGHT=16,CENTER_HORIZONTAL=32,CENTER_VERTICAL=64;}
  static class R{static class color{static final int keyboard_key_text=1,keyboard_bg=2;}static class drawable{static final int keyboard_key=1;}}
@@ -16,11 +16,11 @@ public class App688Harness {
  float labelSizeSp=13.5f;
  final SimonIMEService service=new SimonIMEService();final Hooks hooks=new Hooks();DualHandTable table;DualHandState state;
  final Map<String,Map<String,TextView>> labels=new HashMap<>();final Map<String,FrameLayout> keys=new LinkedHashMap<>();final Map<Integer,Touch> touches=new HashMap<>();
- boolean closed;Runnable selectionTask;final Handler ui=new Handler();int compositionStart=-1,compositionEnd=-1;Snapshot witness,now=new Snapshot();int opened,markers;
+ String renderState;boolean closed;Runnable selectionTask;final Handler ui=new Handler();int compositionStart=-1,compositionEnd=-1;Snapshot witness,now=new Snapshot();int opened,markers;
  public App688Harness()throws Exception {Path a=Path.of("app/src/phone/assets/dual_hand");table=new DualHandTable(Files.newBufferedReader(a.resolve("dual_hand_map.tsv")),Files.newBufferedReader(a.resolve("left_hand.tsv")),Files.newBufferedReader(a.resolve("draft_chars.tsv")));state=new DualHandState(table);half(new String[][]{{"1","2"},{"3","4"},{"5","6"},{"tools","symbols"},{"A","B"},{"C","D"},{"E","F"},{"Ø","core"}});}
  // JUnit needs a public constructor.
 
- private String labelState(){return state.pending();}private void activate(String a,String b){}private boolean finish(){service.calls.add("finish");state.clearBuffer();return true;}private void changed(boolean v){}private void vibrate(){service.calls.add("vibrate");}public DualHandState buffer(){return state;}public void refresh(){}
+ private String labelState(){return renderState;}private void activate(String a,String b){}private boolean finish(){service.calls.add("finish");state.clearBuffer();return true;}private void changed(boolean v){}private void vibrate(){service.calls.add("vibrate");}public DualHandState buffer(){return state;}public void refresh(){}
  private Snapshot snapshot(){return now;}private void validate(Snapshot n){}private void cancelCall(String s){}private void dismissGrid(){}private void openGrid(Snapshot o,int b,int i,boolean c){opened++;}private void showMarker(Snapshot o,int b,int i,boolean c){markers++;}private void dismissMarker(){}
  private long lastTapTime=-1000;private int lastTapPosition=-1;private Snapshot lastTapOwner;static class SystemClock{static long uptimeMillis(){return 1000;}}
  static class Rect{int left,top,right,bottom;int width(){return right-left;}int height(){return bottom-top;}}
@@ -53,8 +53,31 @@ public class App688Harness {
  @Test public void d_externalSelectionOffersMarker()throws Exception {selection(this,1,1,-1,-1);ui.run();assertEquals("external cursor move must not open grid",0,opened);assertEquals(1,markers);}
  @Test public void e_threeThemeModes() {assertEquals(0xFF1A1A2E,color("dark",false,"background"));assertEquals(0xFFF2F4F7,color("light",true,"background"));assertEquals(0xFFFFFFFF,color("system",false,"key"));assertEquals(0xFF1D2939,color("light",true,"text"));assertEquals(0xFFD0D5DD,color("light",true,"border"));assertTrue(isDark("dark",false));assertFalse(isDark("light",true));assertTrue(isDark("system",true));assertFalse(isDark("system",false));}
  @Test public void f_shortRightAndTap()throws Exception {java.lang.reflect.Method m;try{m=DualHandGesture.class.getMethod("classify",String.class,float.class,float.class,long.class,float.class,int.class);}catch(NoSuchMethodException missing){fail("right hand threshold missing");return;}for(String key:new String[]{"A","B","C","D","E","F","Ø","core"}){assertEquals("right",((DualHandGesture.Result)m.invoke(null,key,9.1f,0f,40L,9.1f,2)).direction);assertEquals("tap",((DualHandGesture.Result)m.invoke(null,key,8.9f,0f,120L,8.9f,2)).direction);assertEquals("tap",((DualHandGesture.Result)m.invoke(null,key,0f,-10f,120L,10f,2)).direction);}assertEquals("tap",((DualHandGesture.Result)m.invoke(null,"1",10f,0f,120L,10f,2)).direction);}
- @Test public void g_geometryAllStatesAtReferenceFont()throws Exception {float sp=fitLabelSize(400);assertTrue("stop condition below 12sp: "+sp,sp>=12);labelSizeSp=sp;assertTrue(sp<=24);}
- @Test public void g_equalSizeBothHands()throws Exception {for(String key:new String[]{"1","2","3","4","5","6","A","B","C","D","E","F","Ø"}){float size=labels.get(key).get("tap").size;assertTrue(size>=12);for(TextView v:labels.get(key).values())assertEquals(key,size,v.size,0);}}
+ // Check rendered view bounds independently of the production fits() decision.
+ boolean allRenderedLabelsFit(float sp){
+  List<String> states=new ArrayList<>();states.add(null);states.addAll(Arrays.asList(DualHandTable.STATES));
+  android.graphics.Paint paint=new android.graphics.Paint();paint.setTextSize(sp);
+  for(String pending:states){renderState=pending;renderLabels();
+   for(String key:new String[]{"1","2","3","4","5","6","A","B","C","D","E","F","Ø"}){
+    List<float[]> occupied=new ArrayList<>();
+    for(TextView label:keys.get(key).children){if(label.visibility==View.GONE||label.value.isEmpty())continue;
+     float[] size=DualHandLabelView.extent(label.value,paint);float w=size[0],h=size[1],x=(92.5f-w)/2,y=(72-h)/2;
+     int gravity=label.layout.gravity,margin=label.layout.margin;
+     if((gravity&Gravity.LEFT)!=0)x=margin;if((gravity&Gravity.RIGHT)!=0)x=92.5f-margin-w;
+     if((gravity&Gravity.TOP)!=0)y=margin;if((gravity&Gravity.BOTTOM)!=0)y=72-margin-h;
+     if(x<0||y<0||x+w>92.5f||y+h>72)return false;
+     for(float[] b:occupied)if(x<b[2]&&x+w>b[0]&&y<b[3]&&y+h>b[1])return false;
+     occupied.add(new float[]{x,y,x+w,y+h});
+    }
+   }
+  }return true;
+ }
+ @Test public void g_geometryAllStatesAtReferenceFont()throws Exception {
+  float sp=fitLabelSize(400);assertTrue("all rendered states fit at "+sp,allRenderedLabelsFit(sp));
+  assertFalse("next quarter-sp must fail, selected="+sp,allRenderedLabelsFit(sp+.25f));
+  System.out.println("Reference font maximum/adopted="+sp+"sp; 26 states x 13 letter keys; next="+(sp+.25f)+"sp does not fit");
+ }
+ @Test public void g_equalSizeBothHands()throws Exception {labelSizeSp=fitLabelSize(400);keys.clear();labels.clear();half(new String[][]{{"1","2"},{"3","4"},{"5","6"},{"A","B"},{"C","D"},{"E","F"},{"Ø"}});for(String key:new String[]{"1","2","3","4","5","6","A","B","C","D","E","F","Ø"}){float size=labels.get(key).get("tap").size;assertEquals(labelSizeSp,size,0);for(TextView v:labels.get(key).values())assertEquals(key,size,v.size,0);}}
 }
 class Context {static final int MODE_PRIVATE=0;static final String CLIPBOARD_SERVICE="clipboard";ClipboardManager cm=new ClipboardManager();Map<String,SharedPreferences> prefs=new HashMap<>();File dir;Context()throws IOException{dir=Files.createTempDirectory(Path.of("out"),"clipboard688-").toFile();}Object getSystemService(String s){return cm;}SharedPreferences getSharedPreferences(String n,int mode){return prefs.computeIfAbsent(n,k->new SharedPreferences());}File getFilesDir(){return dir;}File getExternalFilesDir(Object v){return dir;}}
 class SharedPreferences {Map<String,String> map=new HashMap<>();float getFloat(String k,float d){return d;}String getString(String k,String d){return map.getOrDefault(k,d);}Editor edit(){return new Editor();}class Editor{Editor putString(String k,String v){map.put(k,v);return this;}void apply(){}}}

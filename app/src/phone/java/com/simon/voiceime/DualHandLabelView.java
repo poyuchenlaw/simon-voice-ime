@@ -8,7 +8,7 @@ import android.widget.TextView;
 final class DualHandLabelView extends TextView {
     DualHandLabelView(Context context){super(context);setIncludeFontPadding(false);}
     static float[] extent(String value,Paint paint){
-        float width=0,cell=paint.getTextSize();Rect ink=new Rect();String plain=value.replace("\n","");
+        float width=0,cell=0;Rect ink=new Rect();String plain=value.replace("\n","");
         for(int cp:plain.codePoints().toArray()){
             String glyph=new String(Character.toChars(cp));paint.getTextBounds(glyph,0,glyph.length(),ink);
             width=Math.max(width,Math.max(paint.measureText(glyph),ink.width()));cell=Math.max(cell,ink.height());
