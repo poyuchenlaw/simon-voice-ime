@@ -3,6 +3,12 @@ package com.simon.voiceime;
 /** Pure bitmap math; exclusions are actual ink rectangles, never metadata about diamonds. */
 public final class App690FPixels {
     private App690FPixels(){}
+    private static double linear(double c){return c<=.04045?c/12.92:Math.pow((c+.055)/1.055,2.4);}
+    public static double contrast(int foreground,int background,int surface){
+        double a=(foreground>>>24)/255d,b=(background>>>24)/255d,fg=0,bg=0;int[] shifts={16,8,0};double[] weights={.2126,.7152,.0722};
+        for(int i=0;i<3;i++){int shift=shifts[i];double back=((background>>>shift)&255)*b+((surface>>>shift)&255)*(1-b),front=((foreground>>>shift)&255)*a+back*(1-a);bg+=weights[i]*linear(back/255);fg+=weights[i]*linear(front/255);}
+        return (Math.max(fg,bg)+.05)/(Math.min(fg,bg)+.05);
+    }
     public static int delta(int a,int b){int n=0;for(int shift:new int[]{0,8,16})n=Math.max(n,Math.abs(((a>>>shift)&255)-((b>>>shift)&255)));return n;}
     public static int[] diamond(int[] pixels,int w,int h,float density,float[][] ink){
         if(pixels.length!=w*h||density<=0)throw new IllegalArgumentException("bitmap geometry");

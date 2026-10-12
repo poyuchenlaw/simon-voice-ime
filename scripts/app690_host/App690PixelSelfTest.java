@@ -2,6 +2,11 @@ package com.simon.voiceime;
 import java.util.Arrays;
 public final class App690PixelSelfTest {
     public static void main(String[] args){
+        assert App690FPixels.contrast(0xffffffff,0xff000000,0xff000000)==21;
+        assert App690FPixels.contrast(0xff123456,0xff123456,0xff000000)==1;
+        assert App690FPixels.contrast(0x00ffffff,0xff000000,0xff000000)==1;
+        assert Math.abs(App690FPixels.contrast(0xff00ff00,0xff000000,0xff000000)-15.304)<1e-9;
+        assert Math.abs(App690FPixels.contrast(0x80ffffff,0xff000000,0xff000000)-5.317210002277984)<1e-9;
         int w=100,h=100;int[] p=new int[w*h];Arrays.fill(p,0xff161b26);
         int[] clean=App690FPixels.diamond(p,w,h,1,new float[0][]);assert clean[0]==0&&clean[1]>0;
         p[8*w+50]=0xff202531;assert App690FPixels.diamond(p,w,h,1,new float[0][])[0]>2:"injected diamond must turn red";
