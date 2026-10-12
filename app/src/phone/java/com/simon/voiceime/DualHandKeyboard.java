@@ -44,7 +44,7 @@ public final class DualHandKeyboard implements DualHandPage {
     private final Runnable flush=this::flush;
     private static final float LEFT_WIDTH_FRACTION=.35f;
     private static final float[] BOTTOM_WIDTH_WEIGHTS={1,1,1.1f,1.2f,1.2f};
-    private static final String[] BOTTOM_KEYS={"tools","symbols","Ø","clipboard","core"};
+    private static final String[] BOTTOM_KEYS=DualHandTable.BOTTOM_KEYS.toArray(new String[0]);
     private static final String[][] LEFT={{"1","2"},{"3","4"},{"5","6"}};
     private static final String[][] RIGHT={{"A","B"},{"C","D"},{"E","F"}};
     private static final class Touch {

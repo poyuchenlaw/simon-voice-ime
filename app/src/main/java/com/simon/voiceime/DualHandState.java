@@ -25,7 +25,7 @@ public final class DualHandState {
         Output(Stroke stroke,String state,String syllable,boolean empty){this.stroke=stroke;this.state=state;this.syllable=syllable;this.direction=stroke.direction;this.empty=empty;}
     }
     public Stroke begin(String key,long down){
-        if(!DualHandTable.isLeft(key)&&!DualHandTable.isRight(key)&&!Arrays.asList("core","symbols","tools").contains(key))throw new IllegalArgumentException("Unknown key");
+        if(!DualHandTable.isLeft(key)&&!DualHandTable.isRight(key)&&!DualHandTable.BOTTOM_KEYS.contains(key))throw new IllegalArgumentException("Unknown key");
         Stroke stroke=new Stroke(key,down);int at=strokes.size();
         if(DualHandTable.isLeft(key))while(at>0){Stroke before=strokes.get(at-1);if(!DualHandTable.isRight(before.key)||down<before.down||down-before.down>DualHandGesture.RACE_MS)break;at--;}
         strokes.add(at,stroke);return stroke;

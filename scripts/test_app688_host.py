@@ -16,7 +16,7 @@ def block(src,signature):
  raise ValueError(signature)
 k=(phone/'DualHandKeyboard.java').read_text();s=(prod/'SimonIMEService.java').read_text();e=(phone/'DualHandEditor.java').read_text()
 methods='\n'.join(block(k,x) for x in ['private void renderLabels(', 'private void functionLabels(', 'private static String suffix(', 'private static String vertical(', 'private void function(', 'private LinearLayout half(', 'private TextView text(', 'private int dp(', 'private float fitLabelSize(', 'private int[] columnWidths(', 'private float keyContentWidth(', 'private static String shortFunctionLabel('])
-methods+='\n'+re.search(r'    private static final float LEFT_WIDTH_FRACTION=.*?;',k).group()+re.search(r'    private static final float\[\] BOTTOM_WIDTH_WEIGHTS=.*?;',k).group()
+methods+='\n'+re.search(r'    private static final float LEFT_WIDTH_FRACTION=.*?;',k).group()+re.search(r'    private static final float\[\] BOTTOM_WIDTH_WEIGHTS=.*?;',k).group()+re.search(r'    private static final String\[\] BOTTOM_KEYS=.*?;',k).group()
 selection=block(e,'@Override public void selection(').replace('@Override ','').replace('DualHandKeyboard page','App688Harness page')
 # Exercise precisely the production list selection/layout statements; adapter framework is Android-only.
 clip=s[s.index('        List<String> history = clipboardHelper.getHistory();'):s.index('        ClipAdapter adapter =',s.index('private void showClipboardPanel('))]

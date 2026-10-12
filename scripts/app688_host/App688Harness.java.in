@@ -17,7 +17,7 @@ public class App688Harness {
  final SimonIMEService service=new SimonIMEService();final Hooks hooks=new Hooks();DualHandTable table;DualHandState state;
  final Map<String,Map<String,TextView>> labels=new HashMap<>();final Map<String,FrameLayout> keys=new LinkedHashMap<>();final Map<Integer,Touch> touches=new HashMap<>();
  String renderState;boolean closed;Runnable selectionTask;final Handler ui=new Handler();int compositionStart=-1,compositionEnd=-1;Snapshot witness,now=new Snapshot();int opened,markers;
- public App688Harness()throws Exception {Path a=Path.of("app/src/phone/assets/dual_hand");table=new DualHandTable(Files.newBufferedReader(a.resolve("dual_hand_map.tsv")),Files.newBufferedReader(a.resolve("left_hand.tsv")),Files.newBufferedReader(a.resolve("draft_chars.tsv")));state=new DualHandState(table);half(new String[][]{{"1","2"},{"3","4"},{"5","6"},{"tools","symbols"},{"A","B"},{"C","D"},{"E","F"},{"Ø","clipboard","core"}});}
+ public App688Harness()throws Exception {Path a=Path.of("app/src/phone/assets/dual_hand");table=new DualHandTable(Files.newBufferedReader(a.resolve("dual_hand_map.tsv")),Files.newBufferedReader(a.resolve("left_hand.tsv")),Files.newBufferedReader(a.resolve("draft_chars.tsv")));state=new DualHandState(table);half(new String[][]{{"1","2"},{"3","4"},{"5","6"},{"A","B"},{"C","D"},{"E","F"},BOTTOM_KEYS});}
  // JUnit needs a public constructor.
 
  private String labelState(){return renderState;}private void activate(String a,String b){}private boolean finish(){service.calls.add("finish");state.clearBuffer();return true;}private void changed(boolean v){}private void vibrate(){service.calls.add("vibrate");}public DualHandState buffer(){return state;}public void refresh(){}
@@ -50,6 +50,47 @@ public class App688Harness {
   for(int j=0;j<4;j++)for(int i=0;i<5;i++){service.calls.clear();function(ks[j],DualHandTable.DIRECTIONS[i]);assertTrue(ks[j]+":"+DualHandTable.DIRECTIONS[i]+" "+service.calls,service.calls.contains(want[j][i]));}
   String[] zero={"","ㄧ","ㄦ","ㄩ","ㄨ"};for(int i=0;i<5;i++)assertEquals(zero[i],table.right(null,"Ø",DualHandTable.DIRECTIONS[i]));
   renderLabels();assertEquals("空白",labels.get("symbols").get("tap").value);assertEquals("送出",labels.get("core").get("tap").value);assertEquals("⚙",labels.get("tools").get("up").value);assertEquals("剪貼簿",labels.get("clipboard").get("tap").value);assertEquals("常用詞",labels.get("clipboard").get("up").value);
+ }
+ @Test public void b6881_bottomKeysReachStateAndDispatch()throws Exception {
+  String[] bottom={"tools","symbols","Ø","clipboard","core"};
+  String[] directions={"tap","up","left","down","right"};
+  String[][] want={{"finish,to41","finish,settings","finish,toEnglish","finish,hide","finish,toVoice"},
+   {"space","finish,、","finish,symbols","finish,。","finish,，"},
+   {"","ㄧ","ㄦ","ㄩ","ㄨ"},
+   {"finish,clipboard","finish,commands","vibrate","vibrate","vibrate"},
+   {"finish,enter","erase","restore","ai","finish,enter"}};
+  List<String> failures=new ArrayList<>();
+  for(int row=0;row<bottom.length;row++)for(int col=0;col<directions.length;col++){
+   String key=bottom[row],direction=directions[col];state=new DualHandState(table);service.calls.clear();
+   try{
+    DualHandState.Stroke stroke=state.begin(key,100);state.end(stroke,direction,false);
+    List<DualHandState.Output> ready=state.drain(141);assertEquals(1,ready.size());
+    DualHandState.Output output=ready.get(0);assertEquals(key,output.stroke.key);assertEquals(direction,output.direction);
+    if("Ø".equals(key)){
+     assertEquals(want[row][col],output.syllable);assertEquals(col==0,output.empty);
+     assertEquals(col==0?List.of():List.of(want[row][col]),state.syllables());assertTrue(service.calls.isEmpty());
+    }else{
+     assertFalse(output.empty);assertEquals("",output.syllable);function(output.stroke.key,output.direction);
+     assertEquals(Arrays.asList(want[row][col].split(",")),service.calls);assertEquals("",state.draft());
+    }
+   }catch(IllegalArgumentException|AssertionError failure){failures.add(key+":"+direction+" "+failure);}
+  }
+  assertEquals("5 bottom keys x 5 directions via begin/end/drain/dispatch",List.of(),failures);
+  System.out.println("6.88.1 bottom state/dispatch: 25 gestures, exact effects verified");
+ }
+ @Test public void b6881_clipboardNoOpPreservesDraft()throws Exception {
+  for(String direction:new String[]{"left","down","right"}){
+   state=new DualHandState(table);DualHandState.Stroke letter=state.begin("Ø",100);state.end(letter,"up",false);state.drain(141);
+   String before=state.draft();List<String> syllables=state.syllables();service.calls.clear();
+   DualHandState.Stroke stroke=state.begin("clipboard",200);state.end(stroke,direction,false);
+   for(DualHandState.Output output:state.drain(241))function(output.stroke.key,output.direction);
+   assertEquals(List.of("vibrate"),service.calls);assertEquals(before,state.draft());assertEquals(syllables,state.syllables());
+  }
+ }
+ @Test public void b6881_unknownKeyStillRejected()throws Exception {
+  for(String key:new String[]{"unknown","",null}){
+   try{state.begin(key,100);fail("Unknown key accepted: "+key);}catch(IllegalArgumentException expected){}
+  }
  }
  @Test public void c_captureFiveAndDuplicates()throws Exception {Context c=new Context();clipboardHelper=new ClipboardHelper(c);for(int i=1;i<=5;i++)c.cm.copy("假文字"+i,false);assertEquals(List.of("假文字5","假文字4","假文字3","假文字2","假文字1"),clipboardHelper.getHistory());c.cm.copy("假文字2",false);assertEquals("假文字2",clipboardHelper.getHistory().get(0));assertEquals(5,clipboardHelper.getHistory().size());}
  @Test public void c_sensitiveMustNotBeCaptured()throws Exception {Context c=new Context();ClipboardHelper h=new ClipboardHelper(c);c.cm.copy("synthetic-password",true);assertTrue(h.getHistory().isEmpty());}

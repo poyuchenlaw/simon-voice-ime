@@ -5,6 +5,7 @@ import java.util.*;
 
 /** Read the W1 TSV contract without Android or a second phonetic allocation table. */
 public final class DualHandTable {
+    public static final List<String> BOTTOM_KEYS=Collections.unmodifiableList(Arrays.asList("tools","symbols","Ø","clipboard","core"));
     public static final String[] DIRECTIONS={"tap","up","left","down","right"};
     public static final String[] RIGHT_KEYS={"A","B","C","D","E","F","Ø"};
     public static final String[] STATES={"ㄅ","ㄆ","ㄇ","ㄈ","ㄉ","ㄊ","ㄋ","ㄌ","ㄍ","ㄎ","ㄏ","ㄐ","ㄑ","ㄒ","ㄓ","ㄔ","ㄕ","ㄖ","ㄗ","ㄘ","ㄙ","Ø","ㄧ","ㄨ","ㄩ"};
