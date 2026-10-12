@@ -8,5 +8,7 @@ interface DualHandPage extends AutoCloseable {
     void reconfigure();
     void selection(int start,int end,int composingStart,int composingEnd);
     default void cursorAnchor(android.view.inputmethod.CursorAnchorInfo info) {}
+    default boolean landscapeSplit(){return false;}
+    default void touchableRegion(android.graphics.Region region,int x,int y){region.set(x,y,x+view().getWidth(),y+view().getHeight());}
     void close();
 }

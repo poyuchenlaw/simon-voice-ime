@@ -30,7 +30,7 @@ public class DualHandTracksTest {
     @Test public void r3DeleteUndoAndSupplementaryGlyphs()throws Exception {
         var state=state();input(state,"4","up","B","down",0);input(state,"5","down","E","left",1000);
         assertTrue(state.applyAi("確認"));state.backspace();assertEquals("確",state.draft());assertEquals(1,state.syllables().size());
-        state.restoreAi();assertTrue(state.applyAi("𠮷"));state.backspace();assertEquals("",state.draft());assertTrue(state.syllables().isEmpty());
+        state.restoreAi();assertEquals("ㄖ",state.pending());state.discardPending();assertTrue(state.applyAi("𠮷"));state.backspace();assertEquals("",state.draft());assertTrue(state.syllables().isEmpty());
     }
     @Test public void newSyllableCommitsAiBeforeAppendAndKeepsPendingConsonant()throws Exception {
         var state=state();input(state,"4","up","B","down",0);input(state,"5","down","E","left",1000);state.applyAi("確認");

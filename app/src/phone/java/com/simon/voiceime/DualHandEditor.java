@@ -20,7 +20,7 @@ final class DualHandEditor implements DualHandKeyboard.Hooks {
     private final Handler ui;
     private DualHandTracks tracks;
     private DualHandMemory memory;
-    private boolean closed;
+    private boolean closed,singleMode;
     private final OkHttpClient http=new OkHttpClient.Builder().retryOnConnectionFailure(false).followRedirects(false).followSslRedirects(false)
         .connectTimeout(3,TimeUnit.SECONDS).readTimeout(8,TimeUnit.SECONDS).callTimeout(8,TimeUnit.SECONDS).build();
     private Call call;
@@ -117,13 +117,16 @@ final class DualHandEditor implements DualHandKeyboard.Hooks {
         dismissMarker();
         if(call!=null&&requestedRevision!=page.buffer().revision())cancelCall("cancelled");
         if(!page.buffer().aiShown())warnings=Collections.emptyList();
-        candidates=tracks==null||page.buffer().aiShown()?Collections.emptyList():tracks.candidates(page.buffer().syllables());
+        singleMode=page.buffer().selected()>=0||page.buffer().syllables().size()==1;
+        int index=page.buffer().selected()>=0?page.buffer().selected():0;
+        candidates=tracks==null?Collections.emptyList():singleMode?tracks.singles(page.buffer().syllables().get(index),index,page.buffer().locked(index)):
+            page.buffer().aiShown()||page.buffer().hasLocks()?Collections.emptyList():tracks.candidates(page.buffer().syllables());
         String key=page.buffer().revision()+":"+candidates.size();
         LinearLayout row=page.candidateRow();row.removeAllViews();
         for(int i=0;i<candidates.size();i++){
             final int rank=i;DualHandTracks.Choice choice=candidates.get(i);TextView item=new TextView(service);
-            item.setText(choice.text);item.setTextSize(19);item.setGravity(Gravity.CENTER);item.setTextColor(service.keyboardColor(R.color.keyboard_key_text));item.setContentDescription("短句候選 "+choice.text);
-            row.addView(item,new LinearLayout.LayoutParams(0,-1,1));item.setOnClickListener(v->choosePrefix(choice,rank));
+            item.setText(choice.text);item.setTextSize(19);item.setSelected(singleMode&&choice.text.equals(page.buffer().locked(choice.start)));if(item.isSelected())item.setBackgroundColor(DualHandVisuals.color(false,"highlight"));item.setGravity(Gravity.CENTER);item.setTextColor(service.keyboardColor(R.color.keyboard_key_text));item.setContentDescription((singleMode?"單字候選 ":"短句候選 ")+choice.text+(item.isSelected()?" 已鎖定":""));
+            item.setPadding(12,0,12,0);row.addView(item,new LinearLayout.LayoutParams(-2,-1));item.setOnClickListener(v->{if(singleMode)chooseSingle(choice);else choosePrefix(choice,rank);});
         }
         if(!key.equals(shownKey)){shownKey=key;event("dh_cand","shown",candidates.size(),-1,0,false);}
     }
@@ -132,10 +135,17 @@ final class DualHandEditor implements DualHandKeyboard.Hooks {
         return !page.buffer().aiShown()||page.finish();
     }
     @Override public boolean space(DualHandKeyboard page){
-        if(page.buffer().aiShown()){page.finish();return true;}
-        if(!candidates.isEmpty()){choosePrefix(candidates.get(0),0);return true;}
+        page.buffer().discardPending();
+        if(page.buffer().aiShown()||page.buffer().hasLocks()){page.finish();return true;}
+        if(!singleMode&&!candidates.isEmpty()){choosePrefix(candidates.get(0),0);return true;}
         if(page.buffer().syllables().size()>=5){if(service.dualHandProtected()){haptic();page.finish();}else if(!connected()){service.dualHandStatus("AI 未連線");page.finish();}else ai(page);return true;}
         return false;
+    }
+    private void chooseSingle(DualHandTracks.Choice choice){
+        if(!singleMode||!candidates.contains(choice)||!beforeWrite(keyboard))return;
+        cancelCall("cancelled");dismissGrid();keyboard.buffer().lock(choice.start,choice.text);
+        if(keyboard.compose(Collections.emptyList()))remember(choice.syllables,choice.text,beforeWrite.field);
+        keyboard.refresh();
     }
     private boolean choosePrefix(DualHandTracks.Choice choice,int rank){
         if(!candidates.contains(choice)||keyboard.buffer().aiShown())return false;
@@ -150,6 +160,8 @@ final class DualHandEditor implements DualHandKeyboard.Hooks {
     private String server(){return prefs().getString("server_url","http://100.84.86.128:8001");}
     private boolean connected(){String base=server();return base!=null&&!base.trim().isEmpty();}
     @Override public void ai(DualHandKeyboard page){
+        if(page.buffer().hasLocks()){haptic();return;}
+        page.buffer().discardPending();
         if(service.dualHandProtected())return;
         if(!connected()){service.dualHandStatus("AI 未連線");event("dh_ai","unconnected",page.buffer().syllables().size(),-1,0,false);return;}
         if(page.buffer().syllables().isEmpty()||call!=null)return;
@@ -203,17 +215,17 @@ final class DualHandEditor implements DualHandKeyboard.Hooks {
     private void failed(Call delivery,String outcome){if(call!=delivery)return;long elapsed=SystemClock.elapsedRealtime()-sent;delivery.cancel();clearCall();service.dualHandStatus("timeout".equals(outcome)?"AI 逾時，保留原稿":"AI 未連線");event("dh_ai",outcome,keyboard.buffer().syllables().size(),-1,elapsed,false);}
     private void clearCall(){call=null;if(deadline!=null)ui.removeCallbacks(deadline);deadline=null;}
     private void cancelCall(String outcome){if(call!=null){long elapsed=SystemClock.elapsedRealtime()-sent;call.cancel();clearCall();event("dh_ai",outcome,keyboard.buffer().syllables().size(),-1,elapsed,false);}}
-    private void haptic(){if(prefs().getBoolean("haptic_enabled",true))keyboard.view().performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK);}
+    private void haptic(){if(prefs().getBoolean("haptic_enabled",true)&&prefs().getBoolean("dual_hand_haptics",true))keyboard.view().performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK);}
     @Override public boolean restore(DualHandKeyboard page){
         cancelCall("cancelled");dismissGrid();
-        if(page.buffer().restoreAi()){warnings=Collections.emptyList();page.compose(warnings);page.refresh();event("dh_ai","restored",page.buffer().syllables().size(),-1,0,true);return true;}
-        if(!page.buffer().syllables().isEmpty()&&!page.finish())return true;
-        Snapshot now=snapshot();if(now==null||now.start!=now.end||tracks==null)return true;
-        String before=now.range(now.offset,now.start);int count=tracks.wordLength(before);if(count==0)return true;
-        int units=before.length()-before.offsetByCodePoints(before.length(),-count);
-        try{if(!now.connection.deleteSurroundingText(units,0))service.dualHandStatus("輸入框未接受刪除");}catch(RuntimeException unavailable){service.dualHandStatus("輸入框未接受刪除");}
-        forgetPositions();witness=snapshot();return true;
+        DualHandState.Delete deleted=page.buffer().eraseCharacter();
+        if(deleted==DualHandState.Delete.EDITOR)service.dualHandErase();
+        else if(deleted==DualHandState.Delete.BLOCKED)haptic();
+        else {warnings=Collections.emptyList();if(deleted!=DualHandState.Delete.PENDING)page.compose(warnings);page.refresh();}
+        if(deleted==DualHandState.Delete.RESTORED)event("dh_ai","restored",page.buffer().syllables().size(),-1,0,true);
+        return true;
     }
+
     @Override public void grid(DualHandKeyboard page,int index){Snapshot now=snapshot();if(now!=null&&compositionStart>=0&&page.buffer().draft().equals(now.range(compositionStart,compositionStart+page.buffer().draft().length())))openGrid(now,compositionStart,index,true);}
     @Override public void selection(DualHandKeyboard page,int start,int end,int composingLeft,int composingEnd){
         if(closed)return;
@@ -254,10 +266,10 @@ final class DualHandEditor implements DualHandKeyboard.Hooks {
         dismissMarker();if(!owner.same(snapshot()))return;
         String text=composing?keyboard.buffer().draft():owner.text;
         if(index<0||index>=text.codePointCount(0,text.length()))return;
-        int diameter=Math.round(28*service.getResources().getDisplayMetrics().density);
-        marker=new TextView(service);marker.setText("✎");marker.setTextSize(14);marker.setGravity(Gravity.CENTER);
+        float density=service.getResources().getDisplayMetrics().density;
+        int width=Math.round(32*density),height=Math.round(24*density);
+        marker=new TextView(service){private final Paint glow=new Paint(Paint.ANTI_ALIAS_FLAG);@Override protected void onDraw(Canvas canvas){glow.setColor(0x9938BDF8);canvas.drawRoundRect(getWidth()/2f-8*density,getHeight()/2f-4*density,getWidth()/2f+8*density,getHeight()/2f+4*density,4*density,4*density,glow);}};
         marker.setContentDescription("開啟校正選字");marker.setTag("dh-correction-marker");
-        android.graphics.drawable.GradientDrawable circle=new android.graphics.drawable.GradientDrawable();circle.setShape(android.graphics.drawable.GradientDrawable.OVAL);circle.setColor(service.keyboardColor(R.color.keyboard_key_bg));circle.setStroke(Math.max(1,Math.round(service.getResources().getDisplayMetrics().density)),service.keyboardColor(R.color.keyboard_key_border));marker.setBackground(circle);marker.setTextColor(service.keyboardColor(R.color.keyboard_key_text));
         marker.setOnClickListener(v->{dismissMarker();if(owner.same(snapshot()))openGrid(owner,base,index,composing);});
         RectF bounds=null;
         if(anchor!=null&&anchor.getSelectionStart()==owner.start&&anchor.getSelectionEnd()==owner.end){
@@ -266,11 +278,12 @@ final class DualHandEditor implements DualHandKeyboard.Hooks {
             anchor.getMatrix().mapRect(bounds);
         }
         if(bounds!=null&&Float.isFinite(bounds.right)&&Float.isFinite(bounds.bottom)){
-            markerPopup=new PopupWindow(marker,diameter,diameter,false);markerPopup.setBackgroundDrawable(new ColorDrawable(Color.TRANSPARENT));markerPopup.setOutsideTouchable(false);markerPopup.setClippingEnabled(true);
+            markerPopup=new PopupWindow(marker,width,height,false);markerPopup.setBackgroundDrawable(new ColorDrawable(Color.TRANSPARENT));markerPopup.setOutsideTouchable(false);markerPopup.setClippingEnabled(true);
             android.util.DisplayMetrics display=service.getResources().getDisplayMetrics();
-            try{markerPopup.showAtLocation(keyboard.view(),Gravity.TOP|Gravity.LEFT,Math.max(0,Math.min(Math.round(bounds.right),display.widthPixels-diameter)),Math.max(0,Math.min(Math.round(bounds.bottom),display.heightPixels-diameter)));}
-            catch(RuntimeException unavailable){markerPopup=null;keyboard.candidateRow().addView(marker,new LinearLayout.LayoutParams(diameter,diameter));}
-        }else keyboard.candidateRow().addView(marker,new LinearLayout.LayoutParams(diameter,diameter));
+            int[] pos=DualHandVisuals.capsulePosition(Math.round(bounds.left/density),Math.round(bounds.top/density),Math.round(bounds.bottom/density),Math.round(display.widthPixels/density),Math.round(display.heightPixels/density));
+            try{markerPopup.showAtLocation(keyboard.view(),Gravity.TOP|Gravity.LEFT,Math.round(pos[0]*density),Math.round(pos[1]*density));}
+            catch(RuntimeException unavailable){markerPopup=null;keyboard.candidateRow().addView(marker,new LinearLayout.LayoutParams(width,height));}
+        }else keyboard.candidateRow().addView(marker,new LinearLayout.LayoutParams(width,height));
         markerExpiry=this::dismissMarker;ui.postDelayed(markerExpiry,3000);
     }
     @Override public void cursorAnchor(CursorAnchorInfo info){anchor=info;}
@@ -294,8 +307,9 @@ final class DualHandEditor implements DualHandKeyboard.Hooks {
             }else {forgetPositions();service.dualHandStatus("文字已變動，請重新選字");}
             dismissGrid();
         });
+        content.setBackgroundColor(0xE61C2230);
         popup=new PopupWindow(content,-2,-2,false);popup.setBackgroundDrawable(new ColorDrawable(Color.TRANSPARENT));popup.setOutsideTouchable(true);popup.setClippingEnabled(true);popup.setElevation(8*service.getResources().getDisplayMetrics().density);
-        try{showGridAtCursor(base+text.offsetByCodePoints(0,index));event("dh_grid","opened",index,-1,0,false);}
+        try{showGridAtCursor(base+text.offsetByCodePoints(0,index));DualHandKeyboard.blurPopup(service,popup,Math.round(20*service.getResources().getDisplayMetrics().density));event("dh_grid","opened",index,-1,0,false);}
         catch(RuntimeException unavailable){dismissGrid();service.dualHandStatus("選字框未能開啟");}
     }
     private void showGridAtCursor(int position){
@@ -306,7 +320,8 @@ final class DualHandEditor implements DualHandKeyboard.Hooks {
         anchor.getMatrix().mapRect(bounds);View content=popup.getContentView();content.measure(View.MeasureSpec.UNSPECIFIED,View.MeasureSpec.UNSPECIFIED);
         android.util.DisplayMetrics display=service.getResources().getDisplayMetrics();
         int x=Math.max(0,Math.min(Math.round(bounds.left),display.widthPixels-content.getMeasuredWidth()));
-        int y=Math.max(0,Math.min(Math.round(bounds.bottom),display.heightPixels-content.getMeasuredHeight()));
+        int y=DualHandVisuals.clamp(Math.round(bounds.top)-content.getMeasuredHeight()-Math.round(4*service.getResources().getDisplayMetrics().density),content.getMeasuredHeight(),display.heightPixels);
+        if(bounds.top-content.getMeasuredHeight()<0)y=DualHandVisuals.clamp(Math.round(bounds.bottom)+Math.round(4*service.getResources().getDisplayMetrics().density),content.getMeasuredHeight(),display.heightPixels);
         popup.showAtLocation(keyboard.view(),Gravity.TOP|Gravity.LEFT,x,y);
     }
     private void replaceCommitted(Snapshot owner,int base,String text,DualHandTracks.Choice choice,int index,int rank){
@@ -333,7 +348,7 @@ final class DualHandEditor implements DualHandKeyboard.Hooks {
         try{memory.remember(sounds,text,service.dualHandProtected());}
         catch(IOException failure){service.dualHandStatus("個人記憶未儲存，文字已保留");}
     }
-    private void dismissGrid(){if(popup!=null){popup.dismiss();popup=null;}}
+    private void dismissGrid(){if(popup!=null){PopupWindow old=popup;popup=null;old.getContentView().animate().alpha(0).setDuration(150).withEndAction(old::dismiss).start();}}
     @Override public void cancel(DualHandKeyboard page,boolean clear){dismissMarker();lastTapOwner=null;cancelCall("cancelled");dismissGrid();if(selectionTask!=null)ui.removeCallbacks(selectionTask);selectionTask=null;if(clear){forgetPositions();witness=null;compositionStart=compositionEnd=-1;anchor=null;}}
     @Override public void close(DualHandKeyboard page){closed=true;}
     @Override public List<Integer> warnings(DualHandKeyboard page){return page.buffer().aiShown()?tracks==null?allIndices(page.buffer().syllables().size()):tracks.mismatches(page.buffer().draft(),page.buffer().syllables()):Collections.emptyList();}

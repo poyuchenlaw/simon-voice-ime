@@ -2,9 +2,9 @@ plugins {
     id 'com.android.application'
 }
 
-// 6.88.1 hotfix; next phone release must use versionCode > 128.
-def phoneVersionCodeValue = rootProject.findProperty("phoneVersionCode")?.toString() ?: "128"
-def phoneVersionNameValue = rootProject.findProperty("phoneVersionName")?.toString() ?: "6.88.1"
+// 6.89 approved editing and visual update (addendum 6).
+def phoneVersionCodeValue = rootProject.findProperty("phoneVersionCode")?.toString() ?: "129"
+def phoneVersionNameValue = rootProject.findProperty("phoneVersionName")?.toString() ?: "6.89"
 
 android {
     namespace 'com.simon.voiceime'

@@ -1,19 +1,20 @@
 package com.simon.voiceime;
 import java.util.*;import java.io.*;import java.nio.file.*;import org.junit.Test;import static org.junit.Assert.*;
 public class App688Harness {
- static class View {static final int GONE=8,VISIBLE=0;int visibility;void setVisibility(int v){visibility=v;}void setContentDescription(Object v){}void setActivated(boolean v){}void setClickable(boolean v){}void setBackgroundResource(int v){}void setTag(Object v){}void setOnClickListener(java.util.function.Consumer<View> v){} }
- static class TextView extends View {String value="";float size,alpha;FrameLayout.LayoutParams layout;TextView(Object c){}void setText(String s){value=s;}String getText(){return value;}void setTextSize(float v){size=v;}android.graphics.Paint getPaint(){return new android.graphics.Paint();}void setTextColor(int v){}void setGravity(int v){}void setFocusable(boolean v){}void setSingleLine(){}void setIncludeFontPadding(boolean v){}void setAlpha(float v){alpha=v;}void setLineSpacing(float a,float b){}void setPadding(int a,int b,int c,int d){} }
+ static class View {static final int GONE=8,VISIBLE=0;int visibility;void setVisibility(int v){visibility=v;}void setContentDescription(Object v){}void invalidate(){}float scale=1;float getScaleX(){return scale;}Animator animate(){return new Animator(this);}static class Animator{View v;Animator(View v){this.v=v;}Animator scaleX(float x){v.scale=x;return this;}Animator scaleY(float x){return this;}Animator alpha(float x){return this;}Animator setDuration(int x){return this;}void start(){}}boolean activated;void setActivated(boolean v){activated=v;}boolean isActivated(){return activated;}void setClickable(boolean v){}void setBackgroundResource(int v){}void setTag(Object v){}void setOnClickListener(java.util.function.Consumer<View> v){} }
+ static class TextView extends View {String value="";float size,alpha;FrameLayout.LayoutParams layout;TextView(Object c){}void setText(String s){value=s;}String getText(){return value;}void setTextSize(float v){size=v;}android.graphics.Paint getPaint(){return new android.graphics.Paint();}int tint;void setTextColor(int v){tint=v;}int getCurrentTextColor(){return tint;}void setTypeface(Object t){}void setGravity(int v){}void setFocusable(boolean v){}void setSingleLine(){}void setIncludeFontPadding(boolean v){}void setAlpha(float v){alpha=v;}void setLineSpacing(float a,float b){}void setPadding(int a,int b,int c,int d){} }
  static class FrameLayout extends View {List<TextView> children=new ArrayList<>();FrameLayout(Object c){}void addView(TextView v,LayoutParams p){children.add(v);v.layout=p;}static class LayoutParams {int gravity,margin;LayoutParams(int w,int h,int g){gravity=g;}void setMargins(int a,int b,int c,int d){margin=a;} } }
+ static class KeyCap extends FrameLayout{KeyCap(Object c,String k){super(c);}}
  static class LinearLayout extends View {static final int HORIZONTAL=0,VERTICAL=1;LinearLayout(Object c){}void setOrientation(int v){}void addView(View v,LayoutParams p){}static class LayoutParams{LayoutParams(int w,int h){}LayoutParams(int w,int h,int weight){}void setMargins(int a,int b,int c,int d){} } }
  static class Gravity{static final int CENTER=1,TOP=2,BOTTOM=4,LEFT=8,RIGHT=16,CENTER_HORIZONTAL=32,CENTER_VERTICAL=64;}
- static class R{static class color{static final int keyboard_key_text=1,keyboard_bg=2;}static class drawable{static final int keyboard_key=1;}}
+ static class R{static class color{static final int keyboard_key_text=1,keyboard_bg=2,mode_append=3;}static class drawable{static final int keyboard_key=1;}}
  static class SimonIMEService {List<String> calls=new ArrayList<>();SharedPreferences getSharedPreferences(String s,int i){return new SharedPreferences();}int keyboardColor(int i){return i;}Resources getResources(){return new Resources();}boolean dualHandProtected(){return false;}Integer dualHandBackspaceLength(){return 0;}void dualHandBackspaceTelemetry(String a,Integer b,int c){}void dualHandErase(){calls.add("erase");}void dualHandStatus(String s){}void dualHandFunction(String s){calls.add(s);}void requestHideSelf(int v){calls.add("hide");}void dualHandPanel(String s){calls.add(s);}boolean dualHandCommit(String s){calls.add(s);return true;}boolean dualHandSelfUpdate(){return false;}void dualHandFinishComposition(){} }
  static class Resources {int getColor(int i,Object o){return 1;}android.util.DisplayMetrics getDisplayMetrics(){return new android.util.DisplayMetrics();}}static class Metrics{float density=1,scaledDensity=1;}
  static class Hooks {boolean space(App688Harness k){k.service.calls.add("space");return true;}void ai(App688Harness k){k.service.calls.add("ai");}boolean restore(App688Harness k){k.service.calls.add("restore");return true;}}
  static class Touch{DualHandState.Stroke stroke;DualHandGesture.Result result;}
  static class Handler {List<Runnable> jobs=new ArrayList<>();void removeCallbacks(Runnable r){jobs.remove(r);}void postDelayed(Runnable r,long delay){jobs.add(r);}void run(){for(Runnable r:new ArrayList<>(jobs)){jobs.remove(r);r.run();}}}
  static class Snapshot {String text="甲乙丙";int offset=0,start=1,end=1;boolean sameText(Snapshot s){return s!=null&&text.equals(s.text);}boolean same(Snapshot s){return s!=null&&start==s.start&&end==s.end&&text.equals(s.text);}String range(int l,int r){return text.substring(l,r);} }
- float labelSizeSp=13.5f;
+ float labelSizeSp=13.5f,rowDp=78;boolean split;Object typeface;int color(String r){return DualHandVisuals.color(false,r);}
  final SimonIMEService service=new SimonIMEService();final Hooks hooks=new Hooks();DualHandTable table;DualHandState state;
  final Map<String,Map<String,TextView>> labels=new HashMap<>();final Map<String,FrameLayout> keys=new LinkedHashMap<>();final Map<Integer,Touch> touches=new HashMap<>();
  String renderState;boolean closed;Runnable selectionTask;final Handler ui=new Handler();int compositionStart=-1,compositionEnd=-1;Snapshot witness,now=new Snapshot();int opened,markers;
@@ -27,8 +28,8 @@ public class App688Harness {
  static class android {
   static class graphics {static class Paint{
    float size=14;java.awt.Font font;
-   Paint(){try{font=java.awt.Font.createFont(java.awt.Font.TRUETYPE_FONT,new File("/home/simon/.local/share/fonts/NotoSansCJKtc-Regular.otf"));}catch(Exception e){throw new RuntimeException(e);}}
-   void setTextSize(float v){size=v;}float getTextSize(){return size;}
+   Paint(){try{font=java.awt.Font.createFont(java.awt.Font.TRUETYPE_FONT,new File("app/src/phone/assets/fonts/NotoSansTC-Medium-subset.ttf"));}catch(Exception e){throw new RuntimeException(e);}}
+   void setTextSize(float v){size=v;}float getTextSize(){return size;}void setTypeface(Object v){}
    java.awt.font.FontRenderContext frc=new java.awt.font.FontRenderContext(null,true,true);
    float measureText(String s){return (float)font.deriveFont(size).getStringBounds(s,frc).getWidth();}
    void getTextBounds(String s,int a,int b,Rect r){java.awt.Rectangle box=font.deriveFont(size).createGlyphVector(frc,s.substring(a,b)).getPixelBounds(frc,0,0);r.left=box.x;r.top=box.y;r.right=box.x+box.width;r.bottom=box.y+box.height;}
@@ -129,8 +130,9 @@ public class App688Harness {
   for(String pending:states){renderState=pending;renderLabels();
    for(String key:new String[]{"1","2","3","4","5","6","A","B","C","D","E","F","Ø","tools","symbols","clipboard","core"}){
     boolean letter=DualHandTable.isLeft(key)||DualHandTable.isRight(key);paint.setTextSize((letter?sp:12)*android.util.DisplayMetrics.scaledDensity);
-    int inset=2*dp(2)+2*dp(1);float height=dp(78)-inset;
+    int inset=2*dp(2);float height=dp(rowDp)-inset;
     float width=DualHandTable.isLeft(key)?columns[0]/2-inset:!key.equals("Ø")&&DualHandTable.isRight(key)?columns[1]/2-inset:columns[2+List.of("tools","symbols","Ø","clipboard","core").indexOf(key)]-inset;
+    if(split)width=columns[0]/((key.equals("tools")||key.equals("symbols"))?2:3)-inset;
     List<float[]> occupied=new ArrayList<>();
     for(TextView label:keys.get(key).children){if(label.visibility==View.GONE||label.value.isEmpty())continue;
      float[] size=DualHandLabelView.extent(label.value,paint);float w=size[0],h=size[1],x=(width-w)/2,y=(height-h)/2;
@@ -153,11 +155,30 @@ public class App688Harness {
   for(int width:new int[]{320,360,600,800}){float sp=fitLabelSize(width);assertTrue("minimum letter size at "+width,sp>=12);assertTrue("all states/functions fit at "+width,allRenderedLabelsFit(sp,width,columnWidths(width)));}
   for(String key:new String[]{"1","A"}){DualHandState.Stroke stroke=state.begin(key,100);state.end(stroke,"tap",false);state.drain(200);}assertTrue(state.applyAi("一"));renderLabels();assertEquals("還",labels.get("core").get("left").value);
  }
+ @Test public void c_captureNoCallerFileAccessAndCloseDrains()throws Exception{
+  Context c=new Context();ClipboardHelper h=new ClipboardHelper(c);c.recording=true;
+  for(int i=0;i<30;i++)c.cm.copy("synthetic"+i,false);
+  assertEquals("captureCurrent writes must leave the caller thread",0,c.callerFileTouches);
+  ClipboardHelper.class.getMethod("close").invoke(h);c.recording=false;
+  String stored=Files.readString(c.dir.toPath().resolve("clipboard_backup.json"));assertEquals("synthetic29",new org.json.JSONArray(stored).getString(0));assertEquals(30,new org.json.JSONArray(stored).length());
+ }
+ @Test public void visualAllStatesAndHighlightDirections()throws Exception{
+  for(String pending:DualHandTable.STATES){renderState=pending;renderLabels();for(String key:DualHandTable.RIGHT_KEYS)for(String dir:DualHandTable.DIRECTIONS){TextView v=labels.get(key).get(dir);boolean exists=!table.right(pending,key,dir).isEmpty();assertEquals(key+dir+pending,exists,v.visibility==View.VISIBLE);if(exists)assertEquals(color("hint"),v.tint);}}
+  renderState=null;renderLabels();assertEquals(color("text"),labels.get("A").get("tap").tint);
+  for(String dir:new String[]{"up","right","left","tap"}){Touch t=new Touch();t.stroke=state.begin("A",100);t.result=DualHandGesture.classify(dir.equals("right")?32:dir.equals("left")?-32:0,dir.equals("up")?-32:0,120,32);touches.put(1,t);renderLabels();assertEquals(!dir.equals("tap")&&!table.right(null,"A",t.result.direction).isEmpty()?1.15f:1,labels.get("A").get(t.result.direction).getScaleX(),.001);touches.clear();}
+ }
+ @Test public void landscapeGeometryUsesUniformHorizontalLabels()throws Exception{
+  split=true;rowDp=50;labelSizeSp=fitLabelSize(800);renderLabels();assertTrue(labelSizeSp>=12);assertEquals(240,columnWidths(800)[0]);assertEquals(240,columnWidths(800)[1]);
+  for(var parts:labels.values())for(var label:parts.values())assertFalse(label.value.contains("\n"));assertTrue("all states at 800x360",allRenderedLabelsFit(labelSizeSp,800,columnWidths(800)));
+  System.out.println("landscape minimum="+labelSizeSp+"sp height=182dp wing=240dp gap=320dp left bottom=120dp each");
+ }
+ @Test public void thirtyRenderStepsMeasured()throws Exception{long[] ns=new long[30];for(int i=0;i<30;i++){renderState=DualHandTable.STATES[i%DualHandTable.STATES.length];long t=System.nanoTime();renderLabels();ns[i]=System.nanoTime()-t;}Arrays.sort(ns);System.out.println("HOST renderLabels 30 median_ms="+ns[15]/1e6+" p90_ms="+ns[26]/1e6+" max_ms="+ns[29]/1e6+"; not Android Canvas/frame time");}
+
  @Test public void g_equalSizeBothHands()throws Exception {labelSizeSp=fitLabelSize(400);keys.clear();labels.clear();half(new String[][]{{"1","2"},{"3","4"},{"5","6"},{"A","B"},{"C","D"},{"E","F"},{"Ø"}});for(String key:new String[]{"1","2","3","4","5","6","A","B","C","D","E","F","Ø"}){float size=labels.get(key).get("tap").size;assertEquals(labelSizeSp,size,0);for(TextView v:labels.get(key).values())assertEquals(key,size,v.size,0);}}
 }
-class Context {static final int MODE_PRIVATE=0;static final String CLIPBOARD_SERVICE="clipboard";ClipboardManager cm=new ClipboardManager();Map<String,SharedPreferences> prefs=new HashMap<>();File dir;Context()throws IOException{dir=Files.createTempDirectory(Path.of("out"),"clipboard688-").toFile();}Object getSystemService(String s){return cm;}SharedPreferences getSharedPreferences(String n,int mode){return prefs.computeIfAbsent(n,k->new SharedPreferences());}File getFilesDir(){return dir;}File getExternalFilesDir(Object v){return dir;}}
-class SharedPreferences {Map<String,String> map=new HashMap<>();float getFloat(String k,float d){return d;}String getString(String k,String d){return map.getOrDefault(k,d);}Editor edit(){return new Editor();}class Editor{Editor putString(String k,String v){map.put(k,v);return this;}void apply(){}}}
-class ClipboardManager{ClipData clip;List<Runnable> listeners=new ArrayList<>();void addPrimaryClipChangedListener(Runnable l){listeners.add(l);}ClipData getPrimaryClip(){return clip;}void copy(String s,boolean sensitive){clip=new ClipData(s,sensitive);listeners.forEach(Runnable::run);}}
+class Context {static final int MODE_PRIVATE=0;static final String CLIPBOARD_SERVICE="clipboard";ClipboardManager cm=new ClipboardManager();Map<String,SharedPreferences> prefs=new HashMap<>();File dir;Context()throws IOException{dir=Files.createTempDirectory(Path.of("out"),"clipboard688-").toFile();}Object getSystemService(String s){return cm;}SharedPreferences getSharedPreferences(String n,int mode){return prefs.computeIfAbsent(n,k->new SharedPreferences());}Thread owner=Thread.currentThread();volatile boolean recording;volatile int callerFileTouches;File getFilesDir(){if(recording&&Thread.currentThread()==owner)callerFileTouches++;return dir;}File getExternalFilesDir(Object v){if(recording&&Thread.currentThread()==owner)callerFileTouches++;return dir;}}
+class SharedPreferences {Map<String,String> map=new HashMap<>();float getFloat(String k,float d){return d;}boolean getBoolean(String k,boolean d){return d;}String getString(String k,String d){return map.getOrDefault(k,d);}Editor edit(){return new Editor();}class Editor{Editor putString(String k,String v){map.put(k,v);return this;}void apply(){}boolean commit(){return true;}}}
+class ClipboardManager{interface OnPrimaryClipChangedListener{void onPrimaryClipChanged();}ClipData clip;List<OnPrimaryClipChangedListener> listeners=new ArrayList<>();void addPrimaryClipChangedListener(OnPrimaryClipChangedListener l){listeners.add(l);}void removePrimaryClipChangedListener(OnPrimaryClipChangedListener l){listeners.remove(l);}ClipData getPrimaryClip(){return clip;}void copy(String s,boolean sensitive){clip=new ClipData(s,sensitive);new ArrayList<>(listeners).forEach(OnPrimaryClipChangedListener::onPrimaryClipChanged);}}
 class ClipData{String text;boolean sensitive;ClipData(String s,boolean b){text=s;sensitive=b;}int getItemCount(){return 1;}Item getItemAt(int i){return new Item();}class Item{CharSequence getText(){return text;}}ClipDescription getDescription(){return new ClipDescription(sensitive);}}
 class ClipDescription {static final String EXTRA_IS_SENSITIVE="android.content.extra.IS_SENSITIVE";boolean sensitive;ClipDescription(boolean b){sensitive=b;}CharSequence getLabel(){return "synthetic";}Extras getExtras(){return new Extras(sensitive);}}
 class Extras{boolean sensitive;Extras(boolean b){sensitive=b;}boolean getBoolean(String key,boolean fallback){return sensitive;}}

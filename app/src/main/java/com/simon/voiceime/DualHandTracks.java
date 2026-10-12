@@ -60,6 +60,17 @@ public final class DualHandTracks {
         for(Choice c:phrases.getOrDefault(key,Collections.emptyList()))if(seen.add(c.text))result.add(new Choice(c.text,start,start+sounds.size(),c.frequency,false,0,sounds));
         result.sort(ORDER);return result;
     }
+    public List<Choice> singles(String sound,int index,String locked){
+        List<Choice> result=new ArrayList<>();Map<String,DualHandMemory.Entry> personal=new HashMap<>();
+        if(memory!=null)for(DualHandMemory.Entry e:memory.find(Collections.singletonList(sound)))personal.put(e.text,e);
+        for(Map.Entry<String,Map<String,Long>> entry:readings.entrySet())if(entry.getValue().containsKey(sound)){
+            DualHandMemory.Entry e=personal.get(entry.getKey());result.add(new Choice(entry.getKey(),index,index+1,entry.getValue().get(sound),e!=null,e==null?0:e.lastUsed,Collections.singletonList(sound)));
+        }
+        result.sort(Comparator.comparing((Choice c)->!c.text.equals(locked)).thenComparing(c->!c.personal)
+            .thenComparing(Comparator.comparingLong((Choice c)->personal.containsKey(c.text)?personal.get(c.text).count:0).reversed())
+            .thenComparing(Comparator.comparingLong((Choice c)->c.frequency).reversed()).thenComparingInt(c->c.text.codePointAt(0)));
+        return Collections.unmodifiableList(result);
+    }
     public List<String> readings(String character){Map<String,Long> found=readings.get(character);return found==null?Collections.emptyList():new ArrayList<>(new TreeSet<>(found.keySet()));}
     public List<Integer> mismatches(String text,List<String> syllables){
         if(text.codePointCount(0,text.length())!=syllables.size())throw new IllegalArgumentException("Length mismatch");

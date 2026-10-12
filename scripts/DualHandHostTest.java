@@ -43,7 +43,7 @@ public final class DualHandHostTest {
         state.clear();r=state.begin("C",100);l=state.begin("2",140);state.end(r,"right",false);eq(0,state.drain(160).size());state.end(l,"tap",false);state.drain(180);eq(List.of("ㄉㄨㄟ"),state.syllables());
         state.clear();l=state.begin("2",100);r=state.begin("C",110);state.end(r,"right",false);eq(0,state.drain(200).size());state.end(l,"tap",false);state.drain(220);eq(List.of("ㄉㄨㄟ"),state.syllables());
         state.clear();l=state.begin("2",100);state.end(l,"tap",true);state.drain(200);eq(null,state.pending());
-        sequence("ㄉㄨㄟ","2:tap","C:right");eq(table.draft("ㄉㄨㄟ"),state.draft());key("1","tap");eq(DualHandState.Delete.PENDING,state.backspace());eq(1,state.syllables().size());eq(DualHandState.Delete.SYLLABLE,state.backspace());eq("",state.draft());eq(DualHandState.Delete.EDITOR,state.backspace());
+        sequence("ㄉㄨㄟ","2:tap","C:right");eq(table.draft("ㄉㄨㄟ"),state.draft());key("1","tap");eq(DualHandState.Delete.PENDING,state.backspace());eq(1,state.syllables().size());eq(DualHandState.Delete.SYLLABLE,state.backspace());eq("",state.draft());eq("ㄉ",state.pending());eq(DualHandState.Delete.PENDING,state.backspace());eq(DualHandState.Delete.EDITOR,state.backspace());
         state.clear();l=state.begin("2",100);state.end(l,"tap",false);r=state.begin("C",110);state.end(r,"right",false);
         DualHandState.Stroke space=state.begin("core",200);state.end(space,"tap",false);DualHandState.Stroke next=state.begin("A",210);state.end(next,"tap",false);
         state.drain(300);eq(List.of("ㄉㄨㄟ"),state.syllables());state.clearBuffer();state.drain(301);eq(List.of("ㄚ"),state.syllables());

@@ -29,7 +29,8 @@ public class ClipboardHelper {
     }
 
     private ClipVocabListener vocabListener;
-    private boolean passwordField;
+    private boolean passwordField,closed;
+    private final ClipboardManager.OnPrimaryClipChangedListener clipListener=()->captureCurrent("listener");
 
     public void setPasswordField(boolean password) { passwordField = password; }
 
@@ -43,6 +44,7 @@ public class ClipboardHelper {
     private static final String BACKUP_FILENAME = "clipboard_backup.json";
     private static final int MAX_ITEMS = 50;
 
+    private final java.util.concurrent.ExecutorService backups=java.util.concurrent.Executors.newSingleThreadExecutor(r->{Thread t=new Thread(r,"ClipboardBackup");t.setDaemon(true);return t;});
     private final Context context;
     private final List<String> history;
 
@@ -62,7 +64,7 @@ public class ClipboardHelper {
 
     private void listenClipboard() {
         ClipboardManager cm = (ClipboardManager) context.getSystemService(Context.CLIPBOARD_SERVICE);
-        if (cm != null) cm.addPrimaryClipChangedListener(() -> captureCurrent("listener"));
+        if (cm != null) cm.addPrimaryClipChangedListener(clipListener);
     }
 
     public void captureCurrent(String source) {
@@ -91,7 +93,7 @@ public class ClipboardHelper {
     }
 
     public synchronized void addToHistory(String text) {
-        if (passwordField || text == null || text.trim().isEmpty()) return;
+        if (closed || passwordField || text == null || text.trim().isEmpty()) return;
         // Remove if already exists (move to top)
         history.remove(text);
         history.add(0, text);
@@ -106,19 +108,19 @@ public class ClipboardHelper {
         return new ArrayList<>(history);
     }
 
-    public void remove(int index) {
+    public synchronized void remove(int index) {
         if (index >= 0 && index < history.size()) {
             history.remove(index);
             saveHistory();
         }
     }
 
-    public void clear() {
+    public synchronized void clear() {
         history.clear();
         saveHistory();
     }
 
-    public void removeByContent(String text) {
+    public synchronized void removeByContent(String text) {
         history.remove(text);
         saveHistory();
     }
@@ -139,39 +141,32 @@ public class ClipboardHelper {
     }
 
     private void saveHistory() {
+        if(closed)return;
         JSONArray arr = new JSONArray();
         for (String s : history) {
             arr.put(s);
         }
         String json = arr.toString();
-        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-                .edit()
-                .putString(KEY_HISTORY, json)
-                .apply();
-        saveToFileBackup(json);
+        backups.execute(()->{
+            if(!context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE).edit().putString(KEY_HISTORY,json).commit())Log.w(TAG,"Clipboard preference backup rejected",new IOException("commit rejected"));
+            saveToFileBackup(json);
+        });
     }
-
-    private void saveToFileBackup(String json) {
-        // Internal backup (original location)
-        try {
-            File backup = new File(context.getFilesDir(), BACKUP_FILENAME);
-            try (FileOutputStream fos = new FileOutputStream(backup)) {
-                fos.write(json.getBytes(StandardCharsets.UTF_8));
-            }
-        } catch (IOException e) {
-            Log.w(TAG, "Failed to save internal clipboard backup", e);
-        }
-        // External backup (survives APK reinstall if not uninstalled)
-        try {
-            File extDir = new File(context.getExternalFilesDir(null), "backup");
-            if (!extDir.exists()) extDir.mkdirs();
-            File extBackup = new File(extDir, BACKUP_FILENAME);
-            try (FileOutputStream fos = new FileOutputStream(extBackup)) {
-                fos.write(json.getBytes(StandardCharsets.UTF_8));
-            }
-        } catch (IOException e) {
-            Log.w(TAG, "Failed to save external clipboard backup", e);
-        }
+    public void close(){
+        synchronized(this){closed=true;ClipboardManager cm=(ClipboardManager)context.getSystemService(Context.CLIPBOARD_SERVICE);if(cm!=null)cm.removePrimaryClipChangedListener(clipListener);backups.shutdown();}try{if(!backups.awaitTermination(5,java.util.concurrent.TimeUnit.SECONDS))Log.w(TAG,"Clipboard final backup still pending",new IOException("shutdown timeout"));}
+        catch(InterruptedException interrupted){Thread.currentThread().interrupt();Log.w(TAG,"Clipboard shutdown interrupted",interrupted);}
+    }
+    private void saveToFileBackup(String json){
+        writeBackup(new File(context.getFilesDir(),BACKUP_FILENAME),json);
+        File external=context.getExternalFilesDir(null);if(external!=null)writeBackup(new File(new File(external,"backup"),BACKUP_FILENAME),json);
+    }
+    private void writeBackup(File file,String json){
+        try{
+            File dir=file.getParentFile();if(!dir.isDirectory()&&!dir.mkdirs())throw new IOException("Backup directory unavailable");
+            File temp=new File(dir,file.getName()+".tmp");
+            try(FileOutputStream out=new FileOutputStream(temp)){out.write(json.getBytes(StandardCharsets.UTF_8));out.getFD().sync();}
+            if(!temp.renameTo(file))throw new IOException("Atomic clipboard replacement rejected");
+        }catch(IOException failure){Log.w(TAG,"Failed to save clipboard backup",failure);}
     }
 
     private List<String> loadFromFileBackup() {

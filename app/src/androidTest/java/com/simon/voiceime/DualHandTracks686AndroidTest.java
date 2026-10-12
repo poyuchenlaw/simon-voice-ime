@@ -70,7 +70,7 @@ public class DualHandTracks686AndroidTest extends DualHand686AndroidTest {
         awaitGateway();assertEquals("確天",editorText(await("test_input")));assertNotNull(received);assertEquals(2,received.length());assertTrue(received.has("context")&&received.has("draft"));assertEquals(original[0],received.getString("draft"));screenshot("dh-ai-result");
         await("送出 up ⌫ left 還原 down AI right 送出");assertFunctionHints(true,false);
         swipe("core","left");assertEquals(original[0],editorText(await("test_input")));inst.runOnMainSync(()->assertEquals(java.util.List.of("ㄑㄩㄝ","ㄖㄣ"),page.buffer().syllables()));screenshot("dh-ai-undo");
-        await("送出 up ⌫ left 刪詞 down AI right 送出");assertFunctionHints(false,false);
+        await("送出 up ⌫ left 刪字 down AI right 送出");assertFunctionHints(false,false);
     }
     public void testAiLengthRejectedPreservesDraft()throws Exception {
         gateway("確認了",200);startDual();confirmation();String[] original={null};inst.runOnMainSync(()->original[0]=page.buffer().draft());swipe("core","down");

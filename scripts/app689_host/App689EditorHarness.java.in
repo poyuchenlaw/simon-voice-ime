@@ -1,0 +1,30 @@
+package com.simon.voiceime;
+import java.util.*;import java.nio.file.*;import org.junit.Test;import static org.junit.Assert.*;
+/** Original routing method bodies; only Android editor and wire boundaries are fakes. */
+public class App689EditorHarness {
+ static class Service{List<String> committed=new ArrayList<>();int erased;boolean dualHandProtected(){return false;}void dualHandStatus(String s){}void dualHandErase(){erased++;}}
+ static class DualHandKeyboard{
+  final DualHandState state;final Service service;String composing="";int finishes;
+  DualHandKeyboard(DualHandState s,Service c){state=s;service=c;}DualHandState buffer(){return state;}
+  boolean finish(){state.discardPending();service.committed.add(state.draft());state.clearBuffer();finishes++;return true;}
+  boolean compose(List<Integer> w){composing=state.draft();return true;}void refresh(){}
+ }
+ Service service=new Service();DualHandKeyboard keyboard;DualHandTracks tracks;boolean singleMode;int requests,haptics,chosen;Object call;List<Integer> warnings=List.of();List<DualHandTracks.Choice> candidates=List.of();
+ public App689EditorHarness()throws Exception{Path p=Path.of("app/src/phone/assets/dual_hand");var table=new DualHandTable(Files.newBufferedReader(p.resolve("dual_hand_map.tsv")),Files.newBufferedReader(p.resolve("left_hand.tsv")),Files.newBufferedReader(p.resolve("draft_chars.tsv")));keyboard=new DualHandKeyboard(new DualHandState(table),service);tracks=new DualHandTracks(Files.newBufferedReader(p.resolve("phrase_words.tsv")),Files.newBufferedReader(p.resolve("grid_chars.tsv")),Files.newBufferedReader(p.resolve("readings.tsv")));}
+ void input(String k,String d){var b=keyboard.buffer();var stroke=b.begin(k,100);b.end(stroke,d,false);b.drain(1000);}
+ void name(){input("5","up");input("E","left");input("1","tap");input("B","tap");input("Ø","down");}
+ void haptic(){haptics++;}boolean connected(){return true;}boolean choosePrefix(DualHandTracks.Choice c,int rank){chosen++;service.committed.add(c.text);keyboard.buffer().consume(c.end);return true;}
+ void cancelCall(String s){}void dismissGrid(){}void event(String n,String a,int c,int r,int t,boolean b){}
+ /* SPACE */
+ /* AI_GUARD */
+ /* RESTORE */
+ @Test public void repeatDeletesOneGestureUnitPerTick(){input("3","tap");input("A","right");assertEquals(List.of("ㄍㄨㄚ"),keyboard.buffer().syllables());keyboard.buffer().backspace();assertTrue(keyboard.buffer().syllables().isEmpty());assertEquals("ㄍ",keyboard.buffer().pending());keyboard.buffer().backspace();assertNull(keyboard.buffer().pending());}
+ @Test public void h_lockedAiStopsBeforeNetwork(){name();keyboard.buffer().lock(0,"陳");ai(keyboard);assertEquals(0,requests);assertEquals(1,haptics);}
+ @Test public void g_nameSpaceAndSendAreLocal(){for(boolean send:new boolean[]{false,true}){keyboard.buffer().clearBuffer();name();for(int i=0;i<3;i++)keyboard.buffer().lock(i,new String[]{"陳","柏","宇"}[i]);if(send)keyboard.finish();else assertTrue(space(keyboard));assertEquals("陳柏宇",service.committed.get(service.committed.size()-1));assertEquals(0,requests);}}
+ @Test public void i_noWordHitCommitsDraft(){name();candidates=tracks.candidates(keyboard.buffer().syllables());assertTrue(candidates.isEmpty());if(!space(keyboard))keyboard.finish();assertEquals(List.of("陳伯於"),service.committed);}
+ @Test public void f_singleSpaceNeverSelectsCharacter(){input("Ø","down");singleMode=true;candidates=tracks.singles("ㄩ",0,null);assertTrue(candidates.size()>9);if(!space(keyboard))keyboard.finish();assertEquals(List.of("於"),service.committed);assertEquals(0,chosen);}
+ @Test public void h_unlockedFiveUsesAi(){for(int i=0;i<5;i++)input("Ø","up");assertTrue(space(keyboard));assertEquals(1,requests);assertTrue(service.committed.isEmpty());}
+ @Test public void e_middlePendingDiscardedBeforeSpace(){name();keyboard.buffer().select(1);keyboard.buffer().backspace();assertEquals("ㄅ",keyboard.buffer().pending());if(!space(keyboard))keyboard.finish();assertEquals(List.of("陳於"),service.committed);assertNull(keyboard.buffer().pending());}
+ @Test public void d_characterDeleteDoesNotCommitOrDeleteWord(){name();keyboard.buffer().select(1);restore(keyboard);assertEquals(List.of("ㄔㄣ","ㄩ"),keyboard.buffer().syllables());assertNull(keyboard.buffer().pending());assertTrue(service.committed.isEmpty());assertEquals(0,service.erased);}
+ @Test public void spacePhraseAndAiConfirmationPriorities(){input("4","up");input("B","down");input("5","down");input("E","left");candidates=tracks.candidates(keyboard.buffer().syllables());assertTrue(space(keyboard));assertEquals(List.of("確認"),service.committed);keyboard.buffer().clearBuffer();input("Ø","up");keyboard.buffer().applyAi("甲");assertTrue(space(keyboard));assertEquals(List.of("確認","甲"),service.committed);}
+}

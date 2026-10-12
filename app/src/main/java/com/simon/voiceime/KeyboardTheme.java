@@ -40,7 +40,7 @@ public final class KeyboardTheme {
         GradientDrawable shape=new GradientDrawable();shape.setColor(color(c,pressed?"pressed":"key"));shape.setCornerRadius(5*density);shape.setStroke(Math.max(1,Math.round(density)),color(c,"border"));return shape;
     }
     public static void apply(Context c,View view){
-        if(view==null)return;
+        if(view==null||"dual-hand-keyboard".equals(view.getTag()))return;
         Drawable background=view.getBackground();Object tag=view.getTag();
         boolean key=tag instanceof String&&(((String)tag).startsWith("dh-key:")||((String)tag).startsWith("key:"));
         if(key||background instanceof InsetDrawable){

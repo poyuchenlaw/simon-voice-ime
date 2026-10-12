@@ -6773,6 +6773,13 @@ public class SimonIMEService extends InputMethodService {
         }
     }
 
+    private String dualHandAppliedPalette="";
+    @Override public boolean onEvaluateFullscreenMode(){return dualHandSelected&&dualHandPage!=null&&dualHandPage.landscapeSplit()?false:super.onEvaluateFullscreenMode();}
+    @Override public void onComputeInsets(android.inputmethodservice.InputMethodService.Insets out){
+        super.onComputeInsets(out);
+        if(!dualHandSelected||dualHandPage==null||!dualHandPage.landscapeSplit()||dualHandPage.view().getVisibility()!=View.VISIBLE)return;
+        int[] location=new int[2];dualHandPage.view().getLocationInWindow(location);out.contentTopInsets=out.visibleTopInsets=location[1];out.touchableInsets=android.inputmethodservice.InputMethodService.Insets.TOUCHABLE_INSETS_REGION;dualHandPage.touchableRegion(out.touchableRegion,location[0],location[1]);
+    }
     @Override
     public void onStartInputView(EditorInfo info, boolean restarting) {
         if(mainDispatchMonitor!=null)mainDispatchMonitor.beginLifecycle("onStartInputView",SystemClock.uptimeMillis());
@@ -6780,8 +6787,9 @@ public class SimonIMEService extends InputMethodService {
 
         super.onStartInputView(info, restarting);
         if(clipboardHelper!=null){clipboardHelper.setPasswordField(protectedInputField);clipboardHelper.captureCurrent("onStartInputView");}
-        if(rootView!=null)KeyboardTheme.apply(this,rootView);
-        if(dualHandPage!=null){KeyboardTheme.apply(this,dualHandPage.view());dualHandPage.reconfigure();}
+        String currentPalette=getSharedPreferences("simon_ime_prefs",0).getString("keyboard_theme","system")+":"+getResources().getConfiguration().uiMode;
+        if(!currentPalette.equals(dualHandAppliedPalette)){if(rootView!=null)KeyboardTheme.apply(this,rootView);dualHandAppliedPalette=currentPalette;}
+        if(dualHandPage!=null){dualHandPage.reconfigure();boolean split=dualHandSelected&&dualHandPage.landscapeSplit();if(rootView!=null)rootView.setBackgroundColor(split?android.graphics.Color.TRANSPARENT:keyboardColor(R.color.keyboard_bg));if(getWindow()!=null&&getWindow().getWindow()!=null)getWindow().getWindow().setBackgroundDrawable(new ColorDrawable(split?android.graphics.Color.TRANSPARENT:keyboardColor(R.color.keyboard_bg)));}
         if (isWatchService()) return;
         drainPendingVoiceQueue();
         configureTextRows();
@@ -6871,6 +6879,7 @@ public class SimonIMEService extends InputMethodService {
         cancelPendingTextCandidates();lastTextKeyUptime=-1;
         if(layoutDiagnostics!=null){layoutDiagnostics.close();layoutDiagnostics=null;}
         if(dualHandPage!=null){dualHandPage.close();dualHandPage=null;}
+        if(clipboardHelper!=null)clipboardHelper.close();
         if (sentencePhone != null) { sentencePhone.close(); sentencePhone = null; }
         if (zhuyinInput != null) { zhuyinInput.close(); zhuyinInput = null; }
         if (zhuyinWordIndex != null) { zhuyinWordIndex.close(); zhuyinWordIndex = null; }

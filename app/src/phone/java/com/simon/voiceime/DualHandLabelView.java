@@ -31,10 +31,21 @@ final class DualHandLabelView extends TextView {
         }
         return true;
     }
+    private boolean icon(){String s=getText().toString();return "⌫".equals(s)||"⚙".equals(s);}
+    private final Paint systemPaint=new Paint(Paint.ANTI_ALIAS_FLAG);
+    private Paint iconPaint(){systemPaint.setTypeface(Typeface.DEFAULT);systemPaint.setTextSize(getTextSize());systemPaint.setColor(getCurrentTextColor());return systemPaint;}
+    private void drawIcon(Canvas c,String value){
+        Paint p=iconPaint();if(p.hasGlyph(value)){Rect b=new Rect();p.getTextBounds(value,0,value.length(),b);c.drawText(value,(getWidth()-b.width())/2f-b.left,(getHeight()-b.height())/2f-b.top,p);return;}
+        c.save();float size=14*getResources().getDisplayMetrics().density;c.translate((getWidth()-size)/2,(getHeight()-size)/2);c.scale(size/16,size/16);p.setStyle(Paint.Style.STROKE);p.setStrokeWidth(1.25f);
+        if("⌫".equals(value)){Path path=new Path();path.moveTo(1,8);path.lineTo(5,3);path.lineTo(15,3);path.lineTo(15,13);path.lineTo(5,13);path.close();c.drawPath(path,p);c.drawLine(7,5,12,11,p);c.drawLine(12,5,7,11,p);}
+        else {c.drawCircle(8,8,4,p);c.drawCircle(8,8,1.5f,p);for(int i=0;i<8;i++){c.save();c.rotate(i*45,8,8);c.drawLine(8,1,8,4,p);c.restore();}}
+        p.setStyle(Paint.Style.FILL);c.restore();
+    }
     @Override protected void onMeasure(int widthSpec,int heightSpec){
-        float[] size=extent(getText().toString(),getPaint());setMeasuredDimension(resolveSize((int)size[0],widthSpec),resolveSize((int)size[1],heightSpec));
+        float[] size=icon()?new float[]{16*getResources().getDisplayMetrics().density,16*getResources().getDisplayMetrics().density}:extent(getText().toString(),getPaint());setMeasuredDimension(resolveSize((int)size[0],widthSpec),resolveSize((int)size[1],heightSpec));
     }
     @Override protected void onDraw(Canvas canvas){
+        if(icon()){drawIcon(canvas,getText().toString());return;}
         String text=getText().toString(),value=text.replace("\n","");int[] points=value.codePoints().toArray();if(points.length==0)return;
         Paint paint=getPaint();paint.setColor(getCurrentTextColor());float cell=getHeight()/(float)points.length;Rect ink=new Rect();
         if(!text.contains("\n")){

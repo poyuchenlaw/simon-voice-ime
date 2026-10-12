@@ -1,0 +1,20 @@
+package com.simon.voiceime;
+import java.util.*;import java.awt.geom.*;import org.junit.Test;import static org.junit.Assert.*;
+/** Insets math executes original Android method bodies with a pixel-exact region boundary. */
+public class App689WindowHarness extends App689WindowHarnessBase {
+ static class Region{Area area=new Area();enum Op{UNION}void set(int l,int t,int r,int b){area=new Area(new Rectangle2D.Double(l,t,r-l,b-t));}void op(int l,int t,int r,int b,Op o){area.add(new Area(new Rectangle2D.Double(l,t,r-l,b-t)));}boolean contains(int x,int y){return area.contains(x+.5,y+.5);}}
+ static class View{int w,h,x,y,visibility=0;View(int w,int h){this.w=w;this.h=h;}int getWidth(){return w;}int getHeight(){return h;}void getLocationInWindow(int[] at){at[0]=x;at[1]=y;}int getVisibility(){return visibility;}static final int VISIBLE=0;List<Integer> haptics=new ArrayList<>();boolean performHapticFeedback(int kind){haptics.add(kind);return true;}}
+ static class Prefs{Map<String,Boolean> flags=new HashMap<>();boolean getBoolean(String k,boolean d){return flags.getOrDefault(k,d);}}
+ static class Service{Prefs prefs=new Prefs();Prefs getSharedPreferences(String n,int i){return prefs;}}
+ final Service service=new Service();final View root=new View(800,182),topBar=new View(800,32);boolean split=true,dualHandSelected=true;App689WindowHarness dualHandPage=this;
+ static class Insets{int contentTopInsets,visibleTopInsets,touchableInsets;static final int TOUCHABLE_INSETS_REGION=3;Region touchableRegion=new Region();}
+ View view(){return root;}boolean landscapeSplit(){return split;}
+ /* REGION */
+ /* INSETS */
+ /* FULLSCREEN */
+ /* HAPTIC */
+ @Test public void landscapeExactUnionLeavesCenterUntouchable(){root.x=3;root.y=11;Insets in=new Insets();onComputeInsets(in);assertEquals(11,in.contentTopInsets);assertEquals(11,in.visibleTopInsets);assertEquals(3,in.touchableInsets);for(int y=0;y<182;y++)for(int x=0;x<800;x++)assertEquals("pixel "+x+","+y,y<32||x<240||x>=560,in.touchableRegion.contains(x+3,y+11));assertFalse(onEvaluateFullscreenMode());}
+ @Test public void disabledSplitKeepsDefaultInsets(){split=false;Insets in=new Insets();onComputeInsets(in);assertEquals(1,in.touchableInsets);assertTrue("setting off restores inherited fullscreen policy",onEvaluateFullscreenMode());dualHandSelected=false;assertTrue(onEvaluateFullscreenMode());}
+ @Test public void globalHapticSwitchGatesAllEvents(){for(int event:new int[]{1,4,17})haptic(event);assertEquals(List.of(1,4,17),root.haptics);root.haptics.clear();service.prefs.flags.put("dual_hand_haptics",false);for(int event:new int[]{1,4,17})haptic(event);assertTrue(root.haptics.isEmpty());service.prefs.flags.put("dual_hand_haptics",true);service.prefs.flags.put("haptic_enabled",false);haptic(1);assertTrue(root.haptics.isEmpty());}
+}
+class App689WindowHarnessBase{public void onComputeInsets(App689WindowHarness.Insets out){out.touchableInsets=1;}public boolean onEvaluateFullscreenMode(){return true;}}

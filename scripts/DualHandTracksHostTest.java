@@ -35,7 +35,7 @@ public final class DualHandTracksHostTest {
         check(state.restoreAi()&&state.draft().equals(original)&&state.syllables().size()==2,"undo keeps syllables");
         check(state.applyAi("確認"),"AI apply");state.backspace();check(state.draft().equals("確")&&state.syllables().equals(List.of("ㄑㄩㄝ")),"r3 backspace");
         check(state.restoreAi()&&state.draft().codePointCount(0,state.draft().length())==1,"undo does not resurrect deleted syllable");
-        state.applyAi("𠮷");check(state.draft().length()==2,"non BMP scalar accepted");state.backspace();check(state.draft().isEmpty(),"non BMP delete");
+        check("ㄖ".equals(state.pending()),"6.89 remembers removed initial");state.discardPending();state.applyAi("𠮷");check(state.draft().length()==2,"non BMP scalar accepted");state.backspace();check(state.draft().isEmpty(),"non BMP delete");
         input(state,"4","up","B","down",2000);input(state,"5","down","E","left",3000);
         state.consume(1);check(state.syllables().equals(List.of("ㄖㄣ")),"prefix consumes only match");
         check(DualHandTracks.tail("a".repeat(55)+"𠮷",50).codePointCount(0,DualHandTracks.tail("a".repeat(55)+"𠮷",50).length())==50,"50 scalars context");

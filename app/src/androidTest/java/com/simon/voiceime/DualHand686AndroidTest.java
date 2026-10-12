@@ -12,7 +12,7 @@ public class DualHand686AndroidTest extends TapCursor677AndroidTest {
     @Override void preparePreferences(){super.preparePreferences();inst.getTargetContext().getSharedPreferences("simon_ime_prefs",0).edit().putBoolean("dual_hand_enabled",true).putBoolean("dual_hand_mode",false).putBoolean("ime_auto_upload",false).commit();}
     void startDual()throws Exception {
         ready();out=new File(inst.getTargetContext().getFilesDir(),"v666");out.mkdirs();bind();text("");tap("test_input");tap("雙");await("1 ㄅ up ㄆ left ㄇ down ㄈ");
-        await("41鍵 up ⚙ left 英數 down 收起 right 語音");await("空白 up 、 left 符號 down 。 right ，");await("送出 up ⌫ left 刪詞 down AI right 送出");
+        await("41鍵 up ⚙ left 英數 down 收起 right 語音");await("空白 up 、 left 符號 down 。 right ，");await("送出 up ⌫ left 刪字 down AI right 送出");
         inst.runOnMainSync(()->{android.content.Context c=root.getContext();while(c instanceof android.content.ContextWrapper&&!(c instanceof SimonIMEService))c=((android.content.ContextWrapper)c).getBaseContext();try{var f=SimonIMEService.class.getDeclaredField("dualHandPage");f.setAccessible(true);page=(DualHandKeyboard)f.get(c);}catch(Exception e){throw new RuntimeException(e);}});
     }
     Rect key(String key){final Rect r=new Rect();inst.runOnMainSync(()->{View v=page.view().findViewWithTag("dh-key:"+key);assertNotNull(v);assertTrue(v.getLocalVisibleRect(r));int[] at=new int[2];v.getLocationOnScreen(at);r.offset(at[0],at[1]);});return r;}
@@ -87,7 +87,7 @@ public class DualHand686AndroidTest extends TapCursor677AndroidTest {
     }
     void assertFunctionHints(boolean restore,boolean bright){
         inst.runOnMainSync(()->{
-            String[] keys={"tools","symbols","clipboard","core"};String[][] expected={{"41","⚙","英","收","語"},{"空白","、","符","。","，"},{"剪貼簿","常用詞","","",""},{"送出","⌫",restore?"還":"刪","AI","送"}};
+            String[] keys={"tools","symbols","clipboard","core"};String[][] expected={{"41","⚙","英","收","語"},{"空白","、","符","。","，"},{"剪貼簿","常用詞","","",""},{"送出","⌫",restore?"還":page.landscapeSplit()?"刪字":"刪\n字","AI","送"}};
             int normal=KeyboardTheme.resourceColor(inst.getTargetContext(),R.color.keyboard_key_text);
             for(int k=0;k<keys.length;k++){
                 FrameLayout box=(FrameLayout)page.view().findViewWithTag("dh-key:"+keys[k]);assertEquals(5,box.getChildCount());java.util.List<Rect> occupied=new java.util.ArrayList<>();
@@ -99,7 +99,7 @@ public class DualHand686AndroidTest extends TapCursor677AndroidTest {
                     float scale=label.getResources().getDisplayMetrics().scaledDensity;
                     assertTrue("all function glyphs >=12sp",label.getTextSize()/scale>=12f);
                     float[] ink=DualHandLabelView.extent(label.getText().toString(),label.getPaint());assertTrue("full drawn label fits",ink[0]<=label.getWidth()&&ink[1]<=label.getHeight());
-                    if(k==3)assertEquals((bright&&(i==0||i==3))||(restore&&i==2)?0xFF4ECCA3:normal,label.getCurrentTextColor());
+                    if(k==3)assertEquals((bright&&(i==0||i==3))||(restore&&i==2)?KeyboardTheme.resourceColor(inst.getTargetContext(),R.color.mode_append):DualHandVisuals.color(KeyboardTheme.isDark(inst.getTargetContext().getSharedPreferences("simon_ime_prefs",0).getString("keyboard_theme","system"),(inst.getTargetContext().getResources().getConfiguration().uiMode&android.content.res.Configuration.UI_MODE_NIGHT_MASK)==android.content.res.Configuration.UI_MODE_NIGHT_YES),i==0?"text":"secondary"),label.getCurrentTextColor());
                 }
                 if(k==3)assertEquals(bright,box.isActivated());
             }
@@ -112,8 +112,8 @@ public class DualHand686AndroidTest extends TapCursor677AndroidTest {
             inst.waitForIdleSync();if(count>=8)assertFunctionHints(false,count>8);
         }
         inst.runOnMainSync(()->{assertTrue(page.buffer().applyAi("一".repeat(9)));page.refresh();});inst.waitForIdleSync();await("送出 up ⌫ left 還原 down AI right 送出");assertFunctionHints(true,true);screenshot("dh-function-ai");
-        inst.runOnMainSync(()->{assertTrue(page.buffer().restoreAi());page.buffer().backspace();page.refresh();});inst.waitForIdleSync();await("送出 up ⌫ left 刪詞 down AI right 送出");assertFunctionHints(false,false);
-        inst.runOnMainSync(()->{assertTrue(page.buffer().applyAi("一".repeat(8)));page.refresh();});inst.waitForIdleSync();assertFunctionHints(true,false);
+        inst.runOnMainSync(()->{assertTrue(page.buffer().restoreAi());page.buffer().backspace();page.refresh();});inst.waitForIdleSync();await("送出 up ⌫ left 刪字 down AI right 送出");assertFunctionHints(false,false);
+        inst.runOnMainSync(()->{page.buffer().discardPending();assertTrue(page.buffer().applyAi("一".repeat(8)));page.refresh();});inst.waitForIdleSync();assertFunctionHints(true,false);
         inst.runOnMainSync(()->{page.buffer().clearBuffer();page.refresh();});inst.waitForIdleSync();assertFunctionHints(false,false);
     }
 }
