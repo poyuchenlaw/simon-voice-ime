@@ -4,11 +4,15 @@ import android.content.Context;
 import android.graphics.*;
 import android.widget.TextView;
 
-/** Pack glyph ink into vertical cells rather than adding a full text-line ascent per symbol. */
+/** Measure and draw glyph ink; newlines select vertical stacking without full line ascents. */
 final class DualHandLabelView extends TextView {
     DualHandLabelView(Context context){super(context);setIncludeFontPadding(false);}
     static float[] extent(String value,Paint paint){
         float width=0,cell=0;Rect ink=new Rect();String plain=value.replace("\n","");
+        if(!value.contains("\n")){
+            paint.getTextBounds(plain,0,plain.length(),ink);
+            return new float[]{(float)Math.ceil(Math.max(paint.measureText(plain),ink.width())),ink.height()};
+        }
         for(int cp:plain.codePoints().toArray()){
             String glyph=new String(Character.toChars(cp));paint.getTextBounds(glyph,0,glyph.length(),ink);
             width=Math.max(width,Math.max(paint.measureText(glyph),ink.width()));cell=Math.max(cell,ink.height());
@@ -31,8 +35,12 @@ final class DualHandLabelView extends TextView {
         float[] size=extent(getText().toString(),getPaint());setMeasuredDimension(resolveSize((int)size[0],widthSpec),resolveSize((int)size[1],heightSpec));
     }
     @Override protected void onDraw(Canvas canvas){
-        String value=getText().toString().replace("\n","");int[] points=value.codePoints().toArray();if(points.length==0)return;
+        String text=getText().toString(),value=text.replace("\n","");int[] points=value.codePoints().toArray();if(points.length==0)return;
         Paint paint=getPaint();paint.setColor(getCurrentTextColor());float cell=getHeight()/(float)points.length;Rect ink=new Rect();
+        if(!text.contains("\n")){
+            paint.getTextBounds(value,0,value.length(),ink);
+            canvas.drawText(value,(getWidth()-ink.width())/2f-ink.left,(getHeight()-ink.height())/2f-ink.top,paint);return;
+        }
         for(int i=0;i<points.length;i++){
             String glyph=new String(Character.toChars(points[i]));paint.getTextBounds(glyph,0,glyph.length(),ink);
             canvas.drawText(glyph,(getWidth()-ink.width())/2f-ink.left,(i+.5f)*cell-(ink.top+ink.bottom)/2f,paint);

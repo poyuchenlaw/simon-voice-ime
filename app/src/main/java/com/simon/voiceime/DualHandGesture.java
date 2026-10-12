@@ -15,7 +15,7 @@ public final class DualHandGesture {
     }
     public static Result classify(String key, float dx, float dy, long ms, float travelled, int samples) {
         Result normal = classify(dx, dy, ms, travelled, samples);
-        boolean rightHand = DualHandTable.isRight(key) || "core".equals(key);
+        boolean rightHand = DualHandTable.isRight(key) || "core".equals(key) || "clipboard".equals(key);
         if (rightHand && dx > RIGHT_HAND_RIGHT_DP && dx >= Math.abs(dy))
             return new Result("right", Math.abs(dx) < AXIS_RATIO * Math.abs(dy));
         return normal;

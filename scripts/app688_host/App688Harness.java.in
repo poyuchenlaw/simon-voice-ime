@@ -17,7 +17,7 @@ public class App688Harness {
  final SimonIMEService service=new SimonIMEService();final Hooks hooks=new Hooks();DualHandTable table;DualHandState state;
  final Map<String,Map<String,TextView>> labels=new HashMap<>();final Map<String,FrameLayout> keys=new LinkedHashMap<>();final Map<Integer,Touch> touches=new HashMap<>();
  String renderState;boolean closed;Runnable selectionTask;final Handler ui=new Handler();int compositionStart=-1,compositionEnd=-1;Snapshot witness,now=new Snapshot();int opened,markers;
- public App688Harness()throws Exception {Path a=Path.of("app/src/phone/assets/dual_hand");table=new DualHandTable(Files.newBufferedReader(a.resolve("dual_hand_map.tsv")),Files.newBufferedReader(a.resolve("left_hand.tsv")),Files.newBufferedReader(a.resolve("draft_chars.tsv")));state=new DualHandState(table);half(new String[][]{{"1","2"},{"3","4"},{"5","6"},{"tools","symbols"},{"A","B"},{"C","D"},{"E","F"},{"Ø","core"}});}
+ public App688Harness()throws Exception {Path a=Path.of("app/src/phone/assets/dual_hand");table=new DualHandTable(Files.newBufferedReader(a.resolve("dual_hand_map.tsv")),Files.newBufferedReader(a.resolve("left_hand.tsv")),Files.newBufferedReader(a.resolve("draft_chars.tsv")));state=new DualHandState(table);half(new String[][]{{"1","2"},{"3","4"},{"5","6"},{"tools","symbols"},{"A","B"},{"C","D"},{"E","F"},{"Ø","clipboard","core"}});}
  // JUnit needs a public constructor.
 
  private String labelState(){return renderState;}private void activate(String a,String b){}private boolean finish(){service.calls.add("finish");state.clearBuffer();return true;}private void changed(boolean v){}private void vibrate(){service.calls.add("vibrate");}public DualHandState buffer(){return state;}public void refresh(){}
@@ -33,7 +33,7 @@ public class App688Harness {
    float measureText(String s){return (float)font.deriveFont(size).getStringBounds(s,frc).getWidth();}
    void getTextBounds(String s,int a,int b,Rect r){java.awt.Rectangle box=font.deriveFont(size).createGlyphVector(frc,s.substring(a,b)).getPixelBounds(frc,0,0);r.left=box.x;r.top=box.y;r.right=box.x+box.width;r.bottom=box.y+box.height;}
   }}
-  static class util {static class DisplayMetrics{int widthPixels=400,heightPixels=800;float density=1,scaledDensity=1;}static class Log{static void i(String tag,String s){System.out.println(tag+": "+s);}}}
+  static class util {static class DisplayMetrics{int widthPixels=400,heightPixels=800;static float density=1,scaledDensity=1;}static class Log{static void i(String tag,String s){System.out.println(tag+": "+s);}}}
  }
  static class DualHandLabelView extends TextView {DualHandLabelView(Object c){super(c);} /* LABEL */ }
  /* KEYBOARD */
@@ -43,8 +43,14 @@ public class App688Harness {
  static class LinearLayoutManager{static final int HORIZONTAL=0;int orientation=1;LinearLayoutManager(Object c){}LinearLayoutManager(Object c,int o,boolean r){orientation=o;}}
  boolean dualHandSelected=true;ClipboardHelper clipboardHelper;Recycler recycler=new Recycler();
  List<String> display(){ /* CLIPLIST */ }
- @Test public void a_zeroInitialLabelsVisible()throws Exception {renderLabels();assertEquals("ㄧ",labels.get("Ø").get("up").value);assertEquals("ㄨ",labels.get("Ø").get("right").value);assertEquals("ㄩ",labels.get("Ø").get("down").value);assertEquals("ㄦ",labels.get("Ø").get("left").value);assertEquals("ㄧ\nㄚ",labels.get("A").get("up").value);}
- @Test public void b_bottomActions()throws Exception {String[][] want={{"to41","settings","toEnglish","hide","toVoice"},{"space","commands","symbols","。","，"},{"send","erase","restore","ai","send"}};String[] ks={"tools","symbols","core"};for(int j=0;j<3;j++)for(int i=0;i<5;i++){service.calls.clear();function(ks[j],DualHandTable.DIRECTIONS[i]);String expected=want[j][i].equals("send")?"enter":want[j][i];assertTrue(ks[j]+":"+DualHandTable.DIRECTIONS[i]+" "+service.calls,service.calls.contains(expected));}renderLabels();assertEquals("空白",labels.get("symbols").get("tap").value);assertEquals("送出",labels.get("core").get("tap").value);assertEquals("⚙",labels.get("tools").get("up").value);}
+ @Test public void a_zeroInitialLabelsVisible()throws Exception {renderLabels();assertEquals("ㄧ",labels.get("Ø").get("up").value);assertEquals("ㄨ",labels.get("Ø").get("right").value);assertEquals("ㄩ",labels.get("Ø").get("down").value);assertEquals("ㄦ",labels.get("Ø").get("left").value);assertEquals("ㄧㄚ",labels.get("A").get("up").value);}
+ @Test public void b_bottomActions()throws Exception {
+  String[][] want={{"to41","settings","toEnglish","hide","toVoice"},{"space","、","symbols","。","，"},{"clipboard","commands","vibrate","vibrate","vibrate"},{"enter","erase","restore","ai","enter"}};
+  String[] ks={"tools","symbols","clipboard","core"};
+  for(int j=0;j<4;j++)for(int i=0;i<5;i++){service.calls.clear();function(ks[j],DualHandTable.DIRECTIONS[i]);assertTrue(ks[j]+":"+DualHandTable.DIRECTIONS[i]+" "+service.calls,service.calls.contains(want[j][i]));}
+  String[] zero={"","ㄧ","ㄦ","ㄩ","ㄨ"};for(int i=0;i<5;i++)assertEquals(zero[i],table.right(null,"Ø",DualHandTable.DIRECTIONS[i]));
+  renderLabels();assertEquals("空白",labels.get("symbols").get("tap").value);assertEquals("送出",labels.get("core").get("tap").value);assertEquals("⚙",labels.get("tools").get("up").value);assertEquals("剪貼簿",labels.get("clipboard").get("tap").value);assertEquals("常用詞",labels.get("clipboard").get("up").value);
+ }
  @Test public void c_captureFiveAndDuplicates()throws Exception {Context c=new Context();clipboardHelper=new ClipboardHelper(c);for(int i=1;i<=5;i++)c.cm.copy("假文字"+i,false);assertEquals(List.of("假文字5","假文字4","假文字3","假文字2","假文字1"),clipboardHelper.getHistory());c.cm.copy("假文字2",false);assertEquals("假文字2",clipboardHelper.getHistory().get(0));assertEquals(5,clipboardHelper.getHistory().size());}
  @Test public void c_sensitiveMustNotBeCaptured()throws Exception {Context c=new Context();ClipboardHelper h=new ClipboardHelper(c);c.cm.copy("synthetic-password",true);assertTrue(h.getHistory().isEmpty());}
  @Test public void c_passwordMustNotBeCaptured()throws Exception {Context c=new Context();ClipboardHelper h=new ClipboardHelper(c);try{ClipboardHelper.class.getMethod("setPasswordField",boolean.class).invoke(h,true);}catch(NoSuchMethodException missing){fail("password input guard missing");}c.cm.copy("synthetic protected text",false);assertTrue(h.getHistory().isEmpty());}
@@ -52,20 +58,45 @@ public class App688Harness {
  @Test public void c_reopenCapturesMissedCurrent()throws Exception {Context c=new Context();ClipboardHelper h=new ClipboardHelper(c);c.cm.clip=new ClipData("missed-current",false);try{ClipboardHelper.class.getMethod("captureCurrent",String.class).invoke(h,"onStartInputView");}catch(NoSuchMethodException missing){fail("onStartInputView recovery missing");}assertEquals(List.of("missed-current"),h.getHistory());}
  @Test public void d_externalSelectionOffersMarker()throws Exception {selection(this,1,1,-1,-1);ui.run();assertEquals("external cursor move must not open grid",0,opened);assertEquals(1,markers);}
  @Test public void e_threeThemeModes() {assertEquals(0xFF1A1A2E,color("dark",false,"background"));assertEquals(0xFFF2F4F7,color("light",true,"background"));assertEquals(0xFFFFFFFF,color("system",false,"key"));assertEquals(0xFF1D2939,color("light",true,"text"));assertEquals(0xFFD0D5DD,color("light",true,"border"));assertTrue(isDark("dark",false));assertFalse(isDark("light",true));assertTrue(isDark("system",true));assertFalse(isDark("system",false));}
- @Test public void f_shortRightAndTap()throws Exception {java.lang.reflect.Method m;try{m=DualHandGesture.class.getMethod("classify",String.class,float.class,float.class,long.class,float.class,int.class);}catch(NoSuchMethodException missing){fail("right hand threshold missing");return;}for(String key:new String[]{"A","B","C","D","E","F","Ø","core"}){assertEquals("right",((DualHandGesture.Result)m.invoke(null,key,9.1f,0f,40L,9.1f,2)).direction);assertEquals("tap",((DualHandGesture.Result)m.invoke(null,key,8.9f,0f,120L,8.9f,2)).direction);assertEquals("tap",((DualHandGesture.Result)m.invoke(null,key,0f,-10f,120L,10f,2)).direction);}assertEquals("tap",((DualHandGesture.Result)m.invoke(null,"1",10f,0f,120L,10f,2)).direction);}
+ @Test public void f_shortRightAndTap()throws Exception {java.lang.reflect.Method m;try{m=DualHandGesture.class.getMethod("classify",String.class,float.class,float.class,long.class,float.class,int.class);}catch(NoSuchMethodException missing){fail("right hand threshold missing");return;}for(String key:new String[]{"A","B","C","D","E","F","Ø","clipboard","core"}){assertEquals("right",((DualHandGesture.Result)m.invoke(null,key,9.1f,0f,40L,9.1f,2)).direction);assertEquals("tap",((DualHandGesture.Result)m.invoke(null,key,8.9f,0f,120L,8.9f,2)).direction);assertEquals("tap",((DualHandGesture.Result)m.invoke(null,key,0f,-10f,120L,10f,2)).direction);}assertEquals("tap",((DualHandGesture.Result)m.invoke(null,"1",10f,0f,120L,10f,2)).direction);}
+ @Test public void g_labelDirectionsAndMinimumSize()throws Exception {
+  renderState="ㄐ";renderLabels();assertEquals("ㄧ\nㄚ",labels.get("A").get("tap").value);assertEquals("ㄧㄚ",labels.get("A").get("up").value);
+  renderState="ㄉ";renderLabels();assertEquals("ㄨ\nㄟ",labels.get("C").get("right").value);
+ }
+ @Test public void g_everyLabelAtLeast12sp()throws Exception {
+  labelSizeSp=fitLabelSize(400);keys.clear();labels.clear();half(new String[][]{{"1","2"},{"3","4"},{"5","6"},{"A","B"},{"C","D"},{"E","F"},{"tools","symbols","Ø","clipboard","core"}});
+  renderState=null;renderLabels();for(Map<String,TextView> parts:labels.values())for(TextView label:parts.values())assertTrue("all label characters >=12sp, text="+label.value+" size="+label.size,label.size>=12);
+ }
+ @Test public void g_widthConstraints()throws Exception {
+  java.lang.reflect.Method m;try{m=getClass().getDeclaredMethod("columnWidths",int.class);}catch(NoSuchMethodException missing){fail("independent bottom widths and asymmetric halves missing");return;}m.setAccessible(true);
+  for(int width:new int[]{320,360,400,600,800}){int[] cols=(int[])m.invoke(this,width);assertEquals(7,cols.length);assertTrue("midline left",cols[0]<cols[1]);assertTrue("left keys >=64dp",cols[0]/2-4>=64);assertTrue("Ø >=64dp",cols[4]-4>=64);int total=0;for(int i=2;i<7;i++)total+=cols[i];assertEquals(width-6,total);}
+ }
+ @Test public void g_fractionalDensityKeepsTouchWidths()throws Exception {
+  try{for(float density:new float[]{1.3f,1.5f,2.625f,2.75f,3f}){
+   android.util.DisplayMetrics.density=density;android.util.DisplayMetrics.scaledDensity=density;
+   int[] cols=columnWidths(Math.round(360*density));
+   assertTrue("left >=64dp at density="+density,cols[0]/2-2*dp(2)>=64*density);
+   assertTrue("Ø >=64dp at density="+density,cols[4]-2*dp(2)>=64*density);
+   for(int logical:new int[]{320,360,400}){int screen=Math.round(logical*density);int[] widths=columnWidths(screen);float sp=fitLabelSize(screen);assertTrue("fractional density geometry "+density+" screen "+logical,allRenderedLabelsFit(sp,screen,widths));}
+  }}finally{android.util.DisplayMetrics.density=android.util.DisplayMetrics.scaledDensity=1;}
+ }
  // Check rendered view bounds independently of the production fits() decision.
- boolean allRenderedLabelsFit(float sp){
+ boolean allRenderedLabelsFit(float sp){return allRenderedLabelsFit(sp,400,columnWidths(400));}
+ boolean allRenderedLabelsFit(float sp,int screenWidth,int[] columns){
   List<String> states=new ArrayList<>();states.add(null);states.addAll(Arrays.asList(DualHandTable.STATES));
   android.graphics.Paint paint=new android.graphics.Paint();paint.setTextSize(sp);
   for(String pending:states){renderState=pending;renderLabels();
-   for(String key:new String[]{"1","2","3","4","5","6","A","B","C","D","E","F","Ø"}){
+   for(String key:new String[]{"1","2","3","4","5","6","A","B","C","D","E","F","Ø","tools","symbols","clipboard","core"}){
+    boolean letter=DualHandTable.isLeft(key)||DualHandTable.isRight(key);paint.setTextSize((letter?sp:12)*android.util.DisplayMetrics.scaledDensity);
+    int inset=2*dp(2)+2*dp(1);float height=dp(78)-inset;
+    float width=DualHandTable.isLeft(key)?columns[0]/2-inset:!key.equals("Ø")&&DualHandTable.isRight(key)?columns[1]/2-inset:columns[2+List.of("tools","symbols","Ø","clipboard","core").indexOf(key)]-inset;
     List<float[]> occupied=new ArrayList<>();
     for(TextView label:keys.get(key).children){if(label.visibility==View.GONE||label.value.isEmpty())continue;
-     float[] size=DualHandLabelView.extent(label.value,paint);float w=size[0],h=size[1],x=(92.5f-w)/2,y=(72-h)/2;
+     float[] size=DualHandLabelView.extent(label.value,paint);float w=size[0],h=size[1],x=(width-w)/2,y=(height-h)/2;
      int gravity=label.layout.gravity,margin=label.layout.margin;
-     if((gravity&Gravity.LEFT)!=0)x=margin;if((gravity&Gravity.RIGHT)!=0)x=92.5f-margin-w;
-     if((gravity&Gravity.TOP)!=0)y=margin;if((gravity&Gravity.BOTTOM)!=0)y=72-margin-h;
-     if(x<0||y<0||x+w>92.5f||y+h>72)return false;
+     if((gravity&Gravity.LEFT)!=0)x=margin;if((gravity&Gravity.RIGHT)!=0)x=width-margin-w;
+     if((gravity&Gravity.TOP)!=0)y=margin;if((gravity&Gravity.BOTTOM)!=0)y=height-margin-h;
+     if(x<0||y<0||x+w>width||y+h>height)return false;
      for(float[] b:occupied)if(x<b[2]&&x+w>b[0]&&y<b[3]&&y+h>b[1])return false;
      occupied.add(new float[]{x,y,x+w,y+h});
     }
@@ -75,7 +106,11 @@ public class App688Harness {
  @Test public void g_geometryAllStatesAtReferenceFont()throws Exception {
   float sp=fitLabelSize(400);assertTrue("all rendered states fit at "+sp,allRenderedLabelsFit(sp));
   assertFalse("next quarter-sp must fail, selected="+sp,allRenderedLabelsFit(sp+.25f));
-  System.out.println("Reference font maximum/adopted="+sp+"sp; 26 states x 13 letter keys; next="+(sp+.25f)+"sp does not fit");
+  System.out.println("Reference font maximum/adopted="+sp+"sp; 26 states x 17 keys (letters plus function labels at 12sp); next="+(sp+.25f)+"sp does not fit");
+ }
+ @Test public void g_allLabelsFitOtherWidths()throws Exception {
+  for(int width:new int[]{320,360,600,800}){float sp=fitLabelSize(width);assertTrue("minimum letter size at "+width,sp>=12);assertTrue("all states/functions fit at "+width,allRenderedLabelsFit(sp,width,columnWidths(width)));}
+  for(String key:new String[]{"1","A"}){DualHandState.Stroke stroke=state.begin(key,100);state.end(stroke,"tap",false);state.drain(200);}assertTrue(state.applyAi("一"));renderLabels();assertEquals("還",labels.get("core").get("left").value);
  }
  @Test public void g_equalSizeBothHands()throws Exception {labelSizeSp=fitLabelSize(400);keys.clear();labels.clear();half(new String[][]{{"1","2"},{"3","4"},{"5","6"},{"A","B"},{"C","D"},{"E","F"},{"Ø"}});for(String key:new String[]{"1","2","3","4","5","6","A","B","C","D","E","F","Ø"}){float size=labels.get(key).get("tap").size;assertEquals(labelSizeSp,size,0);for(TextView v:labels.get(key).values())assertEquals(key,size,v.size,0);}}
 }

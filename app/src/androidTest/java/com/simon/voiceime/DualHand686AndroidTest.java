@@ -12,7 +12,7 @@ public class DualHand686AndroidTest extends TapCursor677AndroidTest {
     @Override void preparePreferences(){super.preparePreferences();inst.getTargetContext().getSharedPreferences("simon_ime_prefs",0).edit().putBoolean("dual_hand_enabled",true).putBoolean("dual_hand_mode",false).putBoolean("ime_auto_upload",false).commit();}
     void startDual()throws Exception {
         ready();out=new File(inst.getTargetContext().getFilesDir(),"v666");out.mkdirs();bind();text("");tap("test_input");tap("雙");await("1 ㄅ up ㄆ left ㄇ down ㄈ");
-        await("41鍵 up ⚙ left 英數 down 收起 right 語音");await("空白 up 工具箱 left 符號 down 。 right ，");await("送出 up ⌫ left 刪詞 down AI right 送出");
+        await("41鍵 up ⚙ left 英數 down 收起 right 語音");await("空白 up 、 left 符號 down 。 right ，");await("送出 up ⌫ left 刪詞 down AI right 送出");
         inst.runOnMainSync(()->{android.content.Context c=root.getContext();while(c instanceof android.content.ContextWrapper&&!(c instanceof SimonIMEService))c=((android.content.ContextWrapper)c).getBaseContext();try{var f=SimonIMEService.class.getDeclaredField("dualHandPage");f.setAccessible(true);page=(DualHandKeyboard)f.get(c);}catch(Exception e){throw new RuntimeException(e);}});
     }
     Rect key(String key){final Rect r=new Rect();inst.runOnMainSync(()->{View v=page.view().findViewWithTag("dh-key:"+key);assertNotNull(v);assertTrue(v.getLocalVisibleRect(r));int[] at=new int[2];v.getLocationOnScreen(at);r.offset(at[0],at[1]);});return r;}
@@ -22,6 +22,30 @@ public class DualHand686AndroidTest extends TapCursor677AndroidTest {
         long down=SystemClock.uptimeMillis();MotionEvent d=MotionEvent.obtain(down,down,0,x,y,0);try{assertTrue(ui.injectInputEvent(d,true));}finally{d.recycle();}
         Thread.sleep(100);MotionEvent move=MotionEvent.obtain(down,SystemClock.uptimeMillis(),2,x+dx,y+dy,0);try{assertTrue(ui.injectInputEvent(move,true));}finally{move.recycle();}
         Thread.sleep(20);MotionEvent up=MotionEvent.obtain(down,SystemClock.uptimeMillis(),1,x+dx,y+dy,0);try{assertTrue(ui.injectInputEvent(up,true));}finally{up.recycle();}Thread.sleep(100);inst.waitForIdleSync();
+    }
+    public void testMixedLabelsAndIndependentBottomWidths()throws Exception {
+        startDual();
+        for(String pending:new String[]{"none","ㄅ","ㄐ","ㄨ"}){
+            inst.runOnMainSync(()->{page.buffer().clearBuffer();
+                String key=pending.equals("ㄅ")?"1":pending.equals("ㄐ")?"4":"3";
+                String direction=pending.equals("ㄨ")?"right":"tap";
+                if(!pending.equals("none")){DualHandState.Stroke stroke=page.buffer().begin(key,300);page.buffer().end(stroke,direction,false);page.buffer().drain(400);}page.refresh();});
+            inst.waitForIdleSync();
+            inst.runOnMainSync(()->{
+                float density=inst.getTargetContext().getResources().getDisplayMetrics().density,scaled=inst.getTargetContext().getResources().getDisplayMetrics().scaledDensity;
+                View left=page.view().findViewWithTag("dh-key:1"),right=page.view().findViewWithTag("dh-key:A");assertTrue(left.getWidth()<right.getWidth());assertTrue(left.getWidth()/density>=64);
+                for(String key:new String[]{"1","2","3","4","5","6","A","B","C","D","E","F","Ø","tools","symbols","clipboard","core"}){
+                    FrameLayout box=(FrameLayout)page.view().findViewWithTag("dh-key:"+key);if(key.equals("Ø"))assertTrue(box.getWidth()/density>=64);
+                    java.util.List<Rect> occupied=new java.util.ArrayList<>();float sp=((TextView)box.getChildAt(0)).getTextSize()/scaled;
+                    for(int i=0;i<5;i++){
+                        TextView label=(TextView)box.getChildAt(i);assertTrue(label.getTextSize()/scaled>=12f);assertEquals(sp,label.getTextSize()/scaled,.001f);
+                        if(i==1||i==3)assertFalse("up/down horizontal",label.getText().toString().contains("\n"));
+                        if(label.getVisibility()!=View.VISIBLE)continue;
+                        Rect r=new Rect(label.getLeft(),label.getTop(),label.getRight(),label.getBottom());assertTrue(r.left>=0&&r.top>=0&&r.right<=box.getWidth()&&r.bottom<=box.getHeight());for(Rect other:occupied)assertFalse("labels overlap",Rect.intersects(r,other));occupied.add(r);
+                    }
+                }
+            });screenshot("dh-mixed-"+pending);
+        }
     }
     public void testStaticDynamicCompositionAndBackspace()throws Exception {
         startDual();screenshot("dh-static");
@@ -59,11 +83,11 @@ public class DualHand686AndroidTest extends TapCursor677AndroidTest {
     }
     public void testPanelsReplaceSurface()throws Exception {
         startDual();swipe("symbols","left");inst.runOnMainSync(()->assertEquals(View.GONE,page.view().getVisibility()));screenshot("dh-symbols");tap("，");inst.runOnMainSync(()->assertEquals(View.VISIBLE,page.view().getVisibility()));assertEquals("，",editorText(await("test_input")));
-        swipe("symbols","up");screenshot("dh-commands");tap("剪貼簿");screenshot("dh-clipboard");tap("✕");
+        swipe("clipboard","up");screenshot("dh-commands");tap("剪貼簿");screenshot("dh-clipboard");tap("✕");
     }
     void assertFunctionHints(boolean restore,boolean bright){
         inst.runOnMainSync(()->{
-            String[] keys={"tools","symbols","core"};String[][] expected={{"41鍵","⚙","英數","收起","語音"},{"空白","工具箱","符號","。","，"},{"送出","⌫",restore?"還原":"刪詞","AI","送出"}};
+            String[] keys={"tools","symbols","clipboard","core"};String[][] expected={{"41","⚙","英","收","語"},{"空白","、","符","。","，"},{"剪貼簿","常用詞","","",""},{"送出","⌫",restore?"還":"刪","AI","送"}};
             int normal=KeyboardTheme.resourceColor(inst.getTargetContext(),R.color.keyboard_key_text);
             for(int k=0;k<keys.length;k++){
                 FrameLayout box=(FrameLayout)page.view().findViewWithTag("dh-key:"+keys[k]);assertEquals(5,box.getChildCount());java.util.List<Rect> occupied=new java.util.ArrayList<>();
@@ -72,10 +96,12 @@ public class DualHand686AndroidTest extends TapCursor677AndroidTest {
                     assertEquals(expected[k][i].isEmpty()?View.GONE:View.VISIBLE,label.getVisibility());if(label.getVisibility()!=View.VISIBLE)continue;
                     Rect r=new Rect(label.getLeft(),label.getTop(),label.getRight(),label.getBottom());assertTrue("function label inside key",r.left>=0&&r.top>=0&&r.right<=box.getWidth()&&r.bottom<=box.getHeight());
                     for(Rect other:occupied)assertFalse("function labels must not overlap",Rect.intersects(r,other));occupied.add(r);
-                    assertNotNull(label.getLayout());assertEquals(1,label.getLineCount());assertEquals(0,label.getLayout().getEllipsisCount(0));assertTrue("full label fits",label.getLayout().getLineWidth(0)<=label.getWidth());
-                    if(k==2)assertEquals((bright&&(i==0||i==3))||(restore&&i==2)?0xFF4ECCA3:normal,label.getCurrentTextColor());
+                    float scale=label.getResources().getDisplayMetrics().scaledDensity;
+                    assertTrue("all function glyphs >=12sp",label.getTextSize()/scale>=12f);
+                    float[] ink=DualHandLabelView.extent(label.getText().toString(),label.getPaint());assertTrue("full drawn label fits",ink[0]<=label.getWidth()&&ink[1]<=label.getHeight());
+                    if(k==3)assertEquals((bright&&(i==0||i==3))||(restore&&i==2)?0xFF4ECCA3:normal,label.getCurrentTextColor());
                 }
-                if(k==2)assertEquals(bright,box.isActivated());
+                if(k==3)assertEquals(bright,box.isActivated());
             }
         });
     }

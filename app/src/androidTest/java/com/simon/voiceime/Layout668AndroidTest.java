@@ -82,7 +82,7 @@ public class Layout668AndroidTest extends TestCase {
     View dualHandSurface(){return root.findViewWithTag("dual-hand-keyboard");}
     JSONObject dualHandGeometry()throws Exception {
         View surface=dualHandSurface();JSONArray keys=new JSONArray();
-        for(String key:new String[]{"1","2","3","4","5","6","tools","symbols","A","B","C","D","E","F","Ø","core"}){
+        for(String key:new String[]{"1","2","3","4","5","6","tools","symbols","A","B","C","D","E","F","Ø","clipboard","core"}){
             View v=surface.findViewWithTag("dh-key:"+key);int[] at=new int[2];v.getLocationOnScreen(at);
             keys.put(new JSONObject().put("key",key).put("x",at[0]).put("y",at[1]).put("width",v.getWidth()).put("height",v.getHeight()).put("shown",v.isShown()).put("labels",String.valueOf(v.getContentDescription())));
         }

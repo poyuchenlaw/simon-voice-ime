@@ -23,5 +23,15 @@ public class DualHandGestureTest {
         DualHandGesture.Result diagonal=DualHandGesture.classify(30,30,40,90,2);
         assertEquals("right",diagonal.direction);assertTrue(diagonal.ambiguous);
     }
+    @Test public void shortRightCoversAllKeysRightOfMidline(){
+        for(String key:new String[]{"A","B","C","D","E","F","Ø","clipboard","core"}){
+            assertEquals(key,"right",DualHandGesture.classify(key,9.1f,0,40,9.1f,2).direction);
+            assertEquals(key,"tap",DualHandGesture.classify(key,9,0,120,9,2).direction);
+            assertEquals(key,"tap",DualHandGesture.classify(key,8.9f,0,120,8.9f,2).direction);
+            assertEquals(key,"tap",DualHandGesture.classify(key,0,-10,120,10,2).direction);
+        }
+        for(String key:new String[]{"1","2","3","4","5","6","tools","symbols"})
+            assertEquals(key,"tap",DualHandGesture.classify(key,10,0,120,10,2).direction);
+    }
     @Test(expected=IllegalArgumentException.class) public void invalidCoordinateRejected(){DualHandGesture.classify(Float.NaN,0,40,0);}
 }
