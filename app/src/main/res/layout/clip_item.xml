@@ -6,11 +6,10 @@
     android:layout_height="wrap_content"
     android:minHeight="44dp"
     android:orientation="horizontal"
-    android:background="#1a1a2e"
     android:layout_marginBottom="2dp"
     android:gravity="center_vertical"
     android:clickable="true"
-    android:focusable="true">
+    android:focusable="true"><tag android:id="@id/keyboard_role" android:value="background" /><tag android:id="@id/keyboard_text_role" android:value="text" /><tag android:id="@id/keyboard_content_kind" android:value="content" />
 
     <!-- 紫色標記條（標記時顯示） -->
     <View
@@ -18,8 +17,7 @@
         android:layout_width="4dp"
         android:layout_height="match_parent"
         android:minHeight="44dp"
-        android:background="#7B2FBE"
-        android:visibility="gone" />
+        android:visibility="gone" ><tag android:id="@id/keyboard_role" android:value="hint" /><tag android:id="@id/keyboard_text_role" android:value="text" /><tag android:id="@id/keyboard_content_kind" android:value="content" /></View>
 
     <CheckBox
         android:id="@+id/clipCheck"
@@ -27,23 +25,21 @@
         android:layout_height="wrap_content"
         android:paddingStart="4dp"
         android:paddingEnd="4dp"
-        android:buttonTint="#7B2FBE"
         android:visibility="gone"
         android:focusable="false"
-        android:clickable="false" />
+        android:clickable="false"  android:fontFamily="sans-serif" android:buttonTint="?android:attr/colorControlActivated"><tag android:id="@id/keyboard_role" android:value="background" /><tag android:id="@id/keyboard_text_role" android:value="text" /><tag android:id="@id/keyboard_content_kind" android:value="content" /></CheckBox>
 
     <TextView
         android:id="@+id/clipText"
         android:layout_width="0dp"
         android:layout_height="wrap_content"
         android:layout_weight="1"
-        android:textColor="#cccccc"
         android:textSize="13sp"
         android:padding="8dp"
         android:maxLines="2"
         android:ellipsize="end"
         android:clickable="false"
         android:focusable="false"
-        android:duplicateParentState="true" />
+        android:duplicateParentState="true"  android:fontFamily="sans-serif"><tag android:id="@id/keyboard_role" android:value="background" /><tag android:id="@id/keyboard_text_role" android:value="text" /><tag android:id="@id/keyboard_content_kind" android:value="content" /></TextView>
 
 </LinearLayout>

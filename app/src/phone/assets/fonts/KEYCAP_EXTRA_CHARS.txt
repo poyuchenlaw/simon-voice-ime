@@ -3,3 +3,17 @@
 # Only fixed labels not statically extractable belong here; no user content.
 # A
 ⬆␣
+
+# D
+返回鍵盤
+加入常用指令
+選擇群組：
+選擇資料夾：
+＋ 新資料夾
+確認加入
+取消
+← 返回
+📚 詞彙庫
+尚無詞彙（左滑剪貼簿項目 → 加詞彙）
+⚡+✓
+剪貼簿

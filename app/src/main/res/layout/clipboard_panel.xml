@@ -2,8 +2,7 @@
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:orientation="vertical"
-    android:background="#111122">
+    android:orientation="vertical"><tag android:id="@id/keyboard_role" android:value="background" /><tag android:id="@id/keyboard_text_role" android:value="text" /><tag android:id="@id/keyboard_content_kind" android:value="content" />
 
     <!-- 標題列 -->
     <LinearLayout
@@ -11,38 +10,33 @@
         android:layout_height="wrap_content"
         android:orientation="horizontal"
         android:padding="4dp"
-        android:gravity="center_vertical">
+        android:gravity="center_vertical"><tag android:id="@id/keyboard_role" android:value="background" /><tag android:id="@id/keyboard_text_role" android:value="text" /><tag android:id="@id/keyboard_content_kind" android:value="content" />
 
         <TextView
             android:layout_width="0dp"
             android:layout_height="wrap_content"
             android:layout_weight="1"
             android:text="📋 剪貼簿"
-            android:textColor="#e0e0e0"
             android:textSize="14sp"
-            android:paddingStart="8dp" />
+            android:paddingStart="8dp" ><tag android:id="@id/keyboard_role" android:value="background" /><tag android:id="@id/keyboard_text_role" android:value="text" /><tag android:id="@id/keyboard_content_kind" android:value="fixed" /></TextView>
 
         <Button
             android:id="@+id/btnClipVocabList"
             android:layout_width="wrap_content"
             android:layout_height="30dp"
             android:text="詞彙"
-            android:textColor="#4ECCA3"
             android:textSize="12sp"
-            android:background="@android:color/transparent"
             android:paddingStart="10dp"
-            android:paddingEnd="10dp" />
+            android:paddingEnd="10dp" ><tag android:id="@id/keyboard_role" android:value="tools" /><tag android:id="@id/keyboard_text_role" android:value="accent" /><tag android:id="@id/keyboard_content_kind" android:value="fixed" /></Button>
 
         <Button
             android:id="@+id/btnClipClose"
             android:layout_width="wrap_content"
             android:layout_height="30dp"
             android:text="✕"
-            android:textColor="#888888"
             android:textSize="14sp"
-            android:background="@android:color/transparent"
             android:paddingStart="12dp"
-            android:paddingEnd="12dp" />
+            android:paddingEnd="12dp" ><tag android:id="@id/keyboard_role" android:value="tools" /><tag android:id="@id/keyboard_text_role" android:value="secondary" /><tag android:id="@id/keyboard_content_kind" android:value="fixed" /></Button>
     </LinearLayout>
 
     <!-- 剪貼簿列表 -->
@@ -51,7 +45,7 @@
         android:layout_width="match_parent"
         android:layout_height="0dp"
         android:layout_weight="1"
-        android:padding="4dp" />
+        android:padding="4dp" ><tag android:id="@id/keyboard_role" android:value="background" /><tag android:id="@id/keyboard_text_role" android:value="text" /><tag android:id="@id/keyboard_content_kind" android:value="content" /></androidx.recyclerview.widget.RecyclerView>
 
     <!-- 標記底欄（有標記時顯示） -->
     <LinearLayout
@@ -61,43 +55,36 @@
         android:orientation="horizontal"
         android:padding="4dp"
         android:gravity="center_vertical"
-        android:visibility="gone">
+        android:visibility="gone"><tag android:id="@id/keyboard_role" android:value="background" /><tag android:id="@id/keyboard_text_role" android:value="text" /><tag android:id="@id/keyboard_content_kind" android:value="content" />
 
         <TextView
             android:id="@+id/clipMarkCount"
             android:layout_width="0dp"
             android:layout_height="wrap_content"
             android:layout_weight="1"
-            android:textColor="#4ECCA3"
             android:textSize="12sp"
-            android:paddingStart="8dp" />
+            android:paddingStart="8dp"  android:fontFamily="sans-serif"><tag android:id="@id/keyboard_role" android:value="background" /><tag android:id="@id/keyboard_text_role" android:value="accent" /><tag android:id="@id/keyboard_content_kind" android:value="content" /></TextView>
 
         <Button
             android:id="@+id/btnClipSetAiContext"
             android:layout_width="wrap_content"
             android:layout_height="28dp"
             android:text="AI 語境"
-            android:textColor="#a0a0ff"
-            android:textSize="11sp"
-            android:background="@android:color/transparent" />
+            android:textSize="11sp" ><tag android:id="@id/keyboard_role" android:value="tools" /><tag android:id="@id/keyboard_text_role" android:value="hint" /><tag android:id="@id/keyboard_content_kind" android:value="fixed" /></Button>
 
         <Button
             android:id="@+id/btnClipAddVocab"
             android:layout_width="wrap_content"
             android:layout_height="28dp"
             android:text="加詞彙"
-            android:textColor="#4ECCA3"
-            android:textSize="11sp"
-            android:background="@android:color/transparent" />
+            android:textSize="11sp" ><tag android:id="@id/keyboard_role" android:value="tools" /><tag android:id="@id/keyboard_text_role" android:value="accent" /><tag android:id="@id/keyboard_content_kind" android:value="fixed" /></Button>
 
         <Button
             android:id="@+id/btnClipClearMark"
             android:layout_width="wrap_content"
             android:layout_height="28dp"
             android:text="清除"
-            android:textColor="#888888"
-            android:textSize="11sp"
-            android:background="@android:color/transparent" />
+            android:textSize="11sp" ><tag android:id="@id/keyboard_role" android:value="tools" /><tag android:id="@id/keyboard_text_role" android:value="secondary" /><tag android:id="@id/keyboard_content_kind" android:value="fixed" /></Button>
     </LinearLayout>
 
 </LinearLayout>
