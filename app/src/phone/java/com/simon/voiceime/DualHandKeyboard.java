@@ -82,14 +82,15 @@ public final class DualHandKeyboard implements DualHandPage {
         HorizontalScrollView candidateScroll=new HorizontalScrollView(service);candidateScroll.setHorizontalScrollBarEnabled(false);candidateScroll.addView(candidates,new HorizontalScrollView.LayoutParams(-2,-1));
         topBar.addView(previewScroll,new LinearLayout.LayoutParams(0,-1,PREVIEW_FRACTION));topBar.addView(candidateScroll,new LinearLayout.LayoutParams(0,-1,1-PREVIEW_FRACTION));
         root.addView(topBar);configureLayout(service.getResources().getDisplayMetrics().widthPixels);
-        root.addOnLayoutChangeListener((v,l,t,r,b,ol,ot,or,ob)->{if(r-l!=or-ol)configureLayout(r-l);});
-        root.setOnApplyWindowInsetsListener((v,in)->{
-            if(Build.VERSION.SDK_INT>=30){android.graphics.Insets gestures=in.getInsets(WindowInsets.Type.systemGestures());safeInset=gestures.bottom;}
-            else safeInset=Build.VERSION.SDK_INT>=29?in.getSystemGestureInsets().bottom:0;
-            applyPalette();return in;
-        });
+        root.addOnLayoutChangeListener((v,l,t,r,b,ol,ot,or,ob)->{applyInsets(v.getRootWindowInsets());if(r-l!=or-ol)configureLayout(r-l);});
+        root.setOnApplyWindowInsetsListener((v,in)->{applyInsets(in);return in;});
         renderLabels();
         setHooks(new DualHandEditor(this,service,ui));
+    }
+    private void applyInsets(WindowInsets in){
+        if(in==null)return;
+        int bottom=Build.VERSION.SDK_INT>=30?in.getInsets(WindowInsets.Type.systemGestures()).bottom:Build.VERSION.SDK_INT>=29?in.getSystemGestureInsets().bottom:0;
+        if(bottom!=safeInset){safeInset=bottom;applyPalette();}
     }
     private Reader asset(String name)throws IOException {return new InputStreamReader(service.getAssets().open("dual_hand/"+name),StandardCharsets.UTF_8);}
     private int dp(float value){return Math.round(value*service.getResources().getDisplayMetrics().density);}
@@ -272,8 +273,11 @@ public final class DualHandKeyboard implements DualHandPage {
         if(!letter||!DualHandVisuals.highlight(direction,value)){if(bubble!=null)bubble.dismiss();return;}
         if(bubble==null){bubbleLabel=text("",labelSizeSp*1.25f);bubbleLabel.setGravity(Gravity.CENTER);GradientDrawable circle=new GradientDrawable();circle.setShape(GradientDrawable.OVAL);circle.setColor(0xDA203549);FrameLayout content=new FrameLayout(service);View halo=new View(service);halo.setBackground(circle);if(Build.VERSION.SDK_INT>=31)halo.setRenderEffect(RenderEffect.createBlurEffect(dp(2),dp(2),Shader.TileMode.CLAMP));content.addView(halo,new FrameLayout.LayoutParams(-1,-1));bubbleLabel.setTextColor(Color.WHITE);content.addView(bubbleLabel,new FrameLayout.LayoutParams(-1,-1));bubble=new PopupWindow(content,dp(62),dp(62),false);bubble.setBackgroundDrawable(new ColorDrawable(Color.TRANSPARENT));bubble.setClippingEnabled(false);bubble.setTouchable(false);bubble.setElevation(dp(3));}
         bubbleLabel.setText(value);bubbleLabel.setTextSize(labelSizeSp*1.25f);int[] origin=new int[2];root.getLocationOnScreen(origin);
-        int x=DualHandVisuals.clamp(origin[0]+Math.round(touch.lastX)-dp(31),dp(62),service.getResources().getDisplayMetrics().widthPixels),y=Math.max(0,origin[1]+Math.round(touch.lastY)-dp(15)-dp(62));
-        try{if(bubble.isShowing())bubble.update(x,y,-1,-1);else {bubble.showAtLocation(root,Gravity.TOP|Gravity.LEFT,x,y);blurPopup(service,bubble,dp(12));}}catch(RuntimeException hidden){bubble.dismiss();}
+        int x=DualHandVisuals.clamp(origin[0]+Math.round(touch.lastX)-dp(31),dp(62),service.getResources().getDisplayMetrics().widthPixels),y=DualHandVisuals.clamp(origin[1]+Math.round(touch.lastY)-dp(15)-dp(62),dp(62),service.getResources().getDisplayMetrics().heightPixels);
+        // Cursor and touch positions are screen coordinates; older popups use the parent window.
+        if(Build.VERSION.SDK_INT>=29)bubble.setIsLaidOutInScreen(true);
+        else {int[] window=new int[2];root.getLocationInWindow(window);x-=origin[0]-window[0];y-=origin[1]-window[1];}
+        try{if(bubble.isShowing())bubble.update(x,y,-1,-1);else {bubble.showAtLocation(root,Gravity.TOP|Gravity.LEFT,x,y);}}catch(RuntimeException hidden){bubble.dismiss();}
     }
     static void blurPopup(android.content.Context context,PopupWindow popup,int radius){
         if(Build.VERSION.SDK_INT<31)return;

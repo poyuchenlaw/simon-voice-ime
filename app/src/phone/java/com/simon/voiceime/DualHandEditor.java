@@ -274,19 +274,27 @@ final class DualHandEditor implements DualHandKeyboard.Hooks {
         RectF bounds=null;
         if(anchor!=null&&anchor.getSelectionStart()==owner.start&&anchor.getSelectionEnd()==owner.end){
             bounds=anchor.getCharacterBounds(base+text.offsetByCodePoints(0,index));
+            if(bounds!=null)bounds=new RectF(bounds);
             if(bounds==null)bounds=new RectF(anchor.getInsertionMarkerHorizontal(),anchor.getInsertionMarkerTop(),anchor.getInsertionMarkerHorizontal(),anchor.getInsertionMarkerBottom());
             anchor.getMatrix().mapRect(bounds);
         }
         if(bounds!=null&&Float.isFinite(bounds.right)&&Float.isFinite(bounds.bottom)){
             markerPopup=new PopupWindow(marker,width,height,false);markerPopup.setBackgroundDrawable(new ColorDrawable(Color.TRANSPARENT));markerPopup.setOutsideTouchable(false);markerPopup.setClippingEnabled(true);
             android.util.DisplayMetrics display=service.getResources().getDisplayMetrics();
-            int[] pos=DualHandVisuals.capsulePosition(Math.round(bounds.left/density),Math.round(bounds.top/density),Math.round(bounds.bottom/density),Math.round(display.widthPixels/density),Math.round(display.heightPixels/density));
-            try{markerPopup.showAtLocation(keyboard.view(),Gravity.TOP|Gravity.LEFT,Math.round(pos[0]*density),Math.round(pos[1]*density));}
+            Rect visible=new Rect();keyboard.view().getWindowVisibleDisplayFrame(visible);
+            if(visible.isEmpty())visible.set(0,0,display.widthPixels,display.heightPixels);
+            int x=DualHandVisuals.clamp(Math.round(bounds.left-width/2f),width,display.widthPixels);
+            int above=(int)Math.ceil(bounds.top-height/2f-8*density);
+            int y=above>=visible.top?above:(int)Math.floor(bounds.bottom+8*density-height/2f);
+            y=Math.max(visible.top,Math.min(y,visible.bottom-height));
+            if(Build.VERSION.SDK_INT>=29)markerPopup.setIsLaidOutInScreen(true);
+            else {int[] screen=new int[2],window=new int[2];keyboard.view().getLocationOnScreen(screen);keyboard.view().getLocationInWindow(window);x-=screen[0]-window[0];y-=screen[1]-window[1];}
+            try{markerPopup.showAtLocation(keyboard.view(),Gravity.TOP|Gravity.LEFT,x,y);}
             catch(RuntimeException unavailable){markerPopup=null;keyboard.candidateRow().addView(marker,new LinearLayout.LayoutParams(width,height));}
         }else keyboard.candidateRow().addView(marker,new LinearLayout.LayoutParams(width,height));
         markerExpiry=this::dismissMarker;ui.postDelayed(markerExpiry,3000);
     }
-    @Override public void cursorAnchor(CursorAnchorInfo info){anchor=info;}
+    @Override public void cursorAnchor(CursorAnchorInfo info){anchor=info;if(info==null){dismissMarker();lastTapOwner=null;}}
     private void openGrid(Snapshot owner,int base,int index,boolean composing){
         dismissMarker();
         if(tracks==null||!owner.same(snapshot()))return;cancelCall("cancelled");validate(owner);

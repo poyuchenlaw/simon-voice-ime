@@ -902,6 +902,8 @@ public class SimonIMEService extends InputMethodService {
         try {
 
         super.onStartInput(attribute, restarting);
+        if(dualHandPage!=null)dualHandPage.cursorAnchor(null);
+        if(dualHandSelected)dualHandCursorUpdates();
         cursorTapGuard.reset();invalidateExternalCandidates();
         selectionStart=attribute.initialSelStart;selectionEnd=attribute.initialSelEnd;
         cursorTapGuard.observe(selectionStart,selectionEnd,-1,-1);
@@ -4395,7 +4397,7 @@ public class SimonIMEService extends InputMethodService {
     private void ensureDualHandPage(){
         if(dualHandPage==null&&!isWatchService())try{dualHandPage=(DualHandPage)Class.forName("com.simon.voiceime.DualHandKeyboard").getConstructor(SimonIMEService.class).newInstance(this);}
         catch(Throwable error){Log.e(TAG,"Dual hand unavailable",error);dualHandSelected=false;updateStatus("雙手鍵盤載入失敗，可使用注音");}
-        if(dualHandPage!=null&&bopomofoKeyboard!=null){View view=dualHandPage.view();ViewGroup owner=(ViewGroup)bopomofoKeyboard.getParent();if(view.getParent()!=owner){if(view.getParent() instanceof ViewGroup)((ViewGroup)view.getParent()).removeView(view);owner.addView(view,owner.indexOfChild(bopomofoKeyboard)+1);}view.setVisibility(currentKeyboardMode==KeyboardMode.BOPOMOFO&&dualHandSelected?View.VISIBLE:View.GONE);}
+        if(dualHandPage!=null&&bopomofoKeyboard!=null){View view=dualHandPage.view();ViewGroup owner=(ViewGroup)bopomofoKeyboard.getParent();if(view.getParent()!=owner){if(view.getParent() instanceof ViewGroup)((ViewGroup)view.getParent()).removeView(view);owner.addView(view,owner.indexOfChild(bopomofoKeyboard)+1);}view.setVisibility(currentKeyboardMode==KeyboardMode.BOPOMOFO&&dualHandSelected?View.VISIBLE:View.GONE);if(view.getVisibility()==View.VISIBLE)dualHandCursorUpdates();else dualHandStopCursorUpdates();}
     }
     @Override public void onUpdateCursorAnchorInfo(android.view.inputmethod.CursorAnchorInfo info){
         super.onUpdateCursorAnchorInfo(info);
@@ -4411,6 +4413,7 @@ public class SimonIMEService extends InputMethodService {
         configureTextRows();switchKeyboard(KeyboardMode.BOPOMOFO);
     }
     void dualHandCursorUpdates(){InputConnection connection=getCurrentInputConnection();if(connection!=null)try{connection.requestCursorUpdates(InputConnection.CURSOR_UPDATE_IMMEDIATE|InputConnection.CURSOR_UPDATE_MONITOR);}catch(RuntimeException unsupported){}}
+    private void dualHandStopCursorUpdates(){if(dualHandPage!=null)dualHandPage.cursorAnchor(null);InputConnection connection=getCurrentInputConnection();if(connection!=null)try{connection.requestCursorUpdates(0);}catch(RuntimeException unsupported){}}
     boolean dualHandProtected(){return protectedInputField;}
     boolean dualHandSelfUpdate(){return cursorTapGuard.selfUpdate();}
     long dualHandFieldGeneration(){return fieldGeneration;}
@@ -4482,6 +4485,7 @@ public class SimonIMEService extends InputMethodService {
         voiceKeyboard.setVisibility(mode == KeyboardMode.VOICE ? View.VISIBLE : View.GONE);
         bopomofoKeyboard.setVisibility(mode == KeyboardMode.BOPOMOFO && !dualHandSelected ? View.VISIBLE : View.GONE);
         if(dualHandPage!=null)dualHandPage.view().setVisibility(mode==KeyboardMode.BOPOMOFO&&dualHandSelected?View.VISIBLE:View.GONE);
+        if(dualHandSelected&&mode==KeyboardMode.BOPOMOFO)dualHandCursorUpdates();else dualHandStopCursorUpdates();
         englishKeyboard.setVisibility(mode == KeyboardMode.ENGLISH ? View.VISIBLE : View.GONE);
         numbersKeyboard.setVisibility(mode == KeyboardMode.NUMBERS ? View.VISIBLE : View.GONE);
         // Close any open panel when switching keyboards
@@ -6786,6 +6790,7 @@ public class SimonIMEService extends InputMethodService {
         try {
 
         super.onStartInputView(info, restarting);
+        if(dualHandSelected&&currentKeyboardMode==KeyboardMode.BOPOMOFO)dualHandCursorUpdates();
         if(clipboardHelper!=null){clipboardHelper.setPasswordField(protectedInputField);clipboardHelper.captureCurrent("onStartInputView");}
         String currentPalette=getSharedPreferences("simon_ime_prefs",0).getString("keyboard_theme","system")+":"+getResources().getConfiguration().uiMode;
         if(!currentPalette.equals(dualHandAppliedPalette)){if(rootView!=null)KeyboardTheme.apply(this,rootView);dualHandAppliedPalette=currentPalette;}
@@ -6860,6 +6865,7 @@ public class SimonIMEService extends InputMethodService {
         settlePendingCorrectionCapture();
         // v6.1: 鍵盤收起 → 釋放螢幕常亮，避免非錄音時殘留 keepScreenOn 拖電
         if (rootView != null) rootView.setKeepScreenOn(false);
+        dualHandStopCursorUpdates();
         super.onFinishInputView(finishingInput);
 
         } finally {if(mainDispatchMonitor!=null)mainDispatchMonitor.endLifecycle(SystemClock.uptimeMillis());}

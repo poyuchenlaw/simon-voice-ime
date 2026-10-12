@@ -1,0 +1,63 @@
+package com.simon.voiceime;
+import java.util.*;import org.junit.Test;import static org.junit.Assert.*;
+public class App6891PopupHarness extends App6891PopupBase {
+ static class Build{static class VERSION{static int SDK_INT=34;}}
+ static class Gravity{static int TOP=48,LEFT=3;}
+ static class Color{static int TRANSPARENT=0;}
+ static class ColorDrawable{ColorDrawable(int c){}}
+ static class DisplayMetrics{int widthPixels=1050,heightPixels=2376;float density=2.625f;}
+ static class Resources{DisplayMetrics metrics=new DisplayMetrics();DisplayMetrics getDisplayMetrics(){return metrics;}}
+ static class View{static final int VISIBLE=0;int visibleTop;void getWindowVisibleDisplayFrame(Rect r){r.set(0,visibleTop,1050,2376);}WindowInsets insets;WindowInsets getRootWindowInsets(){return insets;}int sx=17,sy=1254,wx=17,wy=0,pad;void getLocationOnScreen(int[] o){o[0]=sx;o[1]=sy;}void getLocationInWindow(int[] o){o[0]=wx;o[1]=wy;}Object getParent(){return null;}void setKeepScreenOn(boolean b){}void setText(String s){}void setTextSize(float f){}void setBackgroundColor(int c){}void setPadding(int l,int t,int r,int b){pad=b;}}
+ static class InputConnection{static final int CURSOR_UPDATE_IMMEDIATE=1,CURSOR_UPDATE_MONITOR=2;List<Integer> requests=new ArrayList<>();boolean refuse,throwsUnsupported;boolean requestCursorUpdates(int f){requests.add(f);if(throwsUnsupported)throw new RuntimeException("unsupported");return !refuse;}}
+ static class Service{Resources r=new Resources();Resources getResources(){return r;}}
+ static class PopupWindow{int x,y,w,h,flags;boolean screen,showing;PopupWindow(View v,int w,int h,boolean f){this.w=w;this.h=h;}void setBackgroundDrawable(ColorDrawable d){}void setOutsideTouchable(boolean b){}void setClippingEnabled(boolean b){}void setIsLaidOutInScreen(boolean b){screen=b;}void setIsClippedToScreen(boolean b){}void setInputMethodMode(int m){}static final int INPUT_METHOD_NOT_NEEDED=2;void showAtLocation(View v,int g,int a,int b){x=a+(screen?0:v.sx-v.wx);y=b+(screen?0:v.sy-v.wy);showing=true;}boolean isShowing(){return showing;}void update(int a,int b,int w,int h){showAtLocation(currentRoot,0,a,b);}void dismiss(){showing=false;}static View currentRoot;}
+ static class Rect{int left,top,right,bottom;void set(int l,int t,int r,int b){left=l;top=t;right=r;bottom=b;}boolean isEmpty(){return right<=left||bottom<=top;}}
+ static class RectF{float left,top,right,bottom;RectF(float l,float t,float r,float b){left=l;top=t;right=r;bottom=b;}}
+ static class Touch{float lastX=500,lastY=900;}
+ static class Keyboard{View v;View view(){return v;}Row candidateRow(){return new Row();}}
+ static class Row{void addView(View v,LinearLayout.LayoutParams p){}}
+ static class LinearLayout{static class LayoutParams{LayoutParams(int w,int h){}}}
+ static class Page{Object anchor=new Object();int clears;void cursorAnchor(Object i){anchor=i;clears++;}}
+ static class ViewGroup{void removeView(View v){}}
+ static class Handler{int removes;void removeCallbacks(Runnable r){removes++;}}
+ static class EditorInfo{}
+ static class SystemClock{static long uptimeMillis(){return 0;}}
+ static class Monitor{void beginLifecycle(String s,long t){}}
+ static class Insets{int bottom;Insets(int b){bottom=b;}}
+ static class WindowInsets{Insets i;WindowInsets(int b){i=new Insets(b);}static class Type{static int systemGestures(){return 1;}}Insets getInsets(int t){return i;}Insets getSystemGestureInsets(){return i;}}
+ final Service service=new Service();final View root=new View(),bubbleLabel=new View();View marker=new View(),rootView=root;final Handler ui=new Handler();Object anchor=new Object(),lastTapOwner=new Object();Runnable markerExpiry;final Keyboard keyboard=new Keyboard();final Touch touch=new Touch();final InputConnection connection=new InputConnection();PopupWindow bubble=new PopupWindow(bubbleLabel,163,163,false),markerPopup;RectF bounds;float density=2.625f,labelSizeSp=12;int width=84,height=63,safeInset;String value="字";Page dualHandPage;boolean dualHandSelected=true,split,noConnection;Monitor mainDispatchMonitor;
+ public App6891PopupHarness(){keyboard.v=root;PopupWindow.currentRoot=root;}
+ int dp(float v){return Math.round(v*density);}int color(String s){return 0;}InputConnection getCurrentInputConnection(){return noConnection?null:connection;}void blurPopup(Service s,PopupWindow p,int r){p.flags|=4;}
+ /* BUBBLE */
+ /* MARKER */
+ /* START */
+ /* REQUEST */
+ /* PALETTE */
+ /* INSET */
+ /* LAYOUT */
+ /* STOP */
+ /* FINISH */
+ /* ANCHOR */
+ /* DISMISS */
+ void configureLayout(int w){}
+ @Test public void stopCursorMonitoringClearsPageAndRequestsZero(){dualHandPage=new Page();dualHandStopCursorUpdates();assertNull(dualHandPage.anchor);assertEquals(1,dualHandPage.clears);assertEquals(List.of(0),connection.requests);}
+ @Test public void finishInputViewStopsMonitoring(){dualHandPage=new Page();finishInputView();assertNull(dualHandPage.anchor);assertEquals(List.of(0),connection.requests);}
+ @Test public void clearingAnchorDismissesMarkerAndOldTap(){anchor=new Object();lastTapOwner=new Object();markerPopup=new PopupWindow(marker,84,63,false);markerPopup.showing=true;PopupWindow shown=markerPopup;markerExpiry=()->{};cursorAnchor(null);assertNull(anchor);assertNull(lastTapOwner);assertNull(marker);assertNull(markerPopup);assertFalse(shown.isShowing());assertNull(markerExpiry);assertEquals(1,ui.removes);}
+ @Test public void stoppingUnsupportedOrAbsentHostStillClearsPage(){dualHandPage=new Page();connection.throwsUnsupported=true;dualHandStopCursorUpdates();assertNull(dualHandPage.anchor);connection.requests.clear();noConnection=true;dualHandStopCursorUpdates();assertTrue(connection.requests.isEmpty());}
+ @Test public void bubbleNonzeroOriginMapsOnce(){bubblePosition();assertEquals(436,bubble.x);assertEquals(1952,bubble.y);bubblePosition();assertEquals(1952,bubble.y);}
+ @Test public void bubbleFourEdgesStayInsideDisplay(){for(float x:new float[]{-100,0,500,2000})for(float y:new float[]{-2000,0,900,2400}){touch.lastX=x;touch.lastY=y;bubble.dismiss();bubblePosition();assertTrue("x="+bubble.x,bubble.x>=0&&bubble.x+163<=1050);assertTrue("y="+bubble.y,bubble.y>=0&&bubble.y+163<=2376);}}
+ @Test public void bubbleNeverBlursHost(){bubblePosition();assertEquals(0,bubble.flags);}
+ @Test public void capsuleIdentityTranslatedScaledUseScreenBoundsOnce(){
+  // Hand-computed affine results: identity; +120,+900; 2x,+80,+850. Host origin is already in mapped bounds.
+  float[][] mapped={{100,900,100,950},{220,1800,220,1850},{280,2650,280,2750}};
+  int[][] expected={{58,848},{178,1748},{238,2313}};
+  for(int i=0;i<mapped.length;i++){float[] b=mapped[i];bounds=new RectF(b[0],b[1],b[2],b[3]);markerPosition();assertEquals(expected[i][0],markerPopup.x,4*density);assertEquals(expected[i][1],markerPopup.y,4*density);}
+ }
+ @Test public void capsuleRespectsStatusBarAndEightDpGap(){root.visibleTop=63;bounds=new RectF(525,89,525,170);markerPosition();assertTrue("top input flips below",markerPopup.y>=159&&markerPopup.y<=170);assertTrue((markerPopup.y+height/2f-170)/density<=8);bounds=new RectF(525,880,525,961);markerPosition();assertEquals(525,markerPopup.x+width/2f,.001f);assertTrue("center gap <=8dp",(880-markerPopup.y-height/2f)/density<=8);}
+ @Test public void capsuleTopFlipsBelow(){bounds=new RectF(100,10,100,60);markerPosition();assertEquals(50,markerPopup.y,4*density);}
+ @Test public void cursorRequestedOnEveryInputRestartAndInactiveDoesNotRequest(){onStartInput(new EditorInfo(),false);onStartInput(new EditorInfo(),true);assertEquals(List.of(3,3),connection.requests);connection.requests.clear();dualHandSelected=false;onStartInput(new EditorInfo(),false);assertTrue(connection.requests.isEmpty());}
+ @Test public void api26AlsoMapsCoordinatesOnce(){Build.VERSION.SDK_INT=26;try{bubblePosition();assertEquals(1952,bubble.y);bounds=new RectF(100,900,100,950);markerPosition();assertEquals(848,markerPopup.y,4*density);}finally{Build.VERSION.SDK_INT=34;}}
+ @Test public void consumedAncestorStillAppliesRootInsetsOnLayout(){root.insets=new WindowInsets(84);layout(root,0,0,1050,944,0,0,1050,944);assertEquals(92,root.pad);root.insets=new WindowInsets(0);layout(root,0,0,1050,944,0,0,1050,944);assertEquals(8,root.pad);}
+ @Test public void paddingIsBasePlusInsetAcrossThemesAndRepeatedDispatch(){for(int inset:new int[]{84,84,0,84,0}){inset(new WindowInsets(inset));for(int i=0;i<3;i++){applyPalette();assertEquals(8+inset,root.pad);}}}
+}
+class App6891PopupBase{void onStartInput(App6891PopupHarness.EditorInfo e,boolean r){}}
