@@ -194,6 +194,17 @@ public class SettingsActivity extends Activity {
                     prefs.edit().putBoolean("auto_vocab_enabled", isChecked).apply());
         }
 
+        TextView themeLabel=new TextView(this);themeLabel.setText("鍵盤主題");voiceSettings.addView(themeLabel);
+        android.widget.Spinner keyboardTheme=new android.widget.Spinner(this);
+        String[] themeModes={"system","dark","light"};
+        keyboardTheme.setAdapter(new android.widget.ArrayAdapter<>(this,android.R.layout.simple_spinner_dropdown_item,new String[]{"跟隨系統","深色","淺色"}));
+        String themeSaved=prefs.getString("keyboard_theme","system");int themeSelected=0;for(int i=0;i<themeModes.length;i++)if(themeModes[i].equals(themeSaved))themeSelected=i;
+        keyboardTheme.setSelection(themeSelected);voiceSettings.addView(keyboardTheme);
+        keyboardTheme.setOnItemSelectedListener(new android.widget.AdapterView.OnItemSelectedListener(){
+            public void onNothingSelected(android.widget.AdapterView<?> parent){}
+            public void onItemSelected(android.widget.AdapterView<?> parent,android.view.View view,int position,long id){prefs.edit().putString("keyboard_theme",themeModes[position]).apply();}
+        });
+
         CheckBox dualHand=findViewById(R.id.checkDualHandEnabled);
         dualHand.setChecked(prefs.getBoolean("dual_hand_enabled",true));
         dualHand.setOnCheckedChangeListener((button,enabled)->prefs.edit().putBoolean("dual_hand_enabled",enabled).putBoolean("dual_hand_mode",false).apply());

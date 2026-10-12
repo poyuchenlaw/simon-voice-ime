@@ -6,11 +6,19 @@ public final class DualHandGesture {
     public static final long FAST_MS = 80, RACE_MS = 40;
     // Tunable definition of a linear fast stroke: endpoint distance / travelled distance.
     public static final float LINEAR_RATIO = .85f;
+    public static final float RIGHT_HAND_RIGHT_DP = SWIPE_DP / 2;
     private DualHandGesture() {}
     public static final class Result {
         public final String direction;
         public final boolean ambiguous;
         Result(String direction, boolean ambiguous) { this.direction=direction; this.ambiguous=ambiguous; }
+    }
+    public static Result classify(String key, float dx, float dy, long ms, float travelled, int samples) {
+        Result normal = classify(dx, dy, ms, travelled, samples);
+        boolean rightHand = DualHandTable.isRight(key) || "core".equals(key);
+        if (rightHand && dx > RIGHT_HAND_RIGHT_DP && dx >= Math.abs(dy))
+            return new Result("right", Math.abs(dx) < AXIS_RATIO * Math.abs(dy));
+        return normal;
     }
     public static Result classify(float dx, float dy, long ms, float travelled) {
         return classify(dx,dy,ms,travelled,0);

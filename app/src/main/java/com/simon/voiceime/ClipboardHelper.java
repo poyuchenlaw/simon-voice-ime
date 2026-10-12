@@ -1,6 +1,7 @@
 package com.simon.voiceime;
 
 import android.content.ClipData;
+import android.content.ClipDescription;
 import android.content.ClipboardManager;
 import android.content.Context;
 import android.content.SharedPreferences;
@@ -28,6 +29,9 @@ public class ClipboardHelper {
     }
 
     private ClipVocabListener vocabListener;
+    private boolean passwordField;
+
+    public void setPasswordField(boolean password) { passwordField = password; }
 
     public void setVocabListener(ClipVocabListener listener) {
         this.vocabListener = listener;
@@ -58,26 +62,36 @@ public class ClipboardHelper {
 
     private void listenClipboard() {
         ClipboardManager cm = (ClipboardManager) context.getSystemService(Context.CLIPBOARD_SERVICE);
-        if (cm != null) {
-            cm.addPrimaryClipChangedListener(() -> {
-                ClipData clip = cm.getPrimaryClip();
-                if (clip != null && clip.getItemCount() > 0) {
-                    CharSequence text = clip.getItemAt(0).getText();
-                    if (text != null && text.length() > 0) {
-                        addToHistory(text.toString());
-                        if (vocabListener != null) {
-                            CharSequence lbl = clip.getDescription().getLabel();
-                            vocabListener.onNewClip(text.toString(),
-                                    lbl != null ? lbl.toString() : "");
-                        }
-                    }
-                }
-            });
+        if (cm != null) cm.addPrimaryClipChangedListener(() -> captureCurrent("listener"));
+    }
+
+    public void captureCurrent(String source) {
+        if (passwordField) return;
+        try {
+            ClipboardManager cm = (ClipboardManager) context.getSystemService(Context.CLIPBOARD_SERVICE);
+            ClipData clip = cm == null ? null : cm.getPrimaryClip();
+            if (clip == null || clip.getItemCount() == 0) return;
+            ClipDescription description = clip.getDescription();
+            // The literal also works before API 33 introduced the named constant.
+            if (description.getExtras() != null && description.getExtras().getBoolean("android.content.extra.IS_SENSITIVE", false)) return;
+            CharSequence text = clip.getItemAt(0).getText();
+            if (text == null || text.toString().trim().isEmpty()) return;
+            synchronized (this) {
+                if (!history.isEmpty() && history.get(0).equals(text.toString())) return;
+                addToHistory(text.toString());
+            }
+            Log.i(TAG, "capture source=" + source + " items=" + getHistory().size());
+            if (vocabListener != null) {
+                CharSequence label = description.getLabel();
+                vocabListener.onNewClip(text.toString(), label == null ? "" : label.toString());
+            }
+        } catch (SecurityException unavailable) {
+            Log.w(TAG, "Clipboard capture unavailable: " + source, unavailable);
         }
     }
 
     public synchronized void addToHistory(String text) {
-        if (text == null || text.trim().isEmpty()) return;
+        if (passwordField || text == null || text.trim().isEmpty()) return;
         // Remove if already exists (move to top)
         history.remove(text);
         history.add(0, text);
@@ -88,7 +102,7 @@ public class ClipboardHelper {
         saveHistory();
     }
 
-    public List<String> getHistory() {
+    public synchronized List<String> getHistory() {
         return new ArrayList<>(history);
     }
 

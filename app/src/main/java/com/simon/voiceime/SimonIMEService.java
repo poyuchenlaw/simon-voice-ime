@@ -918,6 +918,7 @@ public class SimonIMEService extends InputMethodService {
             discardRetainedTextComposition();
         else if(retained&&!protectedInputField)retainedTextNeedsReclaim=true;
         retainedTextField=field;
+        if(clipboardHelper!=null)clipboardHelper.setPasswordField(protectedInputField);
         if(dualHandPage!=null&&(!field.equals(dualHandField)||protectedInputField!=wasProtected))dualHandPage.clear();
         dualHandField=field;
         if(sentencePhone!=null)sentencePhone.changed(true);
@@ -1164,6 +1165,7 @@ public class SimonIMEService extends InputMethodService {
         updateCompleteTypingHint(false);
         updateModeUI();
         updateArmedIndicator();
+        KeyboardTheme.apply(this,rootView);
         return rootView;
 
         } finally {if(mainDispatchMonitor!=null)mainDispatchMonitor.endLifecycle(SystemClock.uptimeMillis());}
@@ -1254,7 +1256,7 @@ public class SimonIMEService extends InputMethodService {
         LinearLayout panel = new LinearLayout(this);
         panel.setOrientation(LinearLayout.VERTICAL);
         panel.setPadding(dp(6), dp(6), dp(6), dp(6));
-        panel.setBackgroundColor(0xFF1A1A2E);
+        panel.setBackgroundColor(keyboardColor(R.color.keyboard_bg));
         GridLayout grid = new GridLayout(this);
         grid.setColumnCount(columns);
         grid.setRowCount((int) Math.ceil(symbols.length / (double) columns));
@@ -1262,10 +1264,10 @@ public class SimonIMEService extends InputMethodService {
             String symbol=symbols[index];final int selected=index;
             TextView button = new TextView(this);
             button.setText(symbol);
-            button.setTextColor(0xFFE0E0E0);
+            button.setTextColor(keyboardColor(R.color.keyboard_key_text));
             button.setTextSize(18);
             button.setGravity(Gravity.CENTER);
-            button.setBackgroundColor(0xFF16213E);
+            button.setBackgroundResource(R.drawable.keyboard_key);
             button.setClickable(true);
             button.setFocusable(true);
             button.setEnabled(!symbol.isEmpty());
@@ -1279,6 +1281,7 @@ public class SimonIMEService extends InputMethodService {
             grid.addView(button, lp);
         }
         panel.addView(grid);
+        KeyboardTheme.apply(this,panel);
         return panel;
     }
 
@@ -2088,6 +2091,10 @@ public class SimonIMEService extends InputMethodService {
         if(dualHandSelected&&dualHandPage!=null){panelContainer.getLayoutParams().height=Math.max(dp(220),dualHandPage.view().getHeight());dualHandPage.reconfigure();dualHandPage.view().setVisibility(View.GONE);}
         else panelContainer.getLayoutParams().height=dp(220);
         activePanel = panel;
+        panelContainer.setOnHierarchyChangeListener(new ViewGroup.OnHierarchyChangeListener(){
+            public void onChildViewAdded(View parent,View child){KeyboardTheme.apply(SimonIMEService.this,child);}
+            public void onChildViewRemoved(View parent,View child){}
+        });
 
         switch (panel) {
             case CLIPBOARD:
@@ -2183,8 +2190,7 @@ public class SimonIMEService extends InputMethodService {
         recycler.setLayoutManager(new LinearLayoutManager(this));
 
         List<String> history = clipboardHelper.getHistory();
-        final List<String> items=dualHandSelected?new ArrayList<>(history.subList(0,Math.min(10,history.size()))):history;
-        if(dualHandSelected)recycler.setLayoutManager(new LinearLayoutManager(this,LinearLayoutManager.HORIZONTAL,false));
+        final List<String> items=history;
         ClipAdapter adapter = new ClipAdapter(items, position -> {
             if (position >= 0 && position < items.size()) {
                 if (pasteClipboardText(items.get(position))) closePanel();
@@ -2193,6 +2199,7 @@ public class SimonIMEService extends InputMethodService {
         recycler.setAdapter(adapter);
 
         updateClipMarkFooter();
+        KeyboardTheme.apply(this, panelContainer);
 
         if(dualHandSelected)return;
         // 右滑 → 加入常用指令；左滑 → 標記/取消標記
@@ -2406,6 +2413,7 @@ public class SimonIMEService extends InputMethodService {
         @Override public void onBindViewHolder(@NonNull VH holder, int position) {
             String text = items.get(position);
             holder.text.setText(text);
+            KeyboardTheme.apply(SimonIMEService.this, holder.itemView);
             boolean marked = markedClips.contains(text);
             holder.accent.setVisibility(marked ? View.VISIBLE : View.GONE);
             holder.checkBox.setVisibility(marked ? View.VISIBLE : View.GONE);
@@ -2466,6 +2474,8 @@ public class SimonIMEService extends InputMethodService {
 
         // Build tabs
         tabContainer.removeAllViews();
+        Button clipboardTab = new Button(this);clipboardTab.setText("剪貼簿");
+        clipboardTab.setOnClickListener(v -> showPanel(Panel.CLIPBOARD));tabContainer.addView(clipboardTab);
         for (String name : groupNames) {
             Button tab = new Button(this);
             tab.setText(name);
@@ -4434,15 +4444,17 @@ public class SimonIMEService extends InputMethodService {
     }
     void dualHandFunction(String key){
         if("to41".equals(key)){if(dualHandPage!=null)dualHandPage.reconfigure();dualHandSelected=false;getSharedPreferences("simon_ime_prefs",MODE_PRIVATE).edit().putBoolean("dual_hand_mode",false).apply();configureTextRows();switchKeyboard(KeyboardMode.BOPOMOFO);}
+        else if("settings".equals(key))startActivity(new Intent(this,SettingsActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
         else if("enter".equals(key))handleEnterKey();else onTypingKeyPressed(key);
     }
+    int keyboardColor(int resource){return KeyboardTheme.resourceColor(this,resource);}
     void dualHandPanel(String kind){
         if("symbols".equals(kind)){
             closePanel();panelContainer.setVisibility(View.VISIBLE);
             if(dualHandPage!=null){panelContainer.getLayoutParams().height=Math.max(dp(220),dualHandPage.view().getHeight());dualHandPage.reconfigure();dualHandPage.view().setVisibility(View.GONE);}
             LinearLayout panel=new LinearLayout(this);panel.setOrientation(LinearLayout.VERTICAL);
-            TextView back=new TextView(this);back.setText("返回鍵盤");back.setTextColor(0xFFFFFFFF);back.setPadding(dp(8),dp(8),dp(8),dp(8));back.setOnClickListener(v->closePanel());panel.addView(back);
-            panel.addView(buildSymbolPopupContent(SymbolPopupSpec.FULL_WIDTH,5,"，"));panelContainer.addView(panel);
+            TextView back=new TextView(this);back.setText("返回鍵盤");back.setTextColor(keyboardColor(R.color.keyboard_key_text));back.setPadding(dp(8),dp(8),dp(8),dp(8));back.setOnClickListener(v->closePanel());panel.addView(back);
+            panel.addView(buildSymbolPopupContent(SymbolPopupSpec.FULL_WIDTH,5,"，"));panelContainer.addView(panel);KeyboardTheme.apply(this,panel);
         }else showPanel("clipboard".equals(kind)?Panel.CLIPBOARD:Panel.COMMANDS);
     }
     @Override public void onConfigurationChanged(android.content.res.Configuration next){
@@ -4695,7 +4707,7 @@ public class SimonIMEService extends InputMethodService {
                 ((TextView) shiftKey).setTextColor(0xFFFFFFFF); // white = shift active
             } else {
                 ((TextView) shiftKey).setText("⬆");
-                ((TextView) shiftKey).setTextColor(getResources().getColor(R.color.key_text, null));
+                ((TextView) shiftKey).setTextColor(keyboardColor(R.color.key_text));
             }
         }
     }
@@ -5005,7 +5017,7 @@ public class SimonIMEService extends InputMethodService {
     private void configureTextRows(){
         boolean text=textLayoutSelected();if(zhuyinInput!=null)zhuyinInput.setTextLayout(text);
         if(text&&(boTextCount==null||boTextCount.getParent()!=bopomofoKeyboard)&&bopomofoKeyboard instanceof ViewGroup){
-            boTextCount=new TextView(this);boTextCount.setTag("composition-count");boTextCount.setTextSize(11);boTextCount.setTextColor(getColor(R.color.key_text));boTextCount.setPadding(dp(12),0,dp(12),0);
+            boTextCount=new TextView(this);boTextCount.setTag("composition-count");boTextCount.setTextSize(11);boTextCount.setTextColor(keyboardColor(R.color.key_text));boTextCount.setPadding(dp(12),0,dp(12),0);
             ((ViewGroup)bopomofoKeyboard).addView(boTextCount,1,new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,dp(18)));
         }
         if(boTextCount!=null)boTextCount.setVisibility(text?View.VISIBLE:View.GONE);updateTextCount();
@@ -5315,7 +5327,7 @@ public class SimonIMEService extends InputMethodService {
 
     private TextView sentenceUndo(){
         TextView item=new TextView(this);item.setText("復原");item.setTag("sentence-option");item.setContentDescription("復原 AI 選項");
-        item.setTextColor(getColor(R.color.key_text));item.setTextSize(16);item.setGravity(Gravity.CENTER);item.setPadding(dp(12),0,dp(12),0);
+        item.setTextColor(keyboardColor(R.color.key_text));item.setTextSize(16);item.setGravity(Gravity.CENTER);item.setPadding(dp(12),0,dp(12),0);
         item.setOnClickListener(v->sentencePhone.undo());return item;
     }
     private final java.util.Map<Integer,View> rowEngineViews=new java.util.LinkedHashMap<>();
@@ -5324,7 +5336,7 @@ public class SimonIMEService extends InputMethodService {
         android.text.SpannableString diff=new android.text.SpannableString(text);
         if(!text.isEmpty())diff.setSpan(new android.text.style.BackgroundColorSpan(0xff805900),0,text.length(),android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
         TextView item=new TextView(this);item.setTag("sentence-option");item.setText(diff);item.setContentDescription(("local".equals(candidate.optString("source"))?"本機校正 ":"AI 選項 ")+text);
-        item.setTextColor(getColor(R.color.key_text));item.setTextSize(16);item.setGravity(Gravity.CENTER);item.setPadding(dp(12),0,dp(12),0);
+        item.setTextColor(keyboardColor(R.color.key_text));item.setTextSize(16);item.setGravity(Gravity.CENTER);item.setPadding(dp(12),0,dp(12),0);
         item.getViewTreeObserver().addOnDrawListener(new android.view.ViewTreeObserver.OnDrawListener(){
             boolean done;
             public void onDraw(){if(done||!item.isShown())return;done=true;sentencePhone.rendered(candidate,((ViewGroup)item.getParent()).indexOfChild(item)+1);item.post(()->{if(item.getViewTreeObserver().isAlive())item.getViewTreeObserver().removeOnDrawListener(this);});}
@@ -5738,7 +5750,7 @@ public class SimonIMEService extends InputMethodService {
         String[] labels={"📋 剪貼簿","⚡ 常用詞"};Panel[] panels={Panel.CLIPBOARD,Panel.COMMANDS};
         for(int i=0;i<labels.length;i++){
             TextView chip=new TextView(this);chip.setText(labels[i]);chip.setContentDescription(labels[i]);
-            chip.setGravity(Gravity.CENTER);chip.setTextSize(15f);chip.setTextColor(getColor(R.color.key_text));
+            chip.setGravity(Gravity.CENTER);chip.setTextSize(15f);chip.setTextColor(keyboardColor(R.color.key_text));
             chip.setBackgroundResource(R.color.key_bg);chip.setPadding(dp(12),0,dp(12),0);
             final Panel panel=panels[i];chip.setOnClickListener(v->togglePanel(panel));
             boCandidateItems.addView(chip,new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT,dp(48)));
@@ -5766,7 +5778,7 @@ public class SimonIMEService extends InputMethodService {
             TextView candidate = new CandidateChoiceView(this);
             candidate.setGravity(Gravity.CENTER);
             candidate.setTextSize(15f);
-            candidate.setTextColor(getColor(R.color.key_text));
+            candidate.setTextColor(keyboardColor(R.color.key_text));
             candidate.setBackgroundResource(R.color.key_bg);
             candidate.setSingleLine(true);
             candidate.setEllipsize(android.text.TextUtils.TruncateAt.END);
@@ -6767,6 +6779,9 @@ public class SimonIMEService extends InputMethodService {
         try {
 
         super.onStartInputView(info, restarting);
+        if(clipboardHelper!=null){clipboardHelper.setPasswordField(protectedInputField);clipboardHelper.captureCurrent("onStartInputView");}
+        if(rootView!=null)KeyboardTheme.apply(this,rootView);
+        if(dualHandPage!=null){KeyboardTheme.apply(this,dualHandPage.view());dualHandPage.reconfigure();}
         if (isWatchService()) return;
         drainPendingVoiceQueue();
         configureTextRows();

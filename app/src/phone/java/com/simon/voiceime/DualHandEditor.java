@@ -26,7 +26,12 @@ final class DualHandEditor implements DualHandKeyboard.Hooks {
     private Call call;
     private Runnable deadline,selectionTask;
     private long requestedRevision,sent;
-    private PopupWindow popup;
+    private PopupWindow popup,markerPopup;
+    private TextView marker;
+    private Runnable markerExpiry;
+    private long lastTapTime=-1000;
+    private int lastTapPosition=-1;
+    private Snapshot lastTapOwner;
     private CursorAnchorInfo anchor;
     private int compositionStart=-1,compositionEnd=-1;
     private Snapshot witness,beforeWrite;
@@ -109,6 +114,7 @@ final class DualHandEditor implements DualHandKeyboard.Hooks {
     }
     @Override public void changed(DualHandKeyboard page){
         if(closed)return;
+        dismissMarker();
         if(call!=null&&requestedRevision!=page.buffer().revision())cancelCall("cancelled");
         if(!page.buffer().aiShown())warnings=Collections.emptyList();
         candidates=tracks==null||page.buffer().aiShown()?Collections.emptyList():tracks.candidates(page.buffer().syllables());
@@ -116,7 +122,7 @@ final class DualHandEditor implements DualHandKeyboard.Hooks {
         LinearLayout row=page.candidateRow();row.removeAllViews();
         for(int i=0;i<candidates.size();i++){
             final int rank=i;DualHandTracks.Choice choice=candidates.get(i);TextView item=new TextView(service);
-            item.setText(choice.text);item.setTextSize(19);item.setGravity(Gravity.CENTER);item.setTextColor(service.getColor(R.color.keyboard_key_text));item.setContentDescription("短句候選 "+choice.text);
+            item.setText(choice.text);item.setTextSize(19);item.setGravity(Gravity.CENTER);item.setTextColor(service.keyboardColor(R.color.keyboard_key_text));item.setContentDescription("短句候選 "+choice.text);
             row.addView(item,new LinearLayout.LayoutParams(0,-1,1));item.setOnClickListener(v->choosePrefix(choice,rank));
         }
         if(!key.equals(shownKey)){shownKey=key;event("dh_cand","shown",candidates.size(),-1,0,false);}
@@ -218,7 +224,7 @@ final class DualHandEditor implements DualHandKeyboard.Hooks {
             if(now!=null&&composingLeft>=0&&composingEnd-composingLeft==current.length()&&current.equals(now.range(composingLeft,composingEnd))){compositionStart=composingLeft;this.compositionEnd=composingEnd;}
             witness=now;return;
         }
-        cancelCall("stale");dismissGrid();
+        cancelCall("stale");dismissGrid();dismissMarker();
         if(now==null||now.start!=start||now.end!=end)return;
         if(start!=end)return;
         int left=composingLeft>=0?composingLeft:compositionStart;
@@ -227,11 +233,49 @@ final class DualHandEditor implements DualHandKeyboard.Hooks {
         final int base=inComposition?left:now.offset;
         int utf=Math.max(base,start-(start>base?1:0));if(utf>now.offset&&Character.isLowSurrogate(now.text.charAt(utf-now.offset)))utf--;
         final int index=now.text.codePointCount(base-now.offset,utf-now.offset);final boolean composing=inComposition;
-        selectionTask=()->{selectionTask=null;if(now.same(snapshot()))openGrid(now,base,index,composing);};ui.postDelayed(selectionTask,100);
+        long time=SystemClock.uptimeMillis();
+        boolean doubleTap=lastTapOwner!=null&&lastTapOwner.sameText(now)&&lastTapPosition==start&&time-lastTapTime<=500;
+        lastTapOwner=now;lastTapPosition=start;lastTapTime=time;
+        if(doubleTap){lastTapOwner=null;openGrid(now,base,index,composing);}
+        else {selectionTask=()->{selectionTask=null;if(now.same(snapshot()))showMarker(now,base,index,composing);};ui.postDelayed(selectionTask,100);}
         witness=now;
+    }
+    @Override public void keyPressed(){
+        dismissMarker();lastTapOwner=null;
+        if(selectionTask!=null)ui.removeCallbacks(selectionTask);selectionTask=null;
+    }
+    private void dismissMarker(){
+        if(markerExpiry!=null)ui.removeCallbacks(markerExpiry);markerExpiry=null;
+        if(markerPopup!=null){markerPopup.dismiss();markerPopup=null;}
+        if(marker!=null&&marker.getParent() instanceof ViewGroup)((ViewGroup)marker.getParent()).removeView(marker);
+        marker=null;
+    }
+    private void showMarker(Snapshot owner,int base,int index,boolean composing){
+        dismissMarker();if(!owner.same(snapshot()))return;
+        String text=composing?keyboard.buffer().draft():owner.text;
+        if(index<0||index>=text.codePointCount(0,text.length()))return;
+        int diameter=Math.round(28*service.getResources().getDisplayMetrics().density);
+        marker=new TextView(service);marker.setText("✎");marker.setTextSize(14);marker.setGravity(Gravity.CENTER);
+        marker.setContentDescription("開啟校正選字");marker.setTag("dh-correction-marker");
+        android.graphics.drawable.GradientDrawable circle=new android.graphics.drawable.GradientDrawable();circle.setShape(android.graphics.drawable.GradientDrawable.OVAL);circle.setColor(service.keyboardColor(R.color.keyboard_key_bg));circle.setStroke(Math.max(1,Math.round(service.getResources().getDisplayMetrics().density)),service.keyboardColor(R.color.keyboard_key_border));marker.setBackground(circle);marker.setTextColor(service.keyboardColor(R.color.keyboard_key_text));
+        marker.setOnClickListener(v->{dismissMarker();if(owner.same(snapshot()))openGrid(owner,base,index,composing);});
+        RectF bounds=null;
+        if(anchor!=null&&anchor.getSelectionStart()==owner.start&&anchor.getSelectionEnd()==owner.end){
+            bounds=anchor.getCharacterBounds(base+text.offsetByCodePoints(0,index));
+            if(bounds==null)bounds=new RectF(anchor.getInsertionMarkerHorizontal(),anchor.getInsertionMarkerTop(),anchor.getInsertionMarkerHorizontal(),anchor.getInsertionMarkerBottom());
+            anchor.getMatrix().mapRect(bounds);
+        }
+        if(bounds!=null&&Float.isFinite(bounds.right)&&Float.isFinite(bounds.bottom)){
+            markerPopup=new PopupWindow(marker,diameter,diameter,false);markerPopup.setBackgroundDrawable(new ColorDrawable(Color.TRANSPARENT));markerPopup.setOutsideTouchable(false);markerPopup.setClippingEnabled(true);
+            android.util.DisplayMetrics display=service.getResources().getDisplayMetrics();
+            try{markerPopup.showAtLocation(keyboard.view(),Gravity.TOP|Gravity.LEFT,Math.max(0,Math.min(Math.round(bounds.right),display.widthPixels-diameter)),Math.max(0,Math.min(Math.round(bounds.bottom),display.heightPixels-diameter)));}
+            catch(RuntimeException unavailable){markerPopup=null;keyboard.candidateRow().addView(marker,new LinearLayout.LayoutParams(diameter,diameter));}
+        }else keyboard.candidateRow().addView(marker,new LinearLayout.LayoutParams(diameter,diameter));
+        markerExpiry=this::dismissMarker;ui.postDelayed(markerExpiry,3000);
     }
     @Override public void cursorAnchor(CursorAnchorInfo info){anchor=info;}
     private void openGrid(Snapshot owner,int base,int index,boolean composing){
+        dismissMarker();
         if(tracks==null||!owner.same(snapshot()))return;cancelCall("cancelled");validate(owner);
         String text=composing?keyboard.buffer().draft():owner.text;int[] points=text.codePoints().toArray();
         if(index<0||index>=points.length)return;
@@ -290,7 +334,7 @@ final class DualHandEditor implements DualHandKeyboard.Hooks {
         catch(IOException failure){service.dualHandStatus("個人記憶未儲存，文字已保留");}
     }
     private void dismissGrid(){if(popup!=null){popup.dismiss();popup=null;}}
-    @Override public void cancel(DualHandKeyboard page,boolean clear){cancelCall("cancelled");dismissGrid();if(selectionTask!=null)ui.removeCallbacks(selectionTask);selectionTask=null;if(clear){forgetPositions();witness=null;compositionStart=compositionEnd=-1;anchor=null;}}
+    @Override public void cancel(DualHandKeyboard page,boolean clear){dismissMarker();lastTapOwner=null;cancelCall("cancelled");dismissGrid();if(selectionTask!=null)ui.removeCallbacks(selectionTask);selectionTask=null;if(clear){forgetPositions();witness=null;compositionStart=compositionEnd=-1;anchor=null;}}
     @Override public void close(DualHandKeyboard page){closed=true;}
     @Override public List<Integer> warnings(DualHandKeyboard page){return page.buffer().aiShown()?tracks==null?allIndices(page.buffer().syllables().size()):tracks.mismatches(page.buffer().draft(),page.buffer().syllables()):Collections.emptyList();}
     private void event(String name,String action,int count,int rank,long latency,boolean restored){event(name,action,count,rank,latency,restored,false);}
