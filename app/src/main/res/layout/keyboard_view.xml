@@ -19,27 +19,37 @@
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:text=""
-        android:textColor="@color/status_text"
         android:textSize="11sp"
         android:gravity="center"
         android:paddingTop="2dp"
         android:paddingBottom="1dp"
-        android:visibility="gone" />
+        android:visibility="gone">
+        <tag android:id="@id/keyboard_role" android:value="background" />
+        <tag android:id="@id/keyboard_text_role" android:value="secondary" />
+        <tag android:id="@id/keyboard_content_kind" android:value="content" />
+    </TextView>
 
     <TextView
         android:id="@+id/pendingVoiceCandidateNotice"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:textColor="@color/key_text"
         android:textSize="14sp"
         android:gravity="center"
         android:accessibilityLiveRegion="polite"
-        android:visibility="gone" />
+        android:visibility="gone">
+        <tag android:id="@id/keyboard_role" android:value="background" />
+        <tag android:id="@id/keyboard_text_role" android:value="text" />
+        <tag android:id="@id/keyboard_content_kind" android:value="content" />
+    </TextView>
     <Button
         android:id="@+id/notificationEntry"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:visibility="gone" />
+        android:visibility="gone">
+        <tag android:id="@id/keyboard_role" android:value="background" />
+        <tag android:id="@id/keyboard_text_role" android:value="text" />
+        <tag android:id="@id/keyboard_content_kind" android:value="content" />
+    </Button>
 
     <!-- 預覽文字 -->
     <TextView
@@ -47,10 +57,13 @@
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:text=""
-        android:textColor="@color/key_text"
         android:textSize="14sp"
         android:gravity="center"
-        android:visibility="gone" />
+        android:visibility="gone">
+        <tag android:id="@id/keyboard_role" android:value="background" />
+        <tag android:id="@id/keyboard_text_role" android:value="text" />
+        <tag android:id="@id/keyboard_content_kind" android:value="content" />
+    </TextView>
 
     <!-- ========== 語音鍵盤（預設顯示） ========== -->
     <com.simon.voiceime.KeyboardTouchLayout
@@ -61,6 +74,8 @@
         android:paddingStart="3dp"
         android:paddingEnd="2dp"
         android:paddingBottom="3dp">
+            <tag android:id="@id/keyboard_role" android:value="background" />
+            <tag android:id="@id/keyboard_text_role" android:value="text" />
 
         <!-- 左側：功能列 + 編輯列 -->
         <LinearLayout
@@ -68,6 +83,8 @@
             android:layout_height="wrap_content"
             android:layout_weight="3"
             android:orientation="vertical">
+                <tag android:id="@id/keyboard_role" android:value="background" />
+                <tag android:id="@id/keyboard_text_role" android:value="text" />
 
             <!-- Row 1：功能列 — ⚙ 全 半 📋 ⚡ 追 -->
             <LinearLayout
@@ -76,6 +93,8 @@
                 android:orientation="horizontal"
                 android:gravity="center_vertical"
                 android:layout_marginBottom="2dp">
+                <tag android:id="@id/keyboard_role" android:value="background" />
+                <tag android:id="@id/keyboard_text_role" android:value="text" />
 
 
 
@@ -87,11 +106,13 @@
                     android:gravity="center"
                     android:text="⚙"
                     android:textSize="14sp"
-                    android:textColor="#666666"
-                    android:background="@color/key_bg"
                     android:layout_marginEnd="2dp"
                     android:clickable="true"
-                    android:focusable="true" />
+                    android:focusable="true">
+                    <tag android:id="@id/keyboard_role" android:value="tools" />
+                    <tag android:id="@id/keyboard_text_role" android:value="secondary" />
+                    <tag android:id="@id/keyboard_visible_inset" android:value="0" />
+                </TextView>
 
                 <TextView
                     android:id="@+id/btnFullWidth"
@@ -100,12 +121,14 @@
                     android:layout_weight="1"
                     android:gravity="center"
                     android:text="全"
-                    android:textColor="#666666"
-                    android:textSize="14sp"
-                    android:background="@color/key_bg"
+                    android:textSize="12sp"
                     android:layout_marginEnd="2dp"
                     android:clickable="true"
-                    android:focusable="true" />
+                    android:focusable="true">
+                    <tag android:id="@id/keyboard_role" android:value="tools" />
+                    <tag android:id="@id/keyboard_text_role" android:value="secondary" />
+                    <tag android:id="@id/keyboard_visible_inset" android:value="0" />
+                </TextView>
 
                 <TextView
                     android:id="@+id/btnHalfWidth"
@@ -114,12 +137,14 @@
                     android:layout_weight="1"
                     android:gravity="center"
                     android:text="半"
-                    android:textColor="#666666"
-                    android:textSize="14sp"
-                    android:background="@color/key_bg"
+                    android:textSize="12sp"
                     android:layout_marginEnd="2dp"
                     android:clickable="true"
-                    android:focusable="true" />
+                    android:focusable="true">
+                    <tag android:id="@id/keyboard_role" android:value="tools" />
+                    <tag android:id="@id/keyboard_text_role" android:value="secondary" />
+                    <tag android:id="@id/keyboard_visible_inset" android:value="0" />
+                </TextView>
 
                 <TextView
                     android:id="@+id/btnClipboard"
@@ -129,11 +154,13 @@
                     android:gravity="center"
                     android:text="📋"
                     android:textSize="14sp"
-                    android:textColor="#666666"
-                    android:background="@color/key_bg"
                     android:layout_marginEnd="2dp"
                     android:clickable="true"
-                    android:focusable="true" />
+                    android:focusable="true">
+                    <tag android:id="@id/keyboard_role" android:value="tools" />
+                    <tag android:id="@id/keyboard_text_role" android:value="secondary" />
+                    <tag android:id="@id/keyboard_visible_inset" android:value="0" />
+                </TextView>
 
                 <TextView
                     android:id="@+id/btnCommands"
@@ -143,11 +170,13 @@
                     android:gravity="center"
                     android:text="⚡"
                     android:textSize="14sp"
-                    android:textColor="#666666"
-                    android:background="@color/key_bg"
                     android:layout_marginEnd="2dp"
                     android:clickable="true"
-                    android:focusable="true" />
+                    android:focusable="true">
+                    <tag android:id="@id/keyboard_role" android:value="tools" />
+                    <tag android:id="@id/keyboard_text_role" android:value="secondary" />
+                    <tag android:id="@id/keyboard_visible_inset" android:value="0" />
+                </TextView>
 
                 <TextView
                     android:id="@+id/btnMode"
@@ -156,11 +185,13 @@
                     android:layout_weight="1"
                     android:gravity="center"
                     android:text="追"
-                    android:textColor="@color/mode_append"
-                    android:textSize="14sp"
-                    android:background="@color/key_bg"
+                    android:textSize="12sp"
                     android:clickable="true"
-                    android:focusable="true" />
+                    android:focusable="true">
+                    <tag android:id="@id/keyboard_role" android:value="tools" />
+                    <tag android:id="@id/keyboard_text_role" android:value="mode_append" />
+                    <tag android:id="@id/keyboard_visible_inset" android:value="0" />
+                </TextView>
 
             </LinearLayout>
 
@@ -178,11 +209,13 @@
                     android:gravity="center"
                     android:text="注"
                     android:textSize="12sp"
-                    android:textColor="#6bc5f0"
-                    android:background="@color/key_bg"
                     android:layout_marginEnd="2dp"
                     android:clickable="true"
-                    android:focusable="true" />
+                    android:focusable="true">
+                    <tag android:id="@id/keyboard_role" android:value="tools" />
+                    <tag android:id="@id/keyboard_text_role" android:value="hint" />
+                    <tag android:id="@id/keyboard_visible_inset" android:value="0" />
+                </TextView>
 
                 <TextView
                     android:id="@+id/btnSpace"
@@ -191,12 +224,14 @@
                     android:layout_weight="1"
                     android:gravity="center"
                     android:text="␣"
-                    android:textColor="@color/key_text"
                     android:textSize="16sp"
-                    android:background="@color/key_bg"
                     android:layout_marginEnd="2dp"
                     android:clickable="true"
-                    android:focusable="true" />
+                    android:focusable="true">
+                    <tag android:id="@id/keyboard_role" android:value="tools" />
+                    <tag android:id="@id/keyboard_text_role" android:value="text" />
+                    <tag android:id="@id/keyboard_visible_inset" android:value="0" />
+                </TextView>
 
                 <TextView
                     android:id="@+id/btnComma"
@@ -205,12 +240,14 @@
                     android:layout_weight="1"
                     android:gravity="center"
                     android:text="，"
-                    android:textColor="@color/key_text"
-                    android:textSize="16sp"
-                    android:background="@color/key_bg"
+                    android:textSize="12sp"
                     android:layout_marginEnd="2dp"
                     android:clickable="true"
-                    android:focusable="true" />
+                    android:focusable="true">
+                    <tag android:id="@id/keyboard_role" android:value="tools" />
+                    <tag android:id="@id/keyboard_text_role" android:value="text" />
+                    <tag android:id="@id/keyboard_visible_inset" android:value="0" />
+                </TextView>
 
                 <TextView
                     android:id="@+id/btnPeriod"
@@ -219,12 +256,14 @@
                     android:layout_weight="1"
                     android:gravity="center"
                     android:text="。"
-                    android:textColor="@color/key_text"
-                    android:textSize="16sp"
-                    android:background="@color/key_bg"
+                    android:textSize="12sp"
                     android:layout_marginEnd="2dp"
                     android:clickable="true"
-                    android:focusable="true" />
+                    android:focusable="true">
+                    <tag android:id="@id/keyboard_role" android:value="tools" />
+                    <tag android:id="@id/keyboard_text_role" android:value="text" />
+                    <tag android:id="@id/keyboard_visible_inset" android:value="0" />
+                </TextView>
 
                 <TextView
                     android:id="@+id/btnBackspace"
@@ -234,11 +273,13 @@
                     android:gravity="center"
                     android:text="⌫"
                     android:textSize="16sp"
-                    android:textColor="@color/key_text"
-                    android:background="@color/key_bg"
                     android:layout_marginEnd="2dp"
                     android:clickable="true"
-                    android:focusable="true" />
+                    android:focusable="true">
+                    <tag android:id="@id/keyboard_role" android:value="tools" />
+                    <tag android:id="@id/keyboard_text_role" android:value="text" />
+                    <tag android:id="@id/keyboard_visible_inset" android:value="0" />
+                </TextView>
 
                 <TextView
                     android:id="@+id/btnEnter"
@@ -248,11 +289,15 @@
                     android:gravity="center"
                     android:text="↵"
                     android:textSize="16sp"
-                    android:textColor="#8fbc8f"
-                    android:background="#1b3326"
                     android:clickable="true"
-                    android:focusable="true" />
+                    android:focusable="true">
+                    <tag android:id="@id/keyboard_role" android:value="core" />
+                    <tag android:id="@id/keyboard_text_role" android:value="text" />
+                    <tag android:id="@id/keyboard_visible_inset" android:value="0" />
+                </TextView>
 
+                <tag android:id="@id/keyboard_role" android:value="background" />
+                <tag android:id="@id/keyboard_text_role" android:value="text" />
             </LinearLayout>
 
         </LinearLayout>
@@ -265,9 +310,11 @@
             android:layout_weight="1"
             android:layout_marginStart="2dp"
             android:text="🎤"
-            android:textSize="28sp"
-            android:textColor="@color/key_text"
-            android:background="@color/mic_idle" />
+            android:textSize="28sp">
+                <tag android:id="@id/keyboard_role" android:value="core" />
+                <tag android:id="@id/keyboard_text_role" android:value="text" />
+                <tag android:id="@id/keyboard_visible_inset" android:value="0" />
+            </Button>
 
     </com.simon.voiceime.KeyboardTouchLayout>
 
