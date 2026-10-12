@@ -3,8 +3,8 @@
   "source_sha256": "c6481c5d93420aeac11087367dae56ae7492eb1989ce42f4ca5d5aa5e2db3116",
   "fonttools_version": "4.61.1",
   "weight": 500,
-  "character_count": 361,
-  "characters": " !\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~Øˇˊˋ˙—…›←→↵⌫⏹␣─⚙⚠⚡✓✕⬆、。〈〉《》「」『』ㄅㄆㄇㄈㄉㄊㄋㄌㄍㄎㄏㄐㄑㄒㄓㄔㄕㄖㄗㄘㄙㄚㄛㄜㄝㄞㄟㄠㄡㄢㄣㄤㄥㄦㄧㄨㄩ一上下中仍令以份使個候備傳先克入內全共再出初別刪到則剩剪加化半占即原去取只可同名和啟嘴回在境多天太失夾始字完容對尚尾左已常庫建彙得復想或打批把拉拼指按換擇收效敗整數料新時暫更替本果校框標機權次正此每沒注消清游滑為無牙理用白的盤目看短確稍稱空立符簿籤組結繼續群耗耳聊聯聲至英著藍號要訊記詞試話認語說調請識譯貼資起輸辨返追送過選還重錄錯鍵開限除雙需音項風餘首麥️！＃％＆（）＊＋，：；？＠～🎙🎤📋📚🔴",
+  "character_count": 377,
+  "characters": " !\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~Øˇˊˋ˙—…›←→↵⌫⏹␣─⚙⚠⚡✓✕⬆、。〈〉《》「」『』ㄅㄆㄇㄈㄉㄊㄋㄌㄍㄎㄏㄐㄑㄒㄓㄔㄕㄖㄗㄘㄙㄚㄛㄜㄝㄞㄟㄠㄡㄢㄣㄤㄥㄦㄧㄨㄩ一上下中仍令以份使個候備傳先克入內全共再出初別刪到則剩剪加化半占即原去取句只可同名和啟嘴回在型境多天太失夾始字完容對尚尾左已常庫建式彙律得復想或打批把拉拼指按換擇收攻效敗整數料新日時暫更書替本果校格框標機權次正此每沒法注消清游滑為無爭牙狀理用白的盤目看短確稍稱空立符簿籤組結繼續群耗耳聊聯聲至英著藍號術要訊記詞試話認語說調請論識譯貼資起輸辨返述追送過選還重錄錯鍵開防限除雙需音項風餘首麥點️！＃％＆（）＊＋，：；？＠～🎙🎤📋📚🔴",
   "source_missing_characters": "↵⌫⏹⚙⚡✕️🎙🎤📋📚🔴",
   "source_missing_codepoints": [
     "U+21B5",
@@ -20,8 +20,8 @@
     "U+1F4DA",
     "U+1F534"
   ],
-  "output_sha256": "6f17bc5d73215db579933ae843a4d4a038022d23c0ea3fa7eea9a1b4213fc002",
-  "bytes": 79468,
+  "output_sha256": "f6038544c2bdaf7542233589b3bfa7be905313fc98306829072d74e30fac5f41",
+  "bytes": 83652,
   "command": "python3 scripts/font_subset_690.py",
   "extraction": [
     {
@@ -188,8 +188,8 @@
     {
       "path": "scripts/app690_host/PROBE_KEYCAP_CHARS.txt",
       "method": "non-comment UTF-8 literal lines",
-      "present": false
+      "present": true
     }
   ],
-  "probe_present": false
+  "probe_present": true
 }
