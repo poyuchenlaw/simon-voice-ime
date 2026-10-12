@@ -386,6 +386,13 @@ public final class DualHandKeyboard implements DualHandPage {
     public void requestGrid(int index){if(index<0||index>=state.syllables().size())return;hooks.grid(this,index);}
     public void event(String name,JSONObject fields){if(service.dualHandProtected())return;ImeTelemetry telemetry=ImeTelemetry.get();if(telemetry!=null)telemetry.record(name,"dual_hand",fields,service.dualHandProtected());}
     private void cancelTouches(){for(Touch touch:touches.values())if(touch.repeat!=null)ui.removeCallbacks(touch.repeat);for(String key:keys.keySet())releaseCap(key);touches.clear();state.cancelTouches();ui.removeCallbacks(flush);}
+    private boolean leftEdge(String key){
+        if(!DualHandTable.isLeft(key)||table.left(key,"left").isEmpty())return false;
+        FrameLayout cap=keys.get(key);if(cap==null)return false;
+        ViewGroup row=(ViewGroup)cap.getParent();
+        // Layout coordinates identify the edge independently of the animated key translation.
+        return cap.getLeft()==row.getPaddingLeft()+((ViewGroup.MarginLayoutParams)cap.getLayoutParams()).leftMargin;
+    }
     public void clear(){cancelTouches();hooks.cancel(this,true);state.clear();composing=false;changed(false);}
     public void reconfigure(){cancelTouches();hooks.cancel(this,false);configureLayout(root.getWidth());renderLabels();}
     public void selection(int start,int end,int composingStart,int composingEnd){hooks.selection(this,start,end,composingStart,composingEnd);}
@@ -413,7 +420,7 @@ public final class DualHandKeyboard implements DualHandPage {
             float density=service.getResources().getDisplayMetrics().density;
             for(int i=0;i<e.getPointerCount();i++){Touch t=touches.get(e.getPointerId(i));if(t==null)continue;
                 for(int h=0;h<e.getHistorySize();h++)move(t,e.getHistoricalX(i,h),e.getHistoricalY(i,h),density);
-                move(t,e.getX(i),e.getY(i),density);t.result=DualHandGesture.classify(t.stroke.key,t.dx,t.dy,e.getEventTime()-t.stroke.down,t.path,t.samples);feedback(t);
+                move(t,e.getX(i),e.getY(i),density);t.result=DualHandGesture.classify(t.stroke.key,leftEdge(t.stroke.key),t.dx,t.dy,e.getEventTime()-t.stroke.down,t.path,t.samples);feedback(t);
             }
             if(action==MotionEvent.ACTION_UP||action==MotionEvent.ACTION_POINTER_UP){Touch t=touches.remove(e.getPointerId(index));if(t!=null){if(t.repeat!=null)ui.removeCallbacks(t.repeat);state.end(t.stroke,t.result.direction,t.repeated&&"up".equals(t.result.direction));releaseCap(t.stroke.key);
                 try{event("dh_gesture",new JSONObject().put("key",t.stroke.key).put("dx_dp",t.dx).put("dy_dp",t.dy).put("contact_ms",e.getEventTime()-t.stroke.down).put("gesture",t.result.direction).put("ambiguous",t.result.ambiguous).put("samples",t.samples));}catch(JSONException error){throw new IllegalStateException(error);}
