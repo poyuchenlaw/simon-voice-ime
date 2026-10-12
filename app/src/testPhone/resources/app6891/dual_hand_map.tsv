@@ -1,0 +1,876 @@
+state	key	gesture	syllable
+ㄅ	A	tap	ㄅㄚ
+ㄅ	A	left	
+ㄅ	A	up	
+ㄅ	A	right	
+ㄅ	A	down	
+ㄅ	B	tap	ㄅㄛ
+ㄅ	B	left	
+ㄅ	B	up	ㄅㄧㄝ
+ㄅ	B	right	
+ㄅ	B	down	
+ㄅ	C	tap	ㄅㄞ
+ㄅ	C	left	ㄅㄟ
+ㄅ	C	up	
+ㄅ	C	right	
+ㄅ	C	down	
+ㄅ	D	tap	ㄅㄠ
+ㄅ	D	left	
+ㄅ	D	up	ㄅㄧㄠ
+ㄅ	D	right	
+ㄅ	D	down	
+ㄅ	E	tap	ㄅㄢ
+ㄅ	E	left	ㄅㄣ
+ㄅ	E	up	ㄅㄧㄢ
+ㄅ	E	right	ㄅㄧㄣ
+ㄅ	E	down	
+ㄅ	F	tap	ㄅㄤ
+ㄅ	F	left	ㄅㄥ
+ㄅ	F	up	
+ㄅ	F	right	ㄅㄧㄥ
+ㄅ	F	down	
+ㄅ	Ø	tap	
+ㄅ	Ø	left	
+ㄅ	Ø	up	ㄅㄧ
+ㄅ	Ø	right	ㄅㄨ
+ㄅ	Ø	down	
+ㄆ	A	tap	ㄆㄚ
+ㄆ	A	left	
+ㄆ	A	up	
+ㄆ	A	right	
+ㄆ	A	down	
+ㄆ	B	tap	ㄆㄛ
+ㄆ	B	left	
+ㄆ	B	up	ㄆㄧㄝ
+ㄆ	B	right	
+ㄆ	B	down	
+ㄆ	C	tap	ㄆㄞ
+ㄆ	C	left	ㄆㄟ
+ㄆ	C	up	
+ㄆ	C	right	
+ㄆ	C	down	
+ㄆ	D	tap	ㄆㄠ
+ㄆ	D	left	ㄆㄡ
+ㄆ	D	up	ㄆㄧㄠ
+ㄆ	D	right	
+ㄆ	D	down	
+ㄆ	E	tap	ㄆㄢ
+ㄆ	E	left	ㄆㄣ
+ㄆ	E	up	ㄆㄧㄢ
+ㄆ	E	right	ㄆㄧㄣ
+ㄆ	E	down	
+ㄆ	F	tap	ㄆㄤ
+ㄆ	F	left	ㄆㄥ
+ㄆ	F	up	
+ㄆ	F	right	ㄆㄧㄥ
+ㄆ	F	down	
+ㄆ	Ø	tap	
+ㄆ	Ø	left	
+ㄆ	Ø	up	ㄆㄧ
+ㄆ	Ø	right	ㄆㄨ
+ㄆ	Ø	down	
+ㄇ	A	tap	ㄇㄚ
+ㄇ	A	left	
+ㄇ	A	up	
+ㄇ	A	right	
+ㄇ	A	down	
+ㄇ	B	tap	ㄇㄛ
+ㄇ	B	left	ㄇㄜ
+ㄇ	B	up	ㄇㄧㄝ
+ㄇ	B	right	
+ㄇ	B	down	
+ㄇ	C	tap	ㄇㄞ
+ㄇ	C	left	ㄇㄟ
+ㄇ	C	up	
+ㄇ	C	right	
+ㄇ	C	down	
+ㄇ	D	tap	ㄇㄠ
+ㄇ	D	left	ㄇㄡ
+ㄇ	D	up	ㄇㄧㄠ
+ㄇ	D	right	
+ㄇ	D	down	ㄇㄧㄡ
+ㄇ	E	tap	ㄇㄢ
+ㄇ	E	left	ㄇㄣ
+ㄇ	E	up	ㄇㄧㄢ
+ㄇ	E	right	ㄇㄧㄣ
+ㄇ	E	down	
+ㄇ	F	tap	ㄇㄤ
+ㄇ	F	left	ㄇㄥ
+ㄇ	F	up	
+ㄇ	F	right	ㄇㄧㄥ
+ㄇ	F	down	
+ㄇ	Ø	tap	
+ㄇ	Ø	left	
+ㄇ	Ø	up	ㄇㄧ
+ㄇ	Ø	right	ㄇㄨ
+ㄇ	Ø	down	
+ㄈ	A	tap	ㄈㄚ
+ㄈ	A	left	
+ㄈ	A	up	
+ㄈ	A	right	
+ㄈ	A	down	
+ㄈ	B	tap	ㄈㄛ
+ㄈ	B	left	
+ㄈ	B	up	
+ㄈ	B	right	
+ㄈ	B	down	
+ㄈ	C	tap	
+ㄈ	C	left	ㄈㄟ
+ㄈ	C	up	
+ㄈ	C	right	
+ㄈ	C	down	
+ㄈ	D	tap	
+ㄈ	D	left	ㄈㄡ
+ㄈ	D	up	ㄈㄧㄠ
+ㄈ	D	right	
+ㄈ	D	down	
+ㄈ	E	tap	ㄈㄢ
+ㄈ	E	left	ㄈㄣ
+ㄈ	E	up	
+ㄈ	E	right	
+ㄈ	E	down	
+ㄈ	F	tap	ㄈㄤ
+ㄈ	F	left	ㄈㄥ
+ㄈ	F	up	
+ㄈ	F	right	
+ㄈ	F	down	ㄈㄨㄥ
+ㄈ	Ø	tap	
+ㄈ	Ø	left	
+ㄈ	Ø	up	
+ㄈ	Ø	right	ㄈㄨ
+ㄈ	Ø	down	
+ㄉ	A	tap	ㄉㄚ
+ㄉ	A	left	
+ㄉ	A	up	
+ㄉ	A	right	
+ㄉ	A	down	
+ㄉ	B	tap	ㄉㄜ
+ㄉ	B	left	
+ㄉ	B	up	ㄉㄧㄝ
+ㄉ	B	right	ㄉㄨㄛ
+ㄉ	B	down	
+ㄉ	C	tap	ㄉㄞ
+ㄉ	C	left	ㄉㄟ
+ㄉ	C	up	
+ㄉ	C	right	ㄉㄨㄟ
+ㄉ	C	down	
+ㄉ	D	tap	ㄉㄠ
+ㄉ	D	left	ㄉㄡ
+ㄉ	D	up	ㄉㄧㄠ
+ㄉ	D	right	
+ㄉ	D	down	ㄉㄧㄡ
+ㄉ	E	tap	ㄉㄢ
+ㄉ	E	left	ㄉㄣ
+ㄉ	E	up	ㄉㄧㄢ
+ㄉ	E	right	ㄉㄨㄢ
+ㄉ	E	down	ㄉㄨㄣ
+ㄉ	F	tap	ㄉㄤ
+ㄉ	F	left	ㄉㄥ
+ㄉ	F	up	
+ㄉ	F	right	ㄉㄧㄥ
+ㄉ	F	down	ㄉㄨㄥ
+ㄉ	Ø	tap	
+ㄉ	Ø	left	
+ㄉ	Ø	up	ㄉㄧ
+ㄉ	Ø	right	ㄉㄨ
+ㄉ	Ø	down	
+ㄊ	A	tap	ㄊㄚ
+ㄊ	A	left	
+ㄊ	A	up	
+ㄊ	A	right	
+ㄊ	A	down	
+ㄊ	B	tap	ㄊㄜ
+ㄊ	B	left	
+ㄊ	B	up	ㄊㄧㄝ
+ㄊ	B	right	ㄊㄨㄛ
+ㄊ	B	down	
+ㄊ	C	tap	ㄊㄞ
+ㄊ	C	left	
+ㄊ	C	up	
+ㄊ	C	right	ㄊㄨㄟ
+ㄊ	C	down	
+ㄊ	D	tap	ㄊㄠ
+ㄊ	D	left	ㄊㄡ
+ㄊ	D	up	ㄊㄧㄠ
+ㄊ	D	right	
+ㄊ	D	down	
+ㄊ	E	tap	ㄊㄢ
+ㄊ	E	left	
+ㄊ	E	up	ㄊㄧㄢ
+ㄊ	E	right	ㄊㄨㄢ
+ㄊ	E	down	ㄊㄨㄣ
+ㄊ	F	tap	ㄊㄤ
+ㄊ	F	left	ㄊㄥ
+ㄊ	F	up	
+ㄊ	F	right	ㄊㄧㄥ
+ㄊ	F	down	ㄊㄨㄥ
+ㄊ	Ø	tap	
+ㄊ	Ø	left	
+ㄊ	Ø	up	ㄊㄧ
+ㄊ	Ø	right	ㄊㄨ
+ㄊ	Ø	down	
+ㄋ	A	tap	ㄋㄚ
+ㄋ	A	left	
+ㄋ	A	up	ㄋㄧㄚ
+ㄋ	A	right	
+ㄋ	A	down	
+ㄋ	B	tap	ㄋㄜ
+ㄋ	B	left	
+ㄋ	B	up	ㄋㄧㄝ
+ㄋ	B	right	ㄋㄨㄛ
+ㄋ	B	down	ㄋㄩㄝ
+ㄋ	C	tap	ㄋㄞ
+ㄋ	C	left	ㄋㄟ
+ㄋ	C	up	
+ㄋ	C	right	
+ㄋ	C	down	
+ㄋ	D	tap	ㄋㄠ
+ㄋ	D	left	ㄋㄡ
+ㄋ	D	up	ㄋㄧㄠ
+ㄋ	D	right	
+ㄋ	D	down	ㄋㄧㄡ
+ㄋ	E	tap	ㄋㄢ
+ㄋ	E	left	ㄋㄧㄣ
+ㄋ	E	up	ㄋㄧㄢ
+ㄋ	E	right	ㄋㄨㄢ
+ㄋ	E	down	ㄋㄣ
+ㄋ	F	tap	ㄋㄤ
+ㄋ	F	left	ㄋㄥ
+ㄋ	F	up	ㄋㄧㄤ
+ㄋ	F	right	ㄋㄧㄥ
+ㄋ	F	down	ㄋㄨㄥ
+ㄋ	Ø	tap	
+ㄋ	Ø	left	
+ㄋ	Ø	up	ㄋㄧ
+ㄋ	Ø	right	ㄋㄨ
+ㄋ	Ø	down	ㄋㄩ
+ㄌ	A	tap	ㄌㄚ
+ㄌ	A	left	
+ㄌ	A	up	ㄌㄧㄚ
+ㄌ	A	right	
+ㄌ	A	down	
+ㄌ	B	tap	ㄌㄜ
+ㄌ	B	left	ㄌㄛ
+ㄌ	B	up	ㄌㄧㄝ
+ㄌ	B	right	ㄌㄨㄛ
+ㄌ	B	down	ㄌㄩㄝ
+ㄌ	C	tap	ㄌㄞ
+ㄌ	C	left	ㄌㄟ
+ㄌ	C	up	
+ㄌ	C	right	
+ㄌ	C	down	
+ㄌ	D	tap	ㄌㄠ
+ㄌ	D	left	ㄌㄡ
+ㄌ	D	up	ㄌㄧㄠ
+ㄌ	D	right	
+ㄌ	D	down	ㄌㄧㄡ
+ㄌ	E	tap	ㄌㄢ
+ㄌ	E	left	ㄌㄧㄣ
+ㄌ	E	up	ㄌㄧㄢ
+ㄌ	E	right	ㄌㄨㄢ
+ㄌ	E	down	ㄌㄨㄣ
+ㄌ	F	tap	ㄌㄤ
+ㄌ	F	left	ㄌㄥ
+ㄌ	F	up	ㄌㄧㄤ
+ㄌ	F	right	ㄌㄧㄥ
+ㄌ	F	down	ㄌㄨㄥ
+ㄌ	Ø	tap	
+ㄌ	Ø	left	
+ㄌ	Ø	up	ㄌㄧ
+ㄌ	Ø	right	ㄌㄨ
+ㄌ	Ø	down	ㄌㄩ
+ㄍ	A	tap	ㄍㄚ
+ㄍ	A	left	
+ㄍ	A	up	
+ㄍ	A	right	ㄍㄨㄚ
+ㄍ	A	down	
+ㄍ	B	tap	ㄍㄜ
+ㄍ	B	left	
+ㄍ	B	up	
+ㄍ	B	right	ㄍㄨㄛ
+ㄍ	B	down	
+ㄍ	C	tap	ㄍㄞ
+ㄍ	C	left	ㄍㄟ
+ㄍ	C	up	
+ㄍ	C	right	ㄍㄨㄞ
+ㄍ	C	down	ㄍㄨㄟ
+ㄍ	D	tap	ㄍㄠ
+ㄍ	D	left	ㄍㄡ
+ㄍ	D	up	
+ㄍ	D	right	
+ㄍ	D	down	
+ㄍ	E	tap	ㄍㄢ
+ㄍ	E	left	ㄍㄣ
+ㄍ	E	up	
+ㄍ	E	right	ㄍㄨㄢ
+ㄍ	E	down	ㄍㄨㄣ
+ㄍ	F	tap	ㄍㄤ
+ㄍ	F	left	ㄍㄥ
+ㄍ	F	up	ㄍㄨㄥ
+ㄍ	F	right	ㄍㄨㄤ
+ㄍ	F	down	
+ㄍ	Ø	tap	
+ㄍ	Ø	left	
+ㄍ	Ø	up	
+ㄍ	Ø	right	ㄍㄨ
+ㄍ	Ø	down	
+ㄎ	A	tap	ㄎㄚ
+ㄎ	A	left	
+ㄎ	A	up	
+ㄎ	A	right	ㄎㄨㄚ
+ㄎ	A	down	
+ㄎ	B	tap	ㄎㄜ
+ㄎ	B	left	
+ㄎ	B	up	
+ㄎ	B	right	ㄎㄨㄛ
+ㄎ	B	down	
+ㄎ	C	tap	ㄎㄞ
+ㄎ	C	left	
+ㄎ	C	up	
+ㄎ	C	right	ㄎㄨㄞ
+ㄎ	C	down	ㄎㄨㄟ
+ㄎ	D	tap	ㄎㄠ
+ㄎ	D	left	ㄎㄡ
+ㄎ	D	up	
+ㄎ	D	right	
+ㄎ	D	down	
+ㄎ	E	tap	ㄎㄢ
+ㄎ	E	left	ㄎㄣ
+ㄎ	E	up	
+ㄎ	E	right	ㄎㄨㄢ
+ㄎ	E	down	ㄎㄨㄣ
+ㄎ	F	tap	ㄎㄤ
+ㄎ	F	left	ㄎㄥ
+ㄎ	F	up	
+ㄎ	F	right	ㄎㄨㄤ
+ㄎ	F	down	ㄎㄨㄥ
+ㄎ	Ø	tap	
+ㄎ	Ø	left	
+ㄎ	Ø	up	
+ㄎ	Ø	right	ㄎㄨ
+ㄎ	Ø	down	
+ㄏ	A	tap	ㄏㄚ
+ㄏ	A	left	
+ㄏ	A	up	
+ㄏ	A	right	ㄏㄨㄚ
+ㄏ	A	down	
+ㄏ	B	tap	ㄏㄜ
+ㄏ	B	left	
+ㄏ	B	up	
+ㄏ	B	right	ㄏㄨㄛ
+ㄏ	B	down	
+ㄏ	C	tap	ㄏㄞ
+ㄏ	C	left	ㄏㄟ
+ㄏ	C	up	
+ㄏ	C	right	ㄏㄨㄞ
+ㄏ	C	down	ㄏㄨㄟ
+ㄏ	D	tap	ㄏㄠ
+ㄏ	D	left	ㄏㄡ
+ㄏ	D	up	
+ㄏ	D	right	
+ㄏ	D	down	
+ㄏ	E	tap	ㄏㄢ
+ㄏ	E	left	ㄏㄣ
+ㄏ	E	up	
+ㄏ	E	right	ㄏㄨㄢ
+ㄏ	E	down	ㄏㄨㄣ
+ㄏ	F	tap	ㄏㄤ
+ㄏ	F	left	ㄏㄥ
+ㄏ	F	up	
+ㄏ	F	right	ㄏㄨㄤ
+ㄏ	F	down	ㄏㄨㄥ
+ㄏ	Ø	tap	
+ㄏ	Ø	left	
+ㄏ	Ø	up	
+ㄏ	Ø	right	ㄏㄨ
+ㄏ	Ø	down	
+ㄐ	A	tap	ㄐㄧㄚ
+ㄐ	A	left	
+ㄐ	A	up	ㄐㄧㄚ
+ㄐ	A	right	
+ㄐ	A	down	
+ㄐ	B	tap	ㄐㄧㄝ
+ㄐ	B	left	
+ㄐ	B	up	ㄐㄧㄝ
+ㄐ	B	right	
+ㄐ	B	down	ㄐㄩㄝ
+ㄐ	C	tap	
+ㄐ	C	left	
+ㄐ	C	up	
+ㄐ	C	right	
+ㄐ	C	down	
+ㄐ	D	tap	ㄐㄧㄠ
+ㄐ	D	left	ㄐㄧㄡ
+ㄐ	D	up	ㄐㄧㄠ
+ㄐ	D	right	
+ㄐ	D	down	ㄐㄧㄡ
+ㄐ	E	tap	ㄐㄧㄢ
+ㄐ	E	left	ㄐㄧㄣ
+ㄐ	E	up	ㄐㄧㄢ
+ㄐ	E	right	ㄐㄩㄣ
+ㄐ	E	down	ㄐㄩㄢ
+ㄐ	F	tap	ㄐㄧㄤ
+ㄐ	F	left	ㄐㄧㄥ
+ㄐ	F	up	ㄐㄧㄤ
+ㄐ	F	right	ㄐㄧㄥ
+ㄐ	F	down	ㄐㄩㄥ
+ㄐ	Ø	tap	ㄐㄧ
+ㄐ	Ø	left	
+ㄐ	Ø	up	ㄐㄧ
+ㄐ	Ø	right	
+ㄐ	Ø	down	ㄐㄩ
+ㄑ	A	tap	ㄑㄧㄚ
+ㄑ	A	left	
+ㄑ	A	up	ㄑㄧㄚ
+ㄑ	A	right	
+ㄑ	A	down	
+ㄑ	B	tap	ㄑㄧㄝ
+ㄑ	B	left	
+ㄑ	B	up	ㄑㄧㄝ
+ㄑ	B	right	
+ㄑ	B	down	ㄑㄩㄝ
+ㄑ	C	tap	
+ㄑ	C	left	
+ㄑ	C	up	
+ㄑ	C	right	
+ㄑ	C	down	
+ㄑ	D	tap	ㄑㄧㄠ
+ㄑ	D	left	ㄑㄧㄡ
+ㄑ	D	up	ㄑㄧㄠ
+ㄑ	D	right	
+ㄑ	D	down	ㄑㄧㄡ
+ㄑ	E	tap	ㄑㄧㄢ
+ㄑ	E	left	ㄑㄧㄣ
+ㄑ	E	up	ㄑㄧㄢ
+ㄑ	E	right	ㄑㄩㄣ
+ㄑ	E	down	ㄑㄩㄢ
+ㄑ	F	tap	ㄑㄧㄤ
+ㄑ	F	left	ㄑㄧㄥ
+ㄑ	F	up	ㄑㄧㄤ
+ㄑ	F	right	ㄑㄧㄥ
+ㄑ	F	down	ㄑㄩㄥ
+ㄑ	Ø	tap	ㄑㄧ
+ㄑ	Ø	left	
+ㄑ	Ø	up	ㄑㄧ
+ㄑ	Ø	right	
+ㄑ	Ø	down	ㄑㄩ
+ㄒ	A	tap	ㄒㄧㄚ
+ㄒ	A	left	
+ㄒ	A	up	ㄒㄧㄚ
+ㄒ	A	right	
+ㄒ	A	down	
+ㄒ	B	tap	ㄒㄧㄝ
+ㄒ	B	left	
+ㄒ	B	up	ㄒㄧㄝ
+ㄒ	B	right	
+ㄒ	B	down	ㄒㄩㄝ
+ㄒ	C	tap	
+ㄒ	C	left	
+ㄒ	C	up	
+ㄒ	C	right	
+ㄒ	C	down	
+ㄒ	D	tap	ㄒㄧㄠ
+ㄒ	D	left	ㄒㄧㄡ
+ㄒ	D	up	ㄒㄧㄠ
+ㄒ	D	right	
+ㄒ	D	down	ㄒㄧㄡ
+ㄒ	E	tap	ㄒㄧㄢ
+ㄒ	E	left	ㄒㄧㄣ
+ㄒ	E	up	ㄒㄧㄢ
+ㄒ	E	right	ㄒㄩㄣ
+ㄒ	E	down	ㄒㄩㄢ
+ㄒ	F	tap	ㄒㄧㄤ
+ㄒ	F	left	ㄒㄧㄥ
+ㄒ	F	up	ㄒㄧㄤ
+ㄒ	F	right	ㄒㄧㄥ
+ㄒ	F	down	ㄒㄩㄥ
+ㄒ	Ø	tap	ㄒㄧ
+ㄒ	Ø	left	
+ㄒ	Ø	up	ㄒㄧ
+ㄒ	Ø	right	
+ㄒ	Ø	down	ㄒㄩ
+ㄓ	A	tap	ㄓㄚ
+ㄓ	A	left	
+ㄓ	A	up	
+ㄓ	A	right	ㄓㄨㄚ
+ㄓ	A	down	
+ㄓ	B	tap	ㄓㄜ
+ㄓ	B	left	
+ㄓ	B	up	
+ㄓ	B	right	ㄓㄨㄛ
+ㄓ	B	down	
+ㄓ	C	tap	ㄓㄞ
+ㄓ	C	left	ㄓㄟ
+ㄓ	C	up	
+ㄓ	C	right	ㄓㄨㄞ
+ㄓ	C	down	ㄓㄨㄟ
+ㄓ	D	tap	ㄓㄠ
+ㄓ	D	left	ㄓㄡ
+ㄓ	D	up	
+ㄓ	D	right	
+ㄓ	D	down	
+ㄓ	E	tap	ㄓㄢ
+ㄓ	E	left	ㄓㄣ
+ㄓ	E	up	
+ㄓ	E	right	ㄓㄨㄢ
+ㄓ	E	down	ㄓㄨㄣ
+ㄓ	F	tap	ㄓㄤ
+ㄓ	F	left	ㄓㄥ
+ㄓ	F	up	
+ㄓ	F	right	ㄓㄨㄤ
+ㄓ	F	down	ㄓㄨㄥ
+ㄓ	Ø	tap	ㄓ
+ㄓ	Ø	left	
+ㄓ	Ø	up	
+ㄓ	Ø	right	ㄓㄨ
+ㄓ	Ø	down	
+ㄔ	A	tap	ㄔㄚ
+ㄔ	A	left	
+ㄔ	A	up	
+ㄔ	A	right	ㄔㄨㄚ
+ㄔ	A	down	
+ㄔ	B	tap	ㄔㄜ
+ㄔ	B	left	
+ㄔ	B	up	
+ㄔ	B	right	ㄔㄨㄛ
+ㄔ	B	down	
+ㄔ	C	tap	ㄔㄞ
+ㄔ	C	left	
+ㄔ	C	up	
+ㄔ	C	right	ㄔㄨㄞ
+ㄔ	C	down	ㄔㄨㄟ
+ㄔ	D	tap	ㄔㄠ
+ㄔ	D	left	ㄔㄡ
+ㄔ	D	up	
+ㄔ	D	right	
+ㄔ	D	down	
+ㄔ	E	tap	ㄔㄢ
+ㄔ	E	left	ㄔㄣ
+ㄔ	E	up	
+ㄔ	E	right	ㄔㄨㄢ
+ㄔ	E	down	ㄔㄨㄣ
+ㄔ	F	tap	ㄔㄤ
+ㄔ	F	left	ㄔㄥ
+ㄔ	F	up	
+ㄔ	F	right	ㄔㄨㄤ
+ㄔ	F	down	ㄔㄨㄥ
+ㄔ	Ø	tap	ㄔ
+ㄔ	Ø	left	
+ㄔ	Ø	up	
+ㄔ	Ø	right	ㄔㄨ
+ㄔ	Ø	down	
+ㄕ	A	tap	ㄕㄚ
+ㄕ	A	left	
+ㄕ	A	up	
+ㄕ	A	right	ㄕㄨㄚ
+ㄕ	A	down	
+ㄕ	B	tap	ㄕㄜ
+ㄕ	B	left	
+ㄕ	B	up	
+ㄕ	B	right	ㄕㄨㄛ
+ㄕ	B	down	
+ㄕ	C	tap	ㄕㄞ
+ㄕ	C	left	ㄕㄟ
+ㄕ	C	up	
+ㄕ	C	right	ㄕㄨㄞ
+ㄕ	C	down	ㄕㄨㄟ
+ㄕ	D	tap	ㄕㄠ
+ㄕ	D	left	ㄕㄡ
+ㄕ	D	up	
+ㄕ	D	right	
+ㄕ	D	down	
+ㄕ	E	tap	ㄕㄢ
+ㄕ	E	left	ㄕㄣ
+ㄕ	E	up	
+ㄕ	E	right	ㄕㄨㄢ
+ㄕ	E	down	ㄕㄨㄣ
+ㄕ	F	tap	ㄕㄤ
+ㄕ	F	left	ㄕㄥ
+ㄕ	F	up	
+ㄕ	F	right	ㄕㄨㄤ
+ㄕ	F	down	
+ㄕ	Ø	tap	ㄕ
+ㄕ	Ø	left	
+ㄕ	Ø	up	
+ㄕ	Ø	right	ㄕㄨ
+ㄕ	Ø	down	
+ㄖ	A	tap	
+ㄖ	A	left	
+ㄖ	A	up	
+ㄖ	A	right	
+ㄖ	A	down	
+ㄖ	B	tap	ㄖㄜ
+ㄖ	B	left	
+ㄖ	B	up	
+ㄖ	B	right	ㄖㄨㄛ
+ㄖ	B	down	
+ㄖ	C	tap	
+ㄖ	C	left	
+ㄖ	C	up	
+ㄖ	C	right	
+ㄖ	C	down	ㄖㄨㄟ
+ㄖ	D	tap	ㄖㄠ
+ㄖ	D	left	ㄖㄡ
+ㄖ	D	up	
+ㄖ	D	right	
+ㄖ	D	down	
+ㄖ	E	tap	ㄖㄢ
+ㄖ	E	left	ㄖㄣ
+ㄖ	E	up	
+ㄖ	E	right	ㄖㄨㄢ
+ㄖ	E	down	ㄖㄨㄣ
+ㄖ	F	tap	ㄖㄤ
+ㄖ	F	left	ㄖㄥ
+ㄖ	F	up	
+ㄖ	F	right	
+ㄖ	F	down	ㄖㄨㄥ
+ㄖ	Ø	tap	ㄖ
+ㄖ	Ø	left	
+ㄖ	Ø	up	
+ㄖ	Ø	right	ㄖㄨ
+ㄖ	Ø	down	
+ㄗ	A	tap	ㄗㄚ
+ㄗ	A	left	
+ㄗ	A	up	
+ㄗ	A	right	
+ㄗ	A	down	
+ㄗ	B	tap	ㄗㄜ
+ㄗ	B	left	
+ㄗ	B	up	
+ㄗ	B	right	ㄗㄨㄛ
+ㄗ	B	down	
+ㄗ	C	tap	ㄗㄞ
+ㄗ	C	left	ㄗㄟ
+ㄗ	C	up	
+ㄗ	C	right	ㄗㄨㄟ
+ㄗ	C	down	
+ㄗ	D	tap	ㄗㄠ
+ㄗ	D	left	ㄗㄡ
+ㄗ	D	up	
+ㄗ	D	right	
+ㄗ	D	down	
+ㄗ	E	tap	ㄗㄢ
+ㄗ	E	left	ㄗㄣ
+ㄗ	E	up	
+ㄗ	E	right	ㄗㄨㄢ
+ㄗ	E	down	ㄗㄨㄣ
+ㄗ	F	tap	ㄗㄤ
+ㄗ	F	left	ㄗㄥ
+ㄗ	F	up	
+ㄗ	F	right	
+ㄗ	F	down	ㄗㄨㄥ
+ㄗ	Ø	tap	ㄗ
+ㄗ	Ø	left	
+ㄗ	Ø	up	
+ㄗ	Ø	right	ㄗㄨ
+ㄗ	Ø	down	
+ㄘ	A	tap	ㄘㄚ
+ㄘ	A	left	
+ㄘ	A	up	
+ㄘ	A	right	
+ㄘ	A	down	
+ㄘ	B	tap	ㄘㄜ
+ㄘ	B	left	
+ㄘ	B	up	
+ㄘ	B	right	ㄘㄨㄛ
+ㄘ	B	down	
+ㄘ	C	tap	ㄘㄞ
+ㄘ	C	left	
+ㄘ	C	up	
+ㄘ	C	right	ㄘㄨㄟ
+ㄘ	C	down	
+ㄘ	D	tap	ㄘㄠ
+ㄘ	D	left	ㄘㄡ
+ㄘ	D	up	
+ㄘ	D	right	
+ㄘ	D	down	
+ㄘ	E	tap	ㄘㄢ
+ㄘ	E	left	ㄘㄣ
+ㄘ	E	up	
+ㄘ	E	right	ㄘㄨㄢ
+ㄘ	E	down	ㄘㄨㄣ
+ㄘ	F	tap	ㄘㄤ
+ㄘ	F	left	ㄘㄥ
+ㄘ	F	up	
+ㄘ	F	right	
+ㄘ	F	down	ㄘㄨㄥ
+ㄘ	Ø	tap	ㄘ
+ㄘ	Ø	left	
+ㄘ	Ø	up	
+ㄘ	Ø	right	ㄘㄨ
+ㄘ	Ø	down	
+ㄙ	A	tap	ㄙㄚ
+ㄙ	A	left	
+ㄙ	A	up	
+ㄙ	A	right	
+ㄙ	A	down	
+ㄙ	B	tap	ㄙㄜ
+ㄙ	B	left	
+ㄙ	B	up	
+ㄙ	B	right	ㄙㄨㄛ
+ㄙ	B	down	
+ㄙ	C	tap	ㄙㄞ
+ㄙ	C	left	ㄙㄟ
+ㄙ	C	up	
+ㄙ	C	right	ㄙㄨㄟ
+ㄙ	C	down	
+ㄙ	D	tap	ㄙㄠ
+ㄙ	D	left	ㄙㄡ
+ㄙ	D	up	
+ㄙ	D	right	
+ㄙ	D	down	
+ㄙ	E	tap	ㄙㄢ
+ㄙ	E	left	ㄙㄣ
+ㄙ	E	up	
+ㄙ	E	right	ㄙㄨㄢ
+ㄙ	E	down	ㄙㄨㄣ
+ㄙ	F	tap	ㄙㄤ
+ㄙ	F	left	ㄙㄥ
+ㄙ	F	up	
+ㄙ	F	right	
+ㄙ	F	down	ㄙㄨㄥ
+ㄙ	Ø	tap	ㄙ
+ㄙ	Ø	left	
+ㄙ	Ø	up	
+ㄙ	Ø	right	ㄙㄨ
+ㄙ	Ø	down	
+Ø	A	tap	ㄚ
+Ø	A	left	
+Ø	A	up	ㄧㄚ
+Ø	A	right	ㄨㄚ
+Ø	A	down	
+Ø	B	tap	ㄜ
+Ø	B	left	ㄛ
+Ø	B	up	ㄧㄝ
+Ø	B	right	ㄨㄛ
+Ø	B	down	ㄩㄝ
+Ø	C	tap	ㄞ
+Ø	C	left	ㄟ
+Ø	C	up	
+Ø	C	right	ㄨㄟ
+Ø	C	down	
+Ø	D	tap	ㄠ
+Ø	D	left	ㄡ
+Ø	D	up	ㄧㄡ
+Ø	D	right	
+Ø	D	down	ㄧㄡ
+Ø	E	tap	ㄢ
+Ø	E	left	ㄣ
+Ø	E	up	ㄧㄣ
+Ø	E	right	ㄨㄢ
+Ø	E	down	ㄩㄢ
+Ø	F	tap	ㄤ
+Ø	F	left	ㄥ
+Ø	F	up	ㄧㄥ
+Ø	F	right	ㄨㄤ
+Ø	F	down	ㄩㄥ
+Ø	Ø	tap	
+Ø	Ø	left	ㄦ
+Ø	Ø	up	ㄧ
+Ø	Ø	right	ㄨ
+Ø	Ø	down	ㄩ
+ㄧ	A	tap	ㄧㄚ
+ㄧ	A	left	
+ㄧ	A	up	
+ㄧ	A	right	
+ㄧ	A	down	
+ㄧ	B	tap	ㄧㄝ
+ㄧ	B	left	ㄧㄛ
+ㄧ	B	up	
+ㄧ	B	right	
+ㄧ	B	down	
+ㄧ	C	tap	ㄧㄞ
+ㄧ	C	left	
+ㄧ	C	up	
+ㄧ	C	right	
+ㄧ	C	down	
+ㄧ	D	tap	ㄧㄠ
+ㄧ	D	left	ㄧㄡ
+ㄧ	D	up	
+ㄧ	D	right	
+ㄧ	D	down	
+ㄧ	E	tap	ㄧㄢ
+ㄧ	E	left	ㄧㄣ
+ㄧ	E	up	
+ㄧ	E	right	
+ㄧ	E	down	
+ㄧ	F	tap	ㄧㄤ
+ㄧ	F	left	ㄧㄥ
+ㄧ	F	up	
+ㄧ	F	right	
+ㄧ	F	down	
+ㄧ	Ø	tap	ㄧ
+ㄧ	Ø	left	
+ㄧ	Ø	up	
+ㄧ	Ø	right	
+ㄧ	Ø	down	
+ㄨ	A	tap	ㄨㄚ
+ㄨ	A	left	
+ㄨ	A	up	
+ㄨ	A	right	
+ㄨ	A	down	
+ㄨ	B	tap	ㄨㄛ
+ㄨ	B	left	
+ㄨ	B	up	
+ㄨ	B	right	
+ㄨ	B	down	
+ㄨ	C	tap	ㄨㄞ
+ㄨ	C	left	ㄨㄟ
+ㄨ	C	up	
+ㄨ	C	right	
+ㄨ	C	down	
+ㄨ	D	tap	
+ㄨ	D	left	
+ㄨ	D	up	
+ㄨ	D	right	
+ㄨ	D	down	
+ㄨ	E	tap	ㄨㄢ
+ㄨ	E	left	ㄨㄣ
+ㄨ	E	up	
+ㄨ	E	right	
+ㄨ	E	down	
+ㄨ	F	tap	ㄨㄤ
+ㄨ	F	left	ㄨㄥ
+ㄨ	F	up	
+ㄨ	F	right	
+ㄨ	F	down	
+ㄨ	Ø	tap	ㄨ
+ㄨ	Ø	left	
+ㄨ	Ø	up	
+ㄨ	Ø	right	
+ㄨ	Ø	down	
+ㄩ	A	tap	
+ㄩ	A	left	
+ㄩ	A	up	
+ㄩ	A	right	
+ㄩ	A	down	
+ㄩ	B	tap	ㄩㄝ
+ㄩ	B	left	
+ㄩ	B	up	
+ㄩ	B	right	
+ㄩ	B	down	
+ㄩ	C	tap	
+ㄩ	C	left	
+ㄩ	C	up	
+ㄩ	C	right	
+ㄩ	C	down	
+ㄩ	D	tap	
+ㄩ	D	left	
+ㄩ	D	up	
+ㄩ	D	right	
+ㄩ	D	down	
+ㄩ	E	tap	ㄩㄢ
+ㄩ	E	left	ㄩㄣ
+ㄩ	E	up	
+ㄩ	E	right	
+ㄩ	E	down	
+ㄩ	F	tap	ㄩㄥ
+ㄩ	F	left	ㄩㄥ
+ㄩ	F	up	
+ㄩ	F	right	
+ㄩ	F	down	
+ㄩ	Ø	tap	ㄩ
+ㄩ	Ø	left	
+ㄩ	Ø	up	
+ㄩ	Ø	right	
+ㄩ	Ø	down	

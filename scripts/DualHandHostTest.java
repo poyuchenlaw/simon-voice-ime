@@ -30,11 +30,11 @@ public final class DualHandHostTest {
         sequence("ㄍㄨㄥ ㄙ","3:tap","F:up","6:left","Ø:tap");
         sequence("ㄨㄛ ㄞ ㄋㄧ","3:right","B:tap","3:down","C:tap","2:left","Ø:up");
         sequence("ㄕ ㄏㄠ ㄉㄜ","5:left","Ø:tap","3:left","D:tap","2:tap","B:tap");
-        sequence("ㄧㄢ ㄧㄣ ㄨㄣ ㄩㄣ","4:right","E:tap","4:right","E:left","3:right","E:left","4:down","E:left");
+        sequence("ㄧㄢ ㄧㄣ ㄨㄣ ㄩㄣ","4:right","E:tap","4:right","E:left","3:right","E:left","6:right","E:left");
         sequence("ㄚ","A:tap");
         sequence("ㄉㄨㄟ","1:tap","2:tap","C:right");
         sequence("ㄐㄧ ㄧ ㄨ ㄩ ㄦ","4:tap","Ø:tap","Ø:up","Ø:right","Ø:down","Ø:left");
-        sequence("ㄧ ㄨ ㄩ","4:right","Ø:tap","3:right","Ø:tap","4:down","Ø:tap");
+        sequence("ㄧ ㄨ ㄩ","4:right","Ø:tap","3:right","Ø:tap","6:right","Ø:tap");
         state.clear();key("3","tap");key("Ø","tap");eq(0,state.syllables().size());eq("ㄍ",state.pending());
         state.clear();key("2","tap");key("6","down");eq("ㄉ",state.pending());
         state.clear();DualHandState.Stroke r=state.begin("C",100);state.end(r,"right",false);eq(0,state.drain(120).size());

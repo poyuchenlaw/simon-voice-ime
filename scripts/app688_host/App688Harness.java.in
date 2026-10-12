@@ -37,6 +37,36 @@ public class App688Harness {
   static class util {static class DisplayMetrics{int widthPixels=400,heightPixels=800;static float density=1,scaledDensity=1;}static class Log{static void i(String tag,String s){System.out.println(tag+": "+s);}}}
  }
  static class DualHandLabelView extends TextView {DualHandLabelView(Object c){super(c);} /* LABEL */ }
+ @Test public void app6891_a_leftLabelsFollowMovedYu(){
+  renderLabels();assertEquals("ㄩ",labels.get("6").get("right").value);assertEquals(View.VISIBLE,labels.get("6").get("right").visibility);
+  assertEquals("",labels.get("4").get("down").value);assertEquals(View.GONE,labels.get("4").get("down").visibility);
+  assertEquals("ㄧ",labels.get("4").get("right").value);assertEquals("ㄨ",labels.get("3").get("right").value);
+ }
+ private void medialLabel(String pending,String key,String want){
+  for(boolean wing:new boolean[]{false,true}){split=wing;renderState=pending;renderLabels();assertEquals(pending,want,labels.get(key).get("tap").value);}
+ }
+ @Test public void app6891_b_yiRhyme(){medialLabel("ㄧ","C","ㄞ");}
+ @Test public void app6891_b_wuRhyme(){medialLabel("ㄨ","A","ㄚ");}
+ @Test public void app6891_b_yuRhyme(){medialLabel("ㄩ","B","ㄝ");}
+ private void bareMedial(String pending){renderState=pending;renderLabels();assertEquals(pending,"Ø",labels.get("Ø").get("tap").value);assertEquals(pending,output("Ø","tap"));}
+ @Test public void app6891_b_bareYi(){bareMedial("ㄧ");}
+ @Test public void app6891_b_bareWu(){bareMedial("ㄨ");}
+ @Test public void app6891_b_bareYu(){bareMedial("ㄩ");}
+ @Test public void app6891_d_renderingDoesNotChangeOutput()throws Exception{
+  int checked=0;for(String row:Files.readAllLines(Path.of("app/src/testPhone/resources/app6891/dual_hand_map.tsv")).subList(1,876)){
+   String[] c=row.split("\t",-1);for(boolean wing:new boolean[]{false,true}){split=wing;renderState=c[0];renderLabels();assertEquals(row,c[3],output(c[1],c[2]));}checked++;
+  }assertEquals(875,checked);
+ }
+ @Test public void app6891_c_jiLabelsMatch689InBothLayouts()throws Exception{
+  for(boolean wing:new boolean[]{false,true}){split=wing;renderState="ㄐ";renderLabels();int checked=0;
+   for(String row:Files.readAllLines(Path.of("app/src/testPhone/resources/app6891/dual_hand_map.tsv"))){String[] c=row.split("\t",-1);if(!c[0].equals("ㄐ"))continue;
+    String want=c[3].isEmpty()?"":c[3].substring(1);if(!c[3].isEmpty()&&want.isEmpty())want="Ø";
+    if(!split&&!c[2].equals("up")&&!c[2].equals("down"))want=String.join("\n",want.split(""));
+    assertEquals(row,want,labels.get(c[1]).get(c[2]).value);assertEquals(c[3].isEmpty()?View.GONE:View.VISIBLE,labels.get(c[1]).get(c[2]).visibility);assertEquals(c[3],output(c[1],c[2]));checked++;
+   }assertEquals(35,checked);
+  }
+  assertEquals("ㄧㄢ",suffix("ㄐ","ㄐㄧㄢ"));assertEquals("ㄩㄢ",suffix("ㄐ","ㄐㄩㄢ"));
+ }
  /* KEYBOARD */
  /* SELECTION */
  /* THEME */

@@ -317,7 +317,7 @@ public final class DualHandKeyboard implements DualHandPage {
     }
     private static String vertical(String value){return String.join("\n",value.split(""));}
     private static String suffix(String state,String syllable){
-        if(state!=null&&!Arrays.asList("Ø","ㄧ","ㄨ","ㄩ").contains(state)&&syllable.startsWith(state))syllable=syllable.substring(state.length());
+        if(state!=null&&!Arrays.asList("Ø").contains(state)&&syllable.startsWith(state))syllable=syllable.substring(state.length());
         return syllable.isEmpty()?"Ø":syllable;
     }
     public boolean compose(List<Integer> warnings){

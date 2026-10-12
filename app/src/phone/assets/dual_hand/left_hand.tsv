@@ -18,7 +18,7 @@ key	gesture	state
 4	left	ㄒ
 4	up	ㄑ
 4	right	ㄧ
-4	down	ㄩ
+4	down	
 5	tap	ㄓ
 5	left	ㄕ
 5	up	ㄔ
@@ -27,5 +27,5 @@ key	gesture	state
 6	tap	ㄗ
 6	left	ㄙ
 6	up	ㄘ
-6	right	
+6	right	ㄩ
 6	down	
