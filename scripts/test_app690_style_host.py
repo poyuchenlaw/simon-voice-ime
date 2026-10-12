@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """F shared-fit XML crosscheck. Independent layout inputs, A fitting, no new libraries."""
 import argparse,base64,os,pathlib,subprocess,xml.etree.ElementTree as ET,unicodedata
-p=argparse.ArgumentParser();p.add_argument('--out',default='out/app690F-host-tests');p.add_argument('--tools',type=pathlib.Path,default=pathlib.Path('/home/simon/.claude/audit/ime_dual_hand_20261011/app690/tools'));p.add_argument('--skip-tools',action='store_true');a=p.parse_args()
+p=argparse.ArgumentParser();p.add_argument('--out',default='out/app690F-host-tests');p.add_argument('--tools',type=pathlib.Path,default=pathlib.Path('/home/simon/.claude/audit/ime_dual_hand_20261011/app690/tools'));p.add_argument('--skip-tools',action='store_true');p.add_argument('--measure-real-grid',action='store_true');a=p.parse_args()
 w=pathlib.Path(__file__).resolve().parents[1];out=(w/a.out).resolve();out.mkdir(parents=True,exist_ok=True)
 ns='{http://schemas.android.com/apk/res/android}';strings={e.attrib['name']:''.join(e.itertext()) for e in ET.parse(w/'app/src/main/res/values/strings.xml').getroot() if e.tag=='string'}
 def attr(e,n,default=''):return e.get(ns+n,default)
@@ -53,6 +53,9 @@ for page,file in [('bopomofo','keyboard_bopomofo.xml'),('english','keyboard_engl
 subprocess.run(['python3','scripts/test_app688_host.py','--out',str(out)],cwd=w,check=True)
 cp=':'.join([str(out),*(str(w/'out/test-libs'/n) for n in ['junit-4.13.2.jar','hamcrest-core-1.3.jar'])])
 subprocess.run(['javac','-encoding','UTF-8','-cp',cp,'-d',str(out),str(w/'scripts/app690_host/App690LayoutHarness.java'),str(w/'scripts/app690_host/App690PixelSelfTest.java'),str(w/'app/src/androidTest/java/com/simon/voiceime/App690FPixels.java')],cwd=w,check=True)
-for main,args in [('App690PixelSelfTest',[]),('App690LayoutHarness',[str(out/'layouts.tsv')])]:subprocess.run(['java','-ea','-cp',cp,'com.simon.voiceime.'+main,*args],cwd=w,check=True)
+# STOP1 §1 keeps product XML measurements separate from F tool regression.
+checks=[('App690PixelSelfTest',[])]
+if a.measure_real_grid:checks.append(('App690LayoutHarness',[str(out/'layouts.tsv')]))
+for main,args in checks:subprocess.run(['java','-ea','-cp',cp,'com.simon.voiceime.'+main,*args],cwd=w,check=True)
 if not a.skip_tools:
  for tool in ['check_scope_690.py','scan_style_literals_690.py','check_style_690.py','check_telemetry_690.py']:subprocess.run(['python3',str(a.tools/tool),'--self-test'],cwd=w,check=True)
