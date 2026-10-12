@@ -66,7 +66,7 @@ public class KeyboardButtonsTest {
                     assertEquals("text",roles.get("@id/keyboard_text_role"));assertEquals("1",roles.get("@id/keyboard_visible_inset"));
                     Path root=Path.of("").toAbsolutePath();
                     while(!Files.exists(root.resolve("app/src/main")))root=root.getParent();
-                    String factory=Files.readString(root.resolve("app/src/main/java/com/simon/voiceime/KeyboardRoles.java"));
+                    String factory=new String(Files.readAllBytes(root.resolve("app/src/main/java/com/simon/voiceime/KeyboardRoles.java")), java.nio.charset.StandardCharsets.UTF_8);
                     assertTrue("routed keys must get factory backgrounds",factory.contains("startsWith(\"key:\")")&&factory.contains("KeyboardKeycaps.apply(view,dark,role,"));
                 }
             }
