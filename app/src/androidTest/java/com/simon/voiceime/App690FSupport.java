@@ -53,6 +53,7 @@ public abstract class App690FSupport extends TestCase {
         SharedPreferences p=inst.getTargetContext().getSharedPreferences("simon_ime_prefs",0);previous=new HashMap<>(p.getAll());
         p.edit().putBoolean("ime_auto_upload",false).putString("server_url","http://127.0.0.1:9").putBoolean("dual_hand_enabled",true).putBoolean("dual_hand_mode",true).putBoolean("dual_hand_haptics",true).putBoolean("haptic_enabled",true).commit();
         output=new File(inst.getTargetContext().getExternalFilesDir(null),"app690F");assertTrue(output.isDirectory()||output.mkdirs());
+        shell("ime enable com.simon.voiceime/.SimonIMEService; ime set com.simon.voiceime/.SimonIMEService");
         shell("am start -W -n com.simon.ime.host690/.App690HostActivity");
         hostCall("reopen",new Bundle());
         long end=SystemClock.uptimeMillis()+5000;
@@ -70,11 +71,19 @@ public abstract class App690FSupport extends TestCase {
     }
     protected JSONObject counters(){return main(()->{try{return new JSONObject((Map<?,?>)call(api("KeyboardProbe"),"counters"));}catch(ClassNotFoundException absent){return new JSONObject().put("available",false);}});}
     protected float density(){return root.getResources().getDisplayMetrics().density;}
+    protected float sizeSp(TextView v){float sp=Build.VERSION.SDK_INT>=34?android.util.TypedValue.deriveDimension(android.util.TypedValue.COMPLEX_UNIT_SP,v.getTextSize(),v.getResources().getDisplayMetrics()):v.getTextSize()/v.getResources().getDisplayMetrics().scaledDensity;return Math.round(sp*10000)/10000f;}
     protected Rect rect(View v){int[] p=new int[2];v.getLocationOnScreen(p);return new Rect(p[0],p[1],p[0]+v.getWidth(),p[1]+v.getHeight());}
     protected void touch(View v,int action,long down,float dx,float dy){Rect r=main(()->rect(v));MotionEvent e=MotionEvent.obtain(down,SystemClock.uptimeMillis(),action,r.exactCenterX()+dx,r.exactCenterY()+dy,0);try{assertTrue(inst.getUiAutomation().injectInputEvent(e,true));}finally{e.recycle();}}
     protected void tap(View v)throws Exception {long down=SystemClock.uptimeMillis();touch(v,MotionEvent.ACTION_DOWN,down,0,0);Thread.sleep(40);touch(v,MotionEvent.ACTION_UP,down,0,0);inst.waitForIdleSync();}
     protected void save(String name,Object value)throws Exception {try(Writer w=new OutputStreamWriter(new FileOutputStream(new File(output,name)),"UTF-8")){w.write(value.toString());w.write('\n');}}
-    protected String shell(String command)throws Exception {try(ParcelFileDescriptor f=inst.getUiAutomation().executeShellCommand(command);InputStream in=new FileInputStream(f.getFileDescriptor())){return new String(in.readAllBytes(),java.nio.charset.StandardCharsets.UTF_8);}}
+    protected String shell(String command)throws Exception {
+        assertTrue("F diagnostic shell requires API31+",Build.VERSION.SDK_INT>=31);
+        ParcelFileDescriptor[] pipe=inst.getUiAutomation().executeShellCommandRw("sh");
+        try(InputStream in=new ParcelFileDescriptor.AutoCloseInputStream(pipe[0])){
+            try(OutputStream out=new ParcelFileDescriptor.AutoCloseOutputStream(pipe[1])){out.write((command+"\n").getBytes(java.nio.charset.StandardCharsets.UTF_8));}
+            return new String(in.readAllBytes(),java.nio.charset.StandardCharsets.UTF_8);
+        }
+    }
     protected List<View> keys(View v){List<View> list=new ArrayList<>();collectKeys(v,list);return list;}
     private void collectKeys(View v,List<View> result){if(!v.isShown())return;Object tag=v.getTag();if(tag instanceof String&&(((String)tag).startsWith("key:")||((String)tag).startsWith("dh-key:"))||v instanceof TextView&&v.isClickable()){result.add(v);return;}if(v instanceof ViewGroup)for(int i=0;i<((ViewGroup)v).getChildCount();i++)collectKeys(((ViewGroup)v).getChildAt(i),result);}
     protected List<View> windows()throws Exception {
@@ -86,8 +95,15 @@ public abstract class App690FSupport extends TestCase {
     }
     private View described(View v,String description){if(v.isShown()&&description.contentEquals(v.getContentDescription()==null?"":v.getContentDescription()))return v;if(v instanceof ViewGroup)for(int i=0;i<((ViewGroup)v).getChildCount();i++){View q=described(((ViewGroup)v).getChildAt(i),description);if(q!=null)return q;}return null;}
     protected JSONObject hostCall(String method,Bundle extra)throws Exception {
-        Bundle reply=inst.getTargetContext().getContentResolver().call(android.net.Uri.parse("content://com.simon.ime.host690.truth"),method,null,extra);
-        assertNotNull("independent diagnostic host must be installed",reply);return new JSONObject(reply.getString("json"));
+        // The unchanged product manifest cannot query the separate diagnostic host on API 30+.
+        String command="content call --uri content://com.simon.ime.host690.truth --method "+method;
+        for(String key:extra.keySet()){
+            Object value=extra.get(key);String type=value instanceof Boolean?"b":value instanceof Integer?"i":"s";
+            command+=" --extra '"+(key+":"+type+":"+value).replace("'","'\\''")+"'";
+        }
+        String reply=shell(command);int start=reply.indexOf("{\""),end=reply.lastIndexOf("}");
+        assertTrue("independent diagnostic host readback: "+reply,start>=0&&end>start);
+        return new JSONObject(reply.substring(start,end+1));
     }
     protected void text(String value)throws Exception {Bundle b=new Bundle();b.putString("text",value);hostCall("text",b);inst.waitForIdleSync();}
     protected JSONObject selection(int at)throws Exception {Bundle b=new Bundle();b.putInt("start",at);b.putInt("end",at);hostCall("select",b);Thread.sleep(180);inst.waitForIdleSync();return hostCall("state",new Bundle());}
