@@ -903,7 +903,8 @@ public class SimonIMEService extends InputMethodService {
 
         super.onStartInput(attribute, restarting);
         if(dualHandPage!=null)dualHandPage.cursorAnchor(null);
-        if(dualHandSelected)dualHandCursorUpdates();
+        if(pageCorrection!=null)pageCorrection.cursorAnchor(null);
+        if(dualHandSelected||correctionEnabled())dualHandCursorUpdates();
         cursorTapGuard.reset();invalidateExternalCandidates();
         selectionStart=attribute.initialSelStart;selectionEnd=attribute.initialSelEnd;
         cursorTapGuard.observe(selectionStart,selectionEnd,-1,-1);
@@ -922,6 +923,7 @@ public class SimonIMEService extends InputMethodService {
         retainedTextField=field;
         if(clipboardHelper!=null)clipboardHelper.setPasswordField(protectedInputField);
         if(dualHandPage!=null&&(!field.equals(dualHandField)||protectedInputField!=wasProtected))dualHandPage.clear();
+        if(!field.equals(dualHandField)||protectedInputField!=wasProtected)correctionClose(true);
         dualHandField=field;
         if(sentencePhone!=null)sentencePhone.changed(true);
         sentenceInstalledCommit=null;
@@ -4393,7 +4395,29 @@ public class SimonIMEService extends InputMethodService {
         }catch(Exception error){Log.w(TAG,"candidate telemetry unavailable",error);}
     }
     private void recordCommitEvent(String page,String text,String first,String ai,boolean corrected,boolean aiTaken){if(imeTelemetry==null)return;try{imeTelemetry.record("commit",page,new JSONObject().put("text",text).put("engine_top1",first==null?"":first).put("ai_suggestion",ai==null?"":ai).put("corrected",corrected).put("ai_taken",aiTaken).put("via","bopomofo".equals(page)?zhuyinCommitVia:"other").put("committed_codepoints",text.codePointCount(0,text.length())).put("ai_shown",sentencePhone!=null&&sentencePhone.correctionShown()).put("reverted_spans",sentencePhone==null?0:sentencePhone.revertedSpans()).put("candidate_taps",textCandidateTaps),protectedInputField);}catch(Exception ignored){}}
+    private static final boolean PAGE_CORRECTION_ZHUYIN41=true,PAGE_CORRECTION_VOICE=true;
+    private CorrectionEditor pageCorrection;private CorrectionDictionary correctionTracks;
     private void recordCorrectionEvent(String page,String segment,String from,String to,String via){if(imeTelemetry==null)return;try{imeTelemetry.record("correction",page,new JSONObject().put("segment",segment).put("from",from).put("to",to).put("via",via),protectedInputField);}catch(Exception ignored){}}
+
+    private boolean correctionEnabled(){return !isWatchService()&&((currentKeyboardMode==KeyboardMode.BOPOMOFO&&!dualHandSelected&&PAGE_CORRECTION_ZHUYIN41)||(currentKeyboardMode==KeyboardMode.VOICE&&PAGE_CORRECTION_VOICE));}
+    CorrectionDictionary correctionDictionary(){if(correctionTracks==null)correctionTracks=new CorrectionDictionary(this,mainHandler);return correctionTracks;}
+    private CorrectionEditor correctionEditor(){
+        if(pageCorrection==null)pageCorrection=new CorrectionEditor(this,mainHandler,new CorrectionEditor.Page(){
+            private final DualHandState empty=new DualHandState(null);
+            public View view(){return currentKeyboardMode==KeyboardMode.VOICE?voiceKeyboard:bopomofoKeyboard;}
+            public LinearLayout candidateRow(){return currentKeyboardMode==KeyboardMode.VOICE?null:boCandidateItems;}
+            public DualHandState buffer(){return empty;}
+            public boolean blocked(){return protectedInputField||zhuyinInput!=null&&!zhuyinInput.previewText().isEmpty()||currentKeyboardMode==KeyboardMode.VOICE&&(isRecording||recordingFinalizing);}
+            public boolean reverseOnly(){return currentKeyboardMode==KeyboardMode.VOICE;}
+            public String name(){return currentKeyboardMode==KeyboardMode.VOICE?"voice":"bopomofo";}
+        });
+        return pageCorrection;
+    }
+    private void correctionSelection(int start,int end,int left,int right){if(correctionEnabled())correctionEditor().selection(start,end,left,right);}
+    private void correctionClose(boolean clear){if(pageCorrection!=null)pageCorrection.cancel(clear);if(clear)CorrectionCommitRecord.clear();}
+    boolean correctionSelfUpdate(){return mIgnoreNextUpdateSelection||cursorTapGuard.selfUpdate();}
+    void correctionSelfWrite(int start,int end){cursorTapGuard.selfSelection(start,end);}
+    @Override public void onFinishInput(){correctionClose(true);if(dualHandPage!=null)dualHandPage.clear();super.onFinishInput();}
 
     private void ensureDualHandPage(){
         if(dualHandPage==null&&!isWatchService())try{dualHandPage=(DualHandPage)Class.forName("com.simon.voiceime.DualHandKeyboard").getConstructor(SimonIMEService.class).newInstance(this);}
@@ -4403,6 +4427,7 @@ public class SimonIMEService extends InputMethodService {
     @Override public void onUpdateCursorAnchorInfo(android.view.inputmethod.CursorAnchorInfo info){
         super.onUpdateCursorAnchorInfo(info);
         if(dualHandSelected&&dualHandPage!=null)dualHandPage.cursorAnchor(info);
+        else if(correctionEnabled())correctionEditor().cursorAnchor(info);
     }
     private void toggleDualHand(){
         if(!getSharedPreferences("simon_ime_prefs",MODE_PRIVATE).getBoolean("dual_hand_enabled",true)){updateStatus("雙手鍵盤已在設定關閉");return;}
@@ -4414,7 +4439,7 @@ public class SimonIMEService extends InputMethodService {
         configureTextRows();switchKeyboard(KeyboardMode.BOPOMOFO);
     }
     void dualHandCursorUpdates(){InputConnection connection=getCurrentInputConnection();if(connection!=null)try{connection.requestCursorUpdates(InputConnection.CURSOR_UPDATE_IMMEDIATE|InputConnection.CURSOR_UPDATE_MONITOR);}catch(RuntimeException unsupported){}}
-    private void dualHandStopCursorUpdates(){if(dualHandPage!=null)dualHandPage.cursorAnchor(null);InputConnection connection=getCurrentInputConnection();if(connection!=null)try{connection.requestCursorUpdates(0);}catch(RuntimeException unsupported){}}
+    private void dualHandStopCursorUpdates(){if(pageCorrection!=null)pageCorrection.cursorAnchor(null);if(dualHandPage!=null)dualHandPage.cursorAnchor(null);InputConnection connection=getCurrentInputConnection();if(connection!=null)try{connection.requestCursorUpdates(0);}catch(RuntimeException unsupported){}}
     boolean dualHandProtected(){return protectedInputField;}
     boolean dualHandSelfUpdate(){return cursorTapGuard.selfUpdate();}
     long dualHandFieldGeneration(){return fieldGeneration;}
@@ -4486,7 +4511,8 @@ public class SimonIMEService extends InputMethodService {
         voiceKeyboard.setVisibility(mode == KeyboardMode.VOICE ? View.VISIBLE : View.GONE);
         bopomofoKeyboard.setVisibility(mode == KeyboardMode.BOPOMOFO && !dualHandSelected ? View.VISIBLE : View.GONE);
         if(dualHandPage!=null)dualHandPage.view().setVisibility(mode==KeyboardMode.BOPOMOFO&&dualHandSelected?View.VISIBLE:View.GONE);
-        if(dualHandSelected&&mode==KeyboardMode.BOPOMOFO)dualHandCursorUpdates();else dualHandStopCursorUpdates();
+        correctionClose(false);
+        if(dualHandSelected&&mode==KeyboardMode.BOPOMOFO||correctionEnabled())dualHandCursorUpdates();else dualHandStopCursorUpdates();
         englishKeyboard.setVisibility(mode == KeyboardMode.ENGLISH ? View.VISIBLE : View.GONE);
         numbersKeyboard.setVisibility(mode == KeyboardMode.NUMBERS ? View.VISIBLE : View.GONE);
         // Close any open panel when switching keyboards
@@ -5004,7 +5030,9 @@ public class SimonIMEService extends InputMethodService {
     }
 
     private boolean commitZhuyinText(InputConnection ic,ZhuyinInputController.State state){
+        java.util.List<String> correctionSounds=CorrectionCommitRecord.take(zhuyinInput,state.commitText);
         if(!commitTextProgrammatically(ic,state.commitText))return false;
+        if(!protectedInputField)correctionEditor().recordCommit(state.commitText,correctionSounds);
         recordCommitEvent("bopomofo",state.commitText,state.engineTop1,state.aiSuggestion,state.corrected,state.aiTaken);
         if(textLayoutSelected()){textCandidateTaps=0;if(sentencePhone!=null)sentencePhone.resetFeedback();}
         return true;
@@ -6807,6 +6835,7 @@ public class SimonIMEService extends InputMethodService {
                 protectedInputField||currentKeyboardMode!=KeyboardMode.BOPOMOFO||!textLayoutSelected());
         cursorTapGuard.observe(newSelStart,newSelEnd,candidatesStart,candidatesEnd);
         if(dualHandSelected&&dualHandPage!=null)dualHandPage.selection(newSelStart,newSelEnd,candidatesStart,candidatesEnd);
+        correctionSelection(newSelStart,newSelEnd,candidatesStart,candidatesEnd);
         updateExternalSelection(newSelStart,newSelEnd,tap);
         if(textLayoutSelected()&&zhuyinInput!=null&&zhuyinInput.previewText().isEmpty())renderTextCandidateRows();
         deferRankingContext();
@@ -6841,7 +6870,7 @@ public class SimonIMEService extends InputMethodService {
         try {
 
         super.onStartInputView(info, restarting);
-        if(dualHandSelected&&currentKeyboardMode==KeyboardMode.BOPOMOFO)dualHandCursorUpdates();
+        if(dualHandSelected&&currentKeyboardMode==KeyboardMode.BOPOMOFO||correctionEnabled())dualHandCursorUpdates();
         if(clipboardHelper!=null){clipboardHelper.setPasswordField(protectedInputField);clipboardHelper.captureCurrent("onStartInputView");}
         String currentPalette=getSharedPreferences("simon_ime_prefs",0).getString("keyboard_theme","system")+":"+getResources().getConfiguration().uiMode;
         if(!currentPalette.equals(dualHandAppliedPalette)){if(rootView!=null)KeyboardTheme.apply(this,rootView);dualHandAppliedPalette=currentPalette;}KeyboardHaptics.sync(this,rootView);

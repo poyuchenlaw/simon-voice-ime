@@ -28,11 +28,14 @@ public class App6891PopupHarness extends App6891PopupBase {
  static class WindowInsets{Insets i;WindowInsets(int b){i=new Insets(b);}static class Type{static int systemGestures(){return 1;}}Insets getInsets(int t){return i;}Insets getSystemGestureInsets(){return i;}}
  final Service service=new Service();final View root=new View(),bubbleLabel=new View();View marker=new View(),rootView=root;final Handler ui=new Handler();Object anchor=new Object(),lastTapOwner=new Object();Runnable markerExpiry;final Keyboard keyboard=new Keyboard();final Touch touch=new Touch();final InputConnection connection=new InputConnection();PopupWindow bubble=new PopupWindow(bubbleLabel,163,163,false),markerPopup;RectF bounds;float density=2.625f,labelSizeSp=12;int width=84,height=63,safeInset;String value="字";Page dualHandPage;boolean dualHandSelected=true,split,noConnection;Monitor mainDispatchMonitor;
  public App6891PopupHarness(){keyboard.v=root;PopupWindow.currentRoot=root;}
+ Page pageCorrection;
+ void guardPage(){}void releasePageGuard(){}boolean correctionEnabled(){return false;}
  int dp(float v){return Math.round(v*density);}int color(String s){return 0;}InputConnection getCurrentInputConnection(){return noConnection?null:connection;}void blurPopup(Service s,PopupWindow p,int r){p.flags|=4;}
  /* BUBBLE */
  /* MARKER */
  /* START */
  /* REQUEST */
+ /* POSITION */
  /* SHARED_INSETS */
  /* PALETTE */
  /* INSET */
