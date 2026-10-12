@@ -45,6 +45,10 @@ public final class DualHandKeyboard implements DualHandPage {
     private final android.graphics.Typeface typeface;
     private PopupWindow bubble;
     private TextView bubbleLabel;
+    private boolean bubbleUsed,bubbleParked;
+    private MessageQueue.IdleHandler bubbleWarmupIdle;
+    private View bubbleWarmupContent;
+    private ViewTreeObserver.OnDrawListener bubbleWarmupDraw;
     private final KeyboardLabels.Cache fitCache=new KeyboardLabels.Cache();
     private int cachedWidth=-1;
     private float cachedDensity=-1,cachedScale=-1,rowDp=78;
@@ -155,7 +159,7 @@ public final class DualHandKeyboard implements DualHandPage {
         if(width<=0)return;
         android.util.DisplayMetrics metrics=service.getResources().getDisplayMetrics();
         String layoutKey=width+":"+metrics.density+":"+metrics.scaledDensity+":"+service.getResources().getConfiguration().screenHeightDp;
-        boolean desired=!layoutKey.equals(failedSplitKey)&&service.getResources().getConfiguration().orientation==Configuration.ORIENTATION_LANDSCAPE&&DualHandVisuals.ENABLE_LANDSCAPE_SPLIT&&service.getSharedPreferences("simon_ime_prefs",0).getBoolean("dual_hand_landscape_split",true)&&182+safeInset/metrics.density<=service.getResources().getConfiguration().screenHeightDp*.55f&&DualHandVisuals.landscapeRowDp(service.getResources().getConfiguration().screenHeightDp)>=0;
+        boolean desired=!layoutKey.equals(failedSplitKey)&&service.getResources().getConfiguration().orientation==Configuration.ORIENTATION_LANDSCAPE&&DualHandVisuals.ENABLE_LANDSCAPE_SPLIT&&service.getSharedPreferences("simon_ime_prefs",0).getBoolean("dual_hand_landscape_split",true)&&182<=service.getResources().getConfiguration().screenHeightDp*.55f&&DualHandVisuals.landscapeRowDp(service.getResources().getConfiguration().screenHeightDp)>=0;
         if(cachedWidth==width&&cachedDensity==metrics.density&&cachedScale==metrics.scaledDensity&&split==desired){applyPaletteIfChanged();return;}
         cancelTouches();split=desired;rowDp=split?50:78;
         while(root.getChildCount()>1)root.removeViewAt(1);keys.clear();labels.clear();
@@ -258,8 +262,9 @@ public final class DualHandKeyboard implements DualHandPage {
             FrameLayout cap=keys.get(touch.stroke.key);cap.animate().translationX(0).translationY(0).rotationX(0).rotationY(0).setDuration(80);
             if(letter&&cap.isHardwareAccelerated()&&DualHandVisuals.highlight(direction,value)){float dx="right".equals(direction)?dp(2):"left".equals(direction)?-dp(2):0,dy="down".equals(direction)?dp(2):"up".equals(direction)?-dp(2):0;cap.animate().translationX(dx).translationY(dy).rotationX(-dy).rotationY(dx).setDuration(80);}cap.animate().start();
         }
-        if(!letter||!DualHandVisuals.highlight(direction,value)){if(bubble!=null)bubble.dismiss();return;}
-        if(bubble==null){bubbleLabel=text("",labelSizeSp*1.25f);bubbleLabel.setGravity(Gravity.CENTER);GradientDrawable circle=new GradientDrawable();circle.setShape(GradientDrawable.OVAL);circle.setColor(color("bubble"));FrameLayout content=new FrameLayout(service);View halo=new View(service);halo.setTag(R.id.keyboard_role,"bubble");halo.setBackground(circle);if(Build.VERSION.SDK_INT>=31)halo.setRenderEffect(RenderEffect.createBlurEffect(dp(2),dp(2),Shader.TileMode.CLAMP));content.addView(halo,new FrameLayout.LayoutParams(-1,-1));bubbleLabel.setTag(R.id.keyboard_role,"bubble");bubbleLabel.setTag(R.id.keyboard_text_role,"bubble_text");bubbleLabel.setTextColor(color("bubble_text"));content.addView(bubbleLabel,new FrameLayout.LayoutParams(-1,-1));bubble=new PopupWindow(content,dp(62),dp(62),false);bubble.setBackgroundDrawable(new ColorDrawable(color("transparent")));bubble.setClippingEnabled(false);bubble.setTouchable(false);bubble.setElevation(dp(3));}
+        if(!letter||!DualHandVisuals.highlight(direction,value)){if(!bubbleParked&&bubble!=null)bubble.dismiss();return;}
+        bubbleUsed=true;bubbleParked=false;stopBubbleWarmup();
+        if(bubble==null)createBubble();
         bubbleLabel.setText(value);bubbleLabel.setTextSize(labelSizeSp*1.25f);int[] origin=new int[2];root.getLocationOnScreen(origin);
         int x=DualHandVisuals.clamp(origin[0]+Math.round(touch.lastX)-dp(31),dp(62),service.getResources().getDisplayMetrics().widthPixels),y=DualHandVisuals.clamp(origin[1]+Math.round(touch.lastY)-dp(15)-dp(62),dp(62),service.getResources().getDisplayMetrics().heightPixels);
         // Cursor and touch positions are screen coordinates; older popups use the parent window.
@@ -267,6 +272,42 @@ public final class DualHandKeyboard implements DualHandPage {
         else {int[] window=new int[2];root.getLocationInWindow(window);x-=origin[0]-window[0];y-=origin[1]-window[1];}
         try{if(bubble.isShowing())bubble.update(x,y,-1,-1);else {bubble.showAtLocation(root,Gravity.TOP|Gravity.LEFT,x,y);}}catch(RuntimeException hidden){bubble.dismiss();}
     }
+    private void createBubble(){bubbleLabel=text("",labelSizeSp*1.25f);bubbleLabel.setGravity(Gravity.CENTER);GradientDrawable circle=new GradientDrawable();circle.setShape(GradientDrawable.OVAL);circle.setColor(color("bubble"));FrameLayout content=new FrameLayout(service);View halo=new View(service);halo.setTag(R.id.keyboard_role,"bubble");halo.setBackground(circle);if(Build.VERSION.SDK_INT>=31)halo.setRenderEffect(RenderEffect.createBlurEffect(dp(2),dp(2),Shader.TileMode.CLAMP));content.addView(halo,new FrameLayout.LayoutParams(-1,-1));bubbleLabel.setTag(R.id.keyboard_role,"bubble");bubbleLabel.setTag(R.id.keyboard_text_role,"bubble_text");bubbleLabel.setTextColor(color("bubble_text"));content.addView(bubbleLabel,new FrameLayout.LayoutParams(-1,-1));bubble=new PopupWindow(content,dp(62),dp(62),false);bubble.setBackgroundDrawable(new ColorDrawable(color("transparent")));bubble.setClippingEnabled(false);bubble.setTouchable(false);bubble.setElevation(dp(3));}
+    private void scheduleBubbleWarmup(){
+        if(closed||bubbleUsed||bubbleParked||bubbleWarmupIdle!=null||!root.isShown()||root.getWindowVisibility()!=View.VISIBLE||!root.isAttachedToWindow()||root.getWidth()<=0||root.getHeight()<=0)return;
+        bubbleWarmupIdle=()->{
+            bubbleWarmupIdle=null;
+            if(closed||bubbleUsed||bubbleParked||!root.isShown()||root.getWindowVisibility()!=View.VISIBLE||!root.isAttachedToWindow()||!touches.isEmpty())return false;
+            if(bubble==null)createBubble();
+            bubbleLabel.setText(output("Ø","right"));bubbleLabel.setTextSize(labelSizeSp*1.25f);
+            bubbleParked=true;View content=bubble.getContentView();bubbleWarmupContent=content;
+            bubbleWarmupDraw=new ViewTreeObserver.OnDrawListener(){
+                int draws;
+                public void onDraw(){
+                    draws++;
+                    ui.post(()->{
+                        // A touch or lifecycle exit may already have taken ownership of this window.
+                        if(bubbleWarmupDraw!=this)return;
+                        if(draws<2)content.invalidate();else stopBubbleWarmup();
+                    });
+                }
+            };
+            content.getViewTreeObserver().addOnDrawListener(bubbleWarmupDraw);
+            // Match real feedback content/halo, but keep the complete window and shadow offscreen.
+            int x=-dp(70),y=0;
+            if(Build.VERSION.SDK_INT>=29)bubble.setIsLaidOutInScreen(true);
+            else {int[] screen=new int[2],window=new int[2];root.getLocationOnScreen(screen);root.getLocationInWindow(window);x-=screen[0]-window[0];y-=screen[1]-window[1];}
+            try{bubble.showAtLocation(root,Gravity.TOP|Gravity.LEFT,x,y);}catch(RuntimeException hidden){dismissBubble();}
+            return false;
+        };
+        Looper.myQueue().addIdleHandler(bubbleWarmupIdle);
+    }
+    private void stopBubbleWarmup(){
+        if(bubbleWarmupIdle!=null){Looper.myQueue().removeIdleHandler(bubbleWarmupIdle);bubbleWarmupIdle=null;}
+        if(bubbleWarmupDraw!=null&&bubbleWarmupContent!=null){ViewTreeObserver observer=bubbleWarmupContent.getViewTreeObserver();if(observer.isAlive())observer.removeOnDrawListener(bubbleWarmupDraw);}
+        bubbleWarmupDraw=null;bubbleWarmupContent=null;
+    }
+    private void dismissBubble(){stopBubbleWarmup();bubbleParked=false;if(bubble!=null)bubble.dismiss();}
     static void blurPopup(android.content.Context context,PopupWindow popup,int radius){
         if(Build.VERSION.SDK_INT<31)return;
         View decor=popup.getContentView().getRootView();if(!(decor.getLayoutParams() instanceof WindowManager.LayoutParams))return;
@@ -274,7 +315,7 @@ public final class DualHandKeyboard implements DualHandPage {
         params.flags|=WindowManager.LayoutParams.FLAG_BLUR_BEHIND;params.setBlurBehindRadius(radius);
         try{((WindowManager)context.getSystemService(android.content.Context.WINDOW_SERVICE)).updateViewLayout(decor,params);}catch(RuntimeException unavailable){/* System blur may be unavailable; the translucent background remains. */}
     }
-    private void releaseCap(String key){FrameLayout cap=keys.get(key);cap.setPressed(false);KeyboardKeycaps.release(cap);if(bubble!=null)bubble.dismiss();}
+    private void releaseCap(String key){FrameLayout cap=keys.get(key);cap.setPressed(false);KeyboardKeycaps.release(cap);dismissBubble();}
     private final class KeyCap extends FrameLayout implements KeyboardProbe.Source {
         final String key;final Paint ink=new Paint(Paint.ANTI_ALIAS_FLAG);
         KeyCap(android.content.Context c,String key){super(c);this.key=key;setWillNotDraw(false);setClipChildren(false);setClipToPadding(false);}
@@ -380,7 +421,7 @@ public final class DualHandKeyboard implements DualHandPage {
     }
     public void requestGrid(int index){if(index<0||index>=state.syllables().size())return;hooks.grid(this,index);}
     public void event(String name,JSONObject fields){if(service.dualHandProtected())return;ImeTelemetry telemetry=ImeTelemetry.get();if(telemetry!=null)telemetry.record(name,"dual_hand",fields,service.dualHandProtected());}
-    private void cancelTouches(){for(Touch touch:touches.values())if(touch.repeat!=null)ui.removeCallbacks(touch.repeat);for(String key:keys.keySet())releaseCap(key);touches.clear();state.cancelTouches();ui.removeCallbacks(flush);}
+    private void cancelTouches(){dismissBubble();for(Touch touch:touches.values())if(touch.repeat!=null)ui.removeCallbacks(touch.repeat);for(String key:keys.keySet())releaseCap(key);touches.clear();state.cancelTouches();ui.removeCallbacks(flush);}
     private boolean leftEdge(String key){
         if(!DualHandTable.isLeft(key)||table.left(key,"left").isEmpty())return false;
         FrameLayout cap=keys.get(key);if(cap==null)return false;
@@ -391,10 +432,14 @@ public final class DualHandKeyboard implements DualHandPage {
     public void clear(){cancelTouches();hooks.cancel(this,true);state.clear();composing=false;changed(false);}
     public void reconfigure(){cancelTouches();hooks.cancel(this,false);configureLayout(root.getWidth());renderLabels();}
     public void selection(int start,int end,int composingStart,int composingEnd){hooks.selection(this,start,end,composingStart,composingEnd);}
-    public void cursorAnchor(android.view.inputmethod.CursorAnchorInfo info){hooks.cursorAnchor(info);}
+    public void cursorAnchor(android.view.inputmethod.CursorAnchorInfo info){if(info==null)dismissBubble();hooks.cursorAnchor(info);}
     public void close(){closed=true;cancelTouches();hooks.cancel(this,true);hooks.close(this);}
     private final class Surface extends LinearLayout {
         Surface(){super(service);setMotionEventSplittingEnabled(false);}
+        @Override protected void onLayout(boolean changed,int l,int t,int r,int b){super.onLayout(changed,l,t,r,b);scheduleBubbleWarmup();}
+        @Override protected void onVisibilityChanged(View changedView,int visibility){super.onVisibilityChanged(changedView,visibility);if(root==null)return;if(!root.isShown())dismissBubble();else scheduleBubbleWarmup();}
+        @Override protected void onWindowVisibilityChanged(int visibility){super.onWindowVisibilityChanged(visibility);if(root==null)return;if(visibility!=View.VISIBLE)dismissBubble();else scheduleBubbleWarmup();}
+        @Override protected void onDetachedFromWindow(){dismissBubble();super.onDetachedFromWindow();}
         private String hit(float x,float y){
             if(y<topBar.getBottom())return null;
             if(split&&x>=root.getWidth()*DualHandVisuals.WING_FRACTION&&x<root.getWidth()*(1-DualHandVisuals.WING_FRACTION))return null;
