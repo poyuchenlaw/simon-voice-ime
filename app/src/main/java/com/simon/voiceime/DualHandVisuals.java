@@ -1,6 +1,6 @@
 package com.simon.voiceime;
 
-/** Shared dp geometry and palette for the phone dual-hand surface only. */
+/** Shared geometry and the single functional palette for all keyboard pages. */
 public final class DualHandVisuals {
     public static final float LEFT_FRACTION=.40f, WING_FRACTION=.30f, PREVIEW_FRACTION=.40f;
     public static final boolean ENABLE_LANDSCAPE_SPLIT=true;
@@ -17,6 +17,21 @@ public final class DualHandVisuals {
             case "hint":return dark?0xFF38BDF8:0xFF0369A1;
             case "border":return dark?0xFF6366F1:0xFF94A3B8;
             case "highlight":return dark?0xFF48546A:0xFFE0F2FE;
+            case "accent":return dark?0xFF4ECCA3:0xFF077256;
+            case "recording":return dark?0xFFE94560:0xFFE53935;
+            case "mode_append":return dark?0xFF4ECCA3:0xFF08745B;
+            case "mode_replace":return dark?0xFFF87171:0xFFB42318;
+            case "mode_spell":return dark?0xFFF0A500:0xFF8A5300;
+            case "mode_translate":return dark?0xFF6BC5F0:0xFF0369A1;
+            case "top_highlight":return dark?0x40FFFFFF:0xB0FFFFFF;
+            case "bubble":return 0xDA203549;
+            case "bubble_text":return 0xFFFFFFFF;
+            case "overlay":return 0xE61C2230;
+            case "halo":return 0x9938BDF8;
+            case "transparent":return 0x00000000;
+            case "action_positive_bg":return dark?0xFF2D6A4F:0xFFD7EFE6;
+            case "action_negative_bg":return dark?0xFF4A1060:0xFFFCE2E2;
+            case "destructive":return dark?0xFFF87171:0xFFB42318;
             default:return dark?0xFF0D1117:0xFFF2F4F7;
         }
     }

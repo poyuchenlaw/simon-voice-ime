@@ -6,7 +6,12 @@ import android.widget.LinearLayout;
 /** Observe key touches before child listeners consume them. */
 public final class KeyboardInputLayout extends LinearLayout {
  java.util.function.Consumer<MotionEvent> beforeTouch;
- public KeyboardInputLayout(Context context,AttributeSet attrs){super(context,attrs);}
+ private int baselineBottom=-1,lastInset=-1;
+ public KeyboardInputLayout(Context context,AttributeSet attrs){super(context,attrs);addOnLayoutChangeListener((v,l,t,r,b,ol,ot,or,ob)->applyInsets(v.getRootWindowInsets()));setOnApplyWindowInsetsListener((v,in)->{applyInsets(in);return in;});}
+ private void applyInsets(android.view.WindowInsets in){
+  if(in==null)return;if(baselineBottom<0)baselineBottom=getPaddingBottom();int inset=KeyboardInsets.bottom(in);
+  if(lastInset!=inset){lastInset=inset;setPadding(getPaddingLeft(),getPaddingTop(),getPaddingRight(),baselineBottom+inset);}
+ }
  @Override public boolean dispatchTouchEvent(MotionEvent event){
   if(event.getActionMasked()==MotionEvent.ACTION_DOWN&&beforeTouch!=null)beforeTouch.accept(event);
   return super.dispatchTouchEvent(event);

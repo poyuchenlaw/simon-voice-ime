@@ -1,0 +1,15 @@
+package com.simon.voiceime;
+import java.util.*;import java.nio.file.*;import org.junit.Test;import static org.junit.Assert.*;
+public class App690AGuideDotsHarness {
+ static class Paint {static class Style{static int FILL=0;}int color,alpha;void setColor(int c){color=c;}void setStyle(int style){}void setAlpha(int a){alpha=a;}}
+ static class Canvas {int circles,color,alpha;float x,y,r;void drawCircle(float x,float y,float r,Paint p){circles++;this.x=x;this.y=y;this.r=r;color=p.color;alpha=p.alpha;}}
+ final Paint ink=new Paint();String key,central;boolean dark;float density;
+ int getWidth(){return 200;}int getHeight(){return 150;}int dp(float value){return Math.round(value*density);}int color(String role){return DualHandVisuals.color(dark,role);}String output(String key,String dir){return central;}
+ /* DRAW */
+ @Test public void r3e_actualDrawDotIffCentralEmptyForEveryState()throws Exception{
+  Path dir=Path.of("app/src/phone/assets/dual_hand");DualHandTable table=new DualHandTable(Files.newBufferedReader(dir.resolve("dual_hand_map.tsv")),Files.newBufferedReader(dir.resolve("left_hand.tsv")),Files.newBufferedReader(dir.resolve("draft_chars.tsv")));
+  List<String> states=new ArrayList<>();states.add(null);states.addAll(Arrays.asList(DualHandTable.STATES));List<String> keys=new ArrayList<>(Arrays.asList(DualHandTable.RIGHT_KEYS));for(int i=1;i<=6;i++)keys.add(""+i);keys.addAll(List.of("tools","symbols","clipboard","core"));int count=0;
+  for(boolean theme:new boolean[]{true,false})for(float d:new float[]{1.3f,1.5f,2.625f,2.75f,3})for(String state:states)for(String k:keys){dark=theme;density=d;key=k;boolean letter=DualHandTable.isLeft(k)||DualHandTable.isRight(k);central=DualHandTable.isLeft(k)?table.left(k,"tap"):DualHandTable.isRight(k)?table.right(state,k,"tap"):"";Canvas c=new Canvas();draw(c);assertEquals(state+" "+k,letter&&central.isEmpty()?1:0,c.circles);if(c.circles>0){assertEquals(dark?0xFF94A3B8:0xFF586174,c.color);assertEquals(80,c.alpha);assertEquals(Math.round(1.5f*d),c.r,0);assertEquals(100,c.x,0);assertEquals(75,c.y,0);}count++;}
+  System.out.println("GUIDE_DOT_STATES_THEME_DENSITY_CASES="+count);
+ }
+}

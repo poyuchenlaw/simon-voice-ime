@@ -25,6 +25,12 @@ clip+='\nreturn items;'
 template=(root/'scripts/app688_host/App688Harness.java.in').read_text()
 label=(phone/'DualHandLabelView.java').read_text()
 label_methods='\n'.join(block(label,x) for x in ['static float[] extent(', 'static boolean fits(']).replace('Paint paint','android.graphics.Paint paint')
+# Shared fitting code is extracted intact, with only Android boundary type substitution.
+shared=(prod/'KeyboardLabels.java').read_text()
+shared=shared[shared.index('{')+1:shared.rfind('}')].replace('Paint paint','android.graphics.Paint paint').replace('Typeface face','Object face')
+label_methods+='} static class KeyboardLabels {'+shared+'} static class App690ExtractionBoundary {'
+methods+='\n'+re.search(r'    private final KeyboardLabels.Cache fitCache=.*?;',k).group()
+
 java=template.replace('/* LABEL */',label_methods).replace('/* KEYBOARD */',methods).replace('/* SELECTION */',selection).replace('/* CLIPLIST */',clip)
 (out/'App688Harness.java').write_text(java)
 helper=subprocess.check_output(['git','show',a.clipboard_baseline+':app/src/main/java/com/simon/voiceime/ClipboardHelper.java'],cwd=root,text=True) if a.clipboard_baseline else (prod/'ClipboardHelper.java').read_text();helper=re.sub(r'^import android[^;]+;\n','',helper,flags=re.M);(out/'ClipboardHelper.java').write_text(helper)

@@ -27,11 +27,16 @@ finish=block(s,'public void onFinishInputView(');finish=finish[finish.index('if 
 anchor=block(e,'public void cursorAnchor(').replace('CursorAnchorInfo','Object')
 dismiss=block(e,'private void dismissMarker(')
 # Palette and dispatched-inset bodies are actual production statements.
-palette=block(k,'private void applyPalette(');palette='void applyPalette(){'+palette[palette.index('{')+1:palette.index('topBar.setBackgroundColor')]+ '}'
+palette=block(k,'private void applyPalette(');palette='void applyPalette(){'+palette[palette.index('{')+1:palette.index('topBar.')]+ '}'
 listener=k[k.index('root.setOnApplyWindowInsetsListener'):];listener=listener[listener.index('{')+1:listener.index('});')];listener=listener.replace('android.graphics.Insets','Insets');listener='Object inset(WindowInsets in){'+listener+'}'
 if 'private void applyInsets(' in k: listener+=block(k,'private void applyInsets(')
 layout=k[k.index('root.addOnLayoutChangeListener'):];layout=layout[layout.index('{')+1:layout.index('});')];layout='void layout(View v,int l,int t,int r,int b,int ol,int ot,int or,int ob){'+layout+'}'
 t=(w/'scripts/app689_host/App6891PopupHarness.java.in').read_text()
+shared=(w/'app/src/main/java/com/simon/voiceime/KeyboardInsets.java').read_text()
+# ViewParent is the existing getParent() boundary; execute the shared parent walk intact.
+owned=block(shared,'public static boolean ownedByParent(').replace('ViewParent p','Object p').replace('p=p.getParent()','p=((View)p).getParent()')
+t=t.replace('/* SHARED_INSETS */','static class KeyboardInputLayout extends View {} static class KeyboardInsets {'+owned+'}')
+
 for n,body in [('BUBBLE',f),('MARKER',m),('START',start),('REQUEST',request),('PALETTE',palette),('INSET',listener),('LAYOUT',layout),('STOP',stop),('FINISH',finish),('ANCHOR',anchor),('DISMISS',dismiss)]:t=t.replace('/* '+n+' */',body)
 (out/'App6891PopupHarness.java').write_text(t)
 cp=':'.join(str(w/'out/test-libs'/n) for n in ['junit-4.13.2.jar','hamcrest-core-1.3.jar'])

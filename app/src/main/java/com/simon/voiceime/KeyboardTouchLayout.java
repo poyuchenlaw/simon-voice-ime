@@ -85,6 +85,8 @@ public class KeyboardTouchLayout extends LinearLayout {
         local.offsetLocation(keyX - screenX, keyY - screenY);
         try {
             long dispatchStarted=android.os.SystemClock.uptimeMillis();
+            if(action==MotionEvent.ACTION_DOWN){KeyboardKeycaps.press(target.key);KeyboardHaptics.press(target.key);}
+            else if(action==MotionEvent.ACTION_UP||action==MotionEvent.ACTION_CANCEL)KeyboardKeycaps.release(target.key);
             boolean consumed = target.key.dispatchTouchEvent(local);
             received(target.key,local,consumed,false);
             long delay = Math.max(0L, android.os.SystemClock.uptimeMillis()-event.getEventTime());
