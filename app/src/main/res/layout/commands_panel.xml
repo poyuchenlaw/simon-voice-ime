@@ -2,8 +2,7 @@
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:orientation="vertical"
-    android:background="#111122">
+    android:orientation="vertical"><tag android:id="@id/keyboard_role" android:value="background" /><tag android:id="@id/keyboard_text_role" android:value="text" /><tag android:id="@id/keyboard_content_kind" android:value="content" />
 
     <!-- 標題列 -->
     <LinearLayout
@@ -11,16 +10,15 @@
         android:layout_height="wrap_content"
         android:orientation="horizontal"
         android:padding="4dp"
-        android:gravity="center_vertical">
+        android:gravity="center_vertical"><tag android:id="@id/keyboard_role" android:value="background" /><tag android:id="@id/keyboard_text_role" android:value="text" /><tag android:id="@id/keyboard_content_kind" android:value="content" />
 
         <TextView
             android:layout_width="0dp"
             android:layout_height="wrap_content"
             android:layout_weight="1"
             android:text="⚡ 常用詞彙"
-            android:textColor="#e0e0e0"
             android:textSize="14sp"
-            android:paddingStart="8dp" />
+            android:paddingStart="8dp" ><tag android:id="@id/keyboard_role" android:value="background" /><tag android:id="@id/keyboard_text_role" android:value="text" /><tag android:id="@id/keyboard_content_kind" android:value="fixed" /></TextView>
 
         <!-- ＋ 在鍵盤內新增資料夾（語音命名） -->
         <Button
@@ -28,35 +26,31 @@
             android:layout_width="wrap_content"
             android:layout_height="30dp"
             android:text="＋ 資料夾"
-            android:textColor="#4ECCA3"
             android:textSize="12sp"
-            android:background="@android:color/transparent"
             android:paddingStart="10dp"
-            android:paddingEnd="10dp" />
+            android:paddingEnd="10dp" ><tag android:id="@id/keyboard_role" android:value="tools" /><tag android:id="@id/keyboard_text_role" android:value="accent" /><tag android:id="@id/keyboard_content_kind" android:value="fixed" /></Button>
 
         <Button
             android:id="@+id/btnCmdClose"
             android:layout_width="wrap_content"
             android:layout_height="30dp"
             android:text="✕"
-            android:textColor="#888888"
             android:textSize="14sp"
-            android:background="@android:color/transparent"
             android:paddingStart="12dp"
-            android:paddingEnd="12dp" />
+            android:paddingEnd="12dp" ><tag android:id="@id/keyboard_role" android:value="tools" /><tag android:id="@id/keyboard_text_role" android:value="secondary" /><tag android:id="@id/keyboard_content_kind" android:value="fixed" /></Button>
     </LinearLayout>
 
     <!-- 分組 Tab -->
     <HorizontalScrollView
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:scrollbars="none">
+        android:scrollbars="none"><tag android:id="@id/keyboard_role" android:value="background" /><tag android:id="@id/keyboard_text_role" android:value="text" /><tag android:id="@id/keyboard_content_kind" android:value="content" />
         <LinearLayout
             android:id="@+id/cmdGroupTabs"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:orientation="horizontal"
-            android:padding="4dp" />
+            android:padding="4dp" ><tag android:id="@id/keyboard_role" android:value="background" /><tag android:id="@id/keyboard_text_role" android:value="text" /><tag android:id="@id/keyboard_content_kind" android:value="content" /></LinearLayout>
     </HorizontalScrollView>
 
     <!-- 指令列表 -->
@@ -64,6 +58,6 @@
         android:id="@+id/cmdRecycler"
         android:layout_width="match_parent"
         android:layout_height="match_parent"
-        android:padding="4dp" />
+        android:padding="4dp" ><tag android:id="@id/keyboard_role" android:value="background" /><tag android:id="@id/keyboard_text_role" android:value="text" /><tag android:id="@id/keyboard_content_kind" android:value="content" /></androidx.recyclerview.widget.RecyclerView>
 
 </LinearLayout>

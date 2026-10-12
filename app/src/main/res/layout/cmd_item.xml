@@ -3,27 +3,24 @@
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
     android:orientation="vertical"
-    android:background="#1a1a2e"
     android:padding="8dp"
     android:layout_marginBottom="2dp"
     android:clickable="true"
-    android:focusable="true">
+    android:focusable="true"><tag android:id="@id/keyboard_role" android:value="background" /><tag android:id="@id/keyboard_text_role" android:value="text" /><tag android:id="@id/keyboard_content_kind" android:value="content" />
 
     <TextView
         android:id="@+id/cmdLabel"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:textColor="#e0e0e0"
-        android:textSize="14sp" />
+        android:textSize="14sp"  android:fontFamily="sans-serif"><tag android:id="@id/keyboard_role" android:value="background" /><tag android:id="@id/keyboard_text_role" android:value="text" /><tag android:id="@id/keyboard_content_kind" android:value="content" /></TextView>
 
     <TextView
         android:id="@+id/cmdText"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:textColor="#888888"
         android:textSize="11sp"
         android:maxLines="1"
         android:ellipsize="end"
-        android:layout_marginTop="2dp" />
+        android:layout_marginTop="2dp"  android:fontFamily="sans-serif"><tag android:id="@id/keyboard_role" android:value="background" /><tag android:id="@id/keyboard_text_role" android:value="secondary" /><tag android:id="@id/keyboard_content_kind" android:value="content" /></TextView>
 
 </LinearLayout>

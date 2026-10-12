@@ -1136,6 +1136,7 @@ public class SimonIMEService extends InputMethodService {
         if (enSuggest0 != null) enSuggest0.setOnClickListener(v -> applyEnglishSuggestion(0));
         if (enSuggest1 != null) enSuggest1.setOnClickListener(v -> applyEnglishSuggestion(1));
         if (enSuggest2 != null) enSuggest2.setOnClickListener(v -> applyEnglishSuggestion(2));
+        styleDTypingPage(englishKeyboard);styleDTypingPage(numbersKeyboard);updateSuggestionBar();
 
         boCandidateScroll = rootView.findViewById(R.id.boCandidateScroll);
         boCandidateItems = rootView.findViewById(R.id.boCandidateItems);
@@ -1171,6 +1172,85 @@ public class SimonIMEService extends InputMethodService {
         return rootView;
 
         } finally {if(mainDispatchMonitor!=null)mainDispatchMonitor.endLifecycle(SystemClock.uptimeMillis());}
+    }
+
+
+    private int dColor(String role){return DualHandVisuals.color(KeyboardRoles.dark(this),role);}
+
+    private void styleDTypingPage(View page){
+        if(page==null)return;
+        List<TextView> keys=new ArrayList<>();collectDTypingLabels(page,keys);
+        KeyboardLabels.Cache cache=new KeyboardLabels.Cache();
+        page.addOnLayoutChangeListener((v,l,t,r,b,ol,ot,or,ob)->fitDTypingPage(page,keys,cache));
+    }
+
+    private void collectDTypingLabels(View view,List<TextView> keys){
+        if(view instanceof TextView&&view.getTag() instanceof String&&view.getTag().toString().startsWith("key:")){
+            TextView key=(TextView)view;keys.add(key);
+            boolean character="right".equals(key.getTag(R.id.keyboard_role));
+            String text=key.getText().toString(),kind=KeyboardLabels.labelClass(text,character);
+            if("function".equals(kind)){
+                text=KeyboardLabels.functionLabel(text,"tap",false);key.setText(text);
+                key.setTextSize(KeyboardLabels.FUNCTION_TEXT_SP);
+            }
+            key.setTypeface(KeyboardTypeface.forLabel(this,text,true,character));
+            key.setSingleLine(true);key.setEllipsize(null);
+        }
+        if(view instanceof ViewGroup){ViewGroup group=(ViewGroup)view;for(int i=0;i<group.getChildCount();i++)collectDTypingLabels(group.getChildAt(i),keys);}
+    }
+
+    private void fitDTypingPage(View page,List<TextView> keys,KeyboardLabels.Cache cache){
+        if(page.getWidth()<=0)return;
+        float density=page.getResources().getDisplayMetrics().density;
+        float scaledDensity=page.getResources().getDisplayMetrics().scaledDensity;
+        List<KeyboardLabels.Label> labels=new ArrayList<>();
+        for(TextView key:keys)if("right".equals(key.getTag(R.id.keyboard_role))){
+            if(key.getWidth()<=0||key.getHeight()<=0)return;
+            float width=KeyboardLabels.contentWidth(key.getWidth(),KeyboardLabels.KEY_MARGIN_DP*density,density);
+            float height=key.getHeight()-2*density;
+            String text=key.getTag().toString().substring(4);
+            labels.add(new KeyboardLabels.Label(width,height,KeyboardLabels.FIT_VERTICAL_MARGIN_DP*density,text,"","","",""));
+            labels.add(new KeyboardLabels.Label(width,height,KeyboardLabels.FIT_VERTICAL_MARGIN_DP*density,text.toUpperCase(java.util.Locale.ROOT),"","","",""));
+        }
+        if(labels.isEmpty())return;
+        Paint paint=new Paint(Paint.ANTI_ALIAS_FLAG);paint.setTypeface(KeyboardTypeface.get(this));
+        float sp=cache.fit(page.getWidth(),density,scaledDensity,KeyboardTypeface.get(this),paint,labels);
+        for(TextView key:keys)if("right".equals(key.getTag(R.id.keyboard_role)))key.setTextSize(sp);
+    }
+
+    private void styleDButton(TextView button,boolean fixed){
+        int left=button.getPaddingLeft(),top=button.getPaddingTop(),right=button.getPaddingRight(),bottom=button.getPaddingBottom();
+        if(button.getTag(R.id.keyboard_role)==null)KeyboardRoles.mark(button,"tools","text");
+        button.setTag(R.id.keyboard_content_kind,fixed?"fixed":"content");
+        button.setTypeface(KeyboardTypeface.forLabel(this,button.getText().toString(),fixed));
+        if(!"icon".equals(KeyboardLabels.labelClass(button.getText().toString(),false)))button.setTextSize(KeyboardLabels.FUNCTION_TEXT_SP);
+        button.setSingleLine(true);button.setEllipsize(null);
+        KeyboardKeycaps.apply(button,KeyboardRoles.dark(this),button.getTag(R.id.keyboard_role).toString(),1);
+        button.setTextColor(dColor(button.getTag(R.id.keyboard_text_role).toString()));
+        button.setTag(R.id.keyboard_style_theme,KeyboardRoles.dark(this));
+        button.setPadding(left,top,right,bottom);
+        button.setOnTouchListener((v,event)->{
+            if(event.getActionMasked()==MotionEvent.ACTION_DOWN){KeyboardKeycaps.press(v);KeyboardHaptics.press(v);}
+            else if(event.getActionMasked()==MotionEvent.ACTION_UP||event.getActionMasked()==MotionEvent.ACTION_CANCEL)KeyboardKeycaps.release(v);
+            return false;
+        });
+    }
+
+    private void collectDPanelStyles(View view){
+        if(view.getTag(R.id.keyboard_role)==null)KeyboardRoles.mark(view,view instanceof Button?"tools":"background","text");
+        if(view instanceof TextView){
+            TextView text=(TextView)view;
+            boolean fixed="fixed".equals(view.getTag(R.id.keyboard_content_kind));
+            if(view instanceof Button&&!(view.getBackground() instanceof KeyboardKeycaps.Cap))styleDButton(text,!"content".equals(view.getTag(R.id.keyboard_content_kind)));
+            else text.setTypeface(KeyboardTypeface.forLabel(this,text.getText().toString(),fixed));
+        }
+        if(view instanceof ViewGroup){ViewGroup group=(ViewGroup)view;for(int i=0;i<group.getChildCount();i++)collectDPanelStyles(group.getChildAt(i));}
+    }
+
+    private void styleDPanel(View view){
+        collectDPanelStyles(view);
+        int left=view.getPaddingLeft(),top=view.getPaddingTop(),right=view.getPaddingRight(),bottom=view.getPaddingBottom();
+        KeyboardTheme.apply(this,view);view.setPadding(left,top,right,bottom);
     }
 
     private void setupPunctuationKey(View key, String fullWidth, String halfWidth) {
@@ -1237,7 +1317,7 @@ public class SimonIMEService extends InputMethodService {
             int popupHeight = content.getMeasuredHeight();
             if (popupWidth <= 0 || popupHeight <= 0) throw new IllegalStateException("symbol popup measured empty");
             symbolPopup = new PopupWindow(content, popupWidth, popupHeight, false);
-            symbolPopup.setBackgroundDrawable(new ColorDrawable(Color.TRANSPARENT));
+            symbolPopup.setBackgroundDrawable(new ColorDrawable(dColor("transparent")));
             symbolPopup.setOutsideTouchable(true);
             symbolPopup.setClippingEnabled(false);
             symbolPopup.setElevation(dp(8));
@@ -1252,24 +1332,31 @@ public class SimonIMEService extends InputMethodService {
     }
 
     private View buildSymbolPopupContent(String[] symbols, int columns, String fallbackText) {
-        return buildChoiceGrid(symbols,columns,40,index->{commitSymbolFromPopup(symbols[index],fallbackText);dismissSymbolPopup();});
+        return buildChoiceGrid(symbols,columns,40,true,index->{commitSymbolFromPopup(symbols[index],fallbackText);dismissSymbolPopup();});
     }
     View buildChoiceGrid(String[] symbols,int columns,int width,java.util.function.IntConsumer choose) {
+        return buildChoiceGrid(symbols,columns,width,false,choose);
+    }
+    private View buildChoiceGrid(String[] symbols,int columns,int width,boolean fixed,java.util.function.IntConsumer choose) {
         LinearLayout panel = new LinearLayout(this);
         panel.setOrientation(LinearLayout.VERTICAL);
         panel.setPadding(dp(6), dp(6), dp(6), dp(6));
-        panel.setBackgroundColor(keyboardColor(R.color.keyboard_bg));
+        KeyboardRoles.mark(panel,"background","text");panel.setBackgroundColor(dColor("background"));
         GridLayout grid = new GridLayout(this);
+        KeyboardRoles.mark(grid,"background","text");
         grid.setColumnCount(columns);
         grid.setRowCount((int) Math.ceil(symbols.length / (double) columns));
         for (int index=0;index<symbols.length;index++) {
             String symbol=symbols[index];final int selected=index;
             TextView button = new TextView(this);
             button.setText(symbol);
-            button.setTextColor(keyboardColor(R.color.keyboard_key_text));
-            button.setTextSize(18);
-            button.setGravity(Gravity.CENTER);
-            button.setBackgroundResource(R.drawable.keyboard_key);
+            KeyboardCandidates.applyGrid(button,KeyboardRoles.dark(this),fixed);
+            button.setTag(R.id.keyboard_style_theme,KeyboardRoles.dark(this));
+            button.setOnTouchListener((v,event)->{
+                if(event.getActionMasked()==MotionEvent.ACTION_DOWN){KeyboardKeycaps.press(v);KeyboardHaptics.press(v);}
+                else if(event.getActionMasked()==MotionEvent.ACTION_UP||event.getActionMasked()==MotionEvent.ACTION_CANCEL)KeyboardKeycaps.release(v);
+                return false;
+            });
             button.setClickable(true);
             button.setFocusable(true);
             button.setEnabled(!symbol.isEmpty());
@@ -2093,10 +2180,7 @@ public class SimonIMEService extends InputMethodService {
         if(dualHandSelected&&dualHandPage!=null){panelContainer.getLayoutParams().height=Math.max(dp(220),dualHandPage.view().getHeight());dualHandPage.reconfigure();dualHandPage.view().setVisibility(View.GONE);}
         else panelContainer.getLayoutParams().height=dp(220);
         activePanel = panel;
-        panelContainer.setOnHierarchyChangeListener(new ViewGroup.OnHierarchyChangeListener(){
-            public void onChildViewAdded(View parent,View child){KeyboardTheme.apply(SimonIMEService.this,child);}
-            public void onChildViewRemoved(View parent,View child){}
-        });
+        panelContainer.setOnHierarchyChangeListener(null);
 
         switch (panel) {
             case CLIPBOARD:
@@ -2201,7 +2285,7 @@ public class SimonIMEService extends InputMethodService {
         recycler.setAdapter(adapter);
 
         updateClipMarkFooter();
-        KeyboardTheme.apply(this, panelContainer);
+        styleDPanel(view);
 
         if(dualHandSelected)return;
         // 右滑 → 加入常用指令；左滑 → 標記/取消標記
@@ -2242,24 +2326,26 @@ public class SimonIMEService extends InputMethodService {
                 if (dX > 0) {
                     // 右滑：綠色背景 ⚡+
                     Paint paint = new Paint();
-                    paint.setColor(0xFF2d6a4f);
+                    paint.setColor(dColor("action_positive_bg"));
                     c.drawRect(vh.itemView.getLeft(), vh.itemView.getTop(),
                             vh.itemView.getLeft() + dX, vh.itemView.getBottom(), paint);
                     Paint textPaint = new Paint();
-                    textPaint.setColor(Color.WHITE);
-                    textPaint.setTextSize(36f);
+                    textPaint.setColor(dColor("text"));
+                    textPaint.setTypeface(KeyboardTypeface.forLabel(SimonIMEService.this,"⚡+✓",true));
+                    textPaint.setTextSize(KeyboardCandidates.GRID_TEXT_SP*2);
                     textPaint.setAntiAlias(true);
                     c.drawText("⚡+", vh.itemView.getLeft() + 24,
                             (vh.itemView.getTop() + vh.itemView.getBottom()) / 2f + 12, textPaint);
                 } else if (dX < 0) {
                     // 左滑：紫色背景 ✓
                     Paint paint = new Paint();
-                    paint.setColor(0xFF4a1060);
+                    paint.setColor(dColor("action_negative_bg"));
                     c.drawRect(vh.itemView.getRight() + dX, vh.itemView.getTop(),
                             vh.itemView.getRight(), vh.itemView.getBottom(), paint);
                     Paint textPaint = new Paint();
-                    textPaint.setColor(Color.WHITE);
-                    textPaint.setTextSize(36f);
+                    textPaint.setColor(dColor("text"));
+                    textPaint.setTypeface(KeyboardTypeface.forLabel(SimonIMEService.this,"⚡+✓",true));
+                    textPaint.setTextSize(KeyboardCandidates.GRID_TEXT_SP*2);
                     textPaint.setAntiAlias(true);
                     c.drawText("✓", vh.itemView.getRight() + dX + 16,
                             (vh.itemView.getTop() + vh.itemView.getBottom()) / 2f + 12, textPaint);
@@ -2275,30 +2361,30 @@ public class SimonIMEService extends InputMethodService {
 
         LinearLayout panel = new LinearLayout(this);
         panel.setOrientation(LinearLayout.VERTICAL);
-        panel.setBackgroundColor(0xFF111122);
+        panel.setBackgroundColor(dColor("background"));
         panel.setPadding(24, 16, 24, 16);
 
         // 標題
         TextView title = new TextView(this);
-        title.setText("加入常用指令");
-        title.setTextColor(0xFF4ECCA3);
-        title.setTextSize(16);
+        title.setTag(R.id.keyboard_content_kind,"fixed");title.setText("加入常用指令");
+        KeyboardRoles.mark(title,"background","accent");title.setTextColor(dColor("accent"));
+        title.setTextSize(KeyboardLabels.FUNCTION_TEXT_SP);
         panel.addView(title);
 
         // 預覽
         String autoLabel = clipText.length() > 10 ? clipText.substring(0, 10) + "…" : clipText;
         TextView preview = new TextView(this);
         preview.setText("標籤：" + autoLabel);
-        preview.setTextColor(0xFFcccccc);
-        preview.setTextSize(13);
+        KeyboardRoles.mark(preview,"background","text");preview.setTextColor(dColor("text"));
+        preview.setTextSize(KeyboardLabels.FUNCTION_TEXT_SP);
         preview.setPadding(0, 8, 0, 12);
         panel.addView(preview);
 
         // 群組選擇按鈕列
         TextView groupLabel = new TextView(this);
-        groupLabel.setText("選擇群組：");
-        groupLabel.setTextColor(0xFF888888);
-        groupLabel.setTextSize(12);
+        groupLabel.setTag(R.id.keyboard_content_kind,"fixed");groupLabel.setText("選擇群組：");
+        KeyboardRoles.mark(groupLabel,"background","secondary");groupLabel.setTextColor(dColor("secondary"));
+        groupLabel.setTextSize(KeyboardLabels.FUNCTION_TEXT_SP);
         panel.addView(groupLabel);
 
         LinearLayout groupRow = new LinearLayout(this);
@@ -2312,8 +2398,8 @@ public class SimonIMEService extends InputMethodService {
         for (int i = 0; i < groupNames.size(); i++) {
             String gName = groupNames.get(i);
             Button btn = new Button(this);
-            btn.setText(gName);
-            btn.setTextSize(12);
+            btn.setTag(R.id.keyboard_content_kind,"content");btn.setText(gName);
+            btn.setTextSize(KeyboardLabels.FUNCTION_TEXT_SP);
             btn.setAllCaps(false);
             LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
                     LinearLayout.LayoutParams.WRAP_CONTENT, 72);
@@ -2323,22 +2409,22 @@ public class SimonIMEService extends InputMethodService {
             groupButtons[i] = btn;
 
             if (gName.equals(selectedGroup[0])) {
-                btn.setTextColor(0xFF4ECCA3);
-                btn.setBackgroundColor(0xFF1a1a2e);
+                KeyboardRoles.mark(btn,"tools","accent");btn.setTextColor(dColor("accent"));
+                btn.setTag(R.id.keyboard_role,"highlight");btn.setTag(R.id.keyboard_text_role,"text");btn.setTag(R.id.keyboard_style_theme,null);styleDPanel(btn);
             } else {
-                btn.setTextColor(0xFF888888);
-                btn.setBackgroundColor(0xFF16213e);
+                KeyboardRoles.mark(btn,"tools","secondary");btn.setTextColor(dColor("secondary"));
+                btn.setTag(R.id.keyboard_role,"tools");btn.setTag(R.id.keyboard_style_theme,null);styleDPanel(btn);
             }
 
             btn.setOnClickListener(v -> {
                 selectedGroup[0] = gName;
                 for (int j = 0; j < groupButtons.length; j++) {
                     if (groupNames.get(j).equals(gName)) {
-                        groupButtons[j].setTextColor(0xFF4ECCA3);
-                        groupButtons[j].setBackgroundColor(0xFF1a1a2e);
+                        KeyboardRoles.mark(groupButtons[j],"tools","accent");groupButtons[j].setTextColor(dColor("accent"));
+                        groupButtons[j].setTag(R.id.keyboard_role,"highlight");groupButtons[j].setTag(R.id.keyboard_text_role,"text");groupButtons[j].setTag(R.id.keyboard_style_theme,null);styleDPanel(groupButtons[j]);
                     } else {
-                        groupButtons[j].setTextColor(0xFF888888);
-                        groupButtons[j].setBackgroundColor(0xFF16213e);
+                        KeyboardRoles.mark(groupButtons[j],"tools","secondary");groupButtons[j].setTextColor(dColor("secondary"));
+                        groupButtons[j].setTag(R.id.keyboard_role,"tools");groupButtons[j].setTag(R.id.keyboard_style_theme,null);styleDPanel(groupButtons[j]);
                     }
                 }
             });
@@ -2347,14 +2433,14 @@ public class SimonIMEService extends InputMethodService {
         // ＋ 新資料夾（語音命名）
         Button btnNewFolder = new Button(this);
         btnNewFolder.setText("＋ 新資料夾");
-        btnNewFolder.setTextColor(0xFF4ECCA3);
-        btnNewFolder.setTextSize(12);
+        KeyboardRoles.mark(btnNewFolder,"tools","accent");btnNewFolder.setTextColor(dColor("accent"));
+        btnNewFolder.setTextSize(KeyboardLabels.FUNCTION_TEXT_SP);
         btnNewFolder.setAllCaps(false);
         LinearLayout.LayoutParams newFolderLp = new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.WRAP_CONTENT, 72);
         newFolderLp.setMarginEnd(8);
         btnNewFolder.setLayoutParams(newFolderLp);
-        btnNewFolder.setBackgroundColor(0xFF0a1020);
+        btnNewFolder.setBackgroundColor(dColor("tools"));
         btnNewFolder.setOnClickListener(v -> {
             folderNamingMode = true;
             closePanel();
@@ -2371,8 +2457,8 @@ public class SimonIMEService extends InputMethodService {
 
         Button btnConfirm = new Button(this);
         btnConfirm.setText("確認加入");
-        btnConfirm.setTextColor(0xFF4ECCA3);
-        btnConfirm.setTextSize(14);
+        KeyboardRoles.mark(btnConfirm,"tools","accent");btnConfirm.setTextColor(dColor("accent"));
+        btnConfirm.setTextSize(KeyboardLabels.FUNCTION_TEXT_SP);
         btnConfirm.setOnClickListener(v -> {
             if (selectedGroup[0] != null) {
                 commandsHelper.addCommand(selectedGroup[0], autoLabel, clipText);
@@ -2383,15 +2469,15 @@ public class SimonIMEService extends InputMethodService {
 
         Button btnCancel = new Button(this);
         btnCancel.setText("取消");
-        btnCancel.setTextColor(0xFF888888);
-        btnCancel.setTextSize(14);
+        KeyboardRoles.mark(btnCancel,"tools","secondary");btnCancel.setTextColor(dColor("secondary"));
+        btnCancel.setTextSize(KeyboardLabels.FUNCTION_TEXT_SP);
         btnCancel.setOnClickListener(v -> showPanel(Panel.CLIPBOARD));
 
         actionRow.addView(btnConfirm);
         actionRow.addView(btnCancel);
         panel.addView(actionRow);
 
-        panelContainer.addView(panel);
+        styleDPanel(panel);panelContainer.addView(panel);
     }
 
     /** v6.20: 列表點擊回呼介面（提升至 Service 層級，供 ClipAdapter 與 CmdAdapter 共用） */
@@ -2409,13 +2495,14 @@ public class SimonIMEService extends InputMethodService {
 
         @Override public VH onCreateViewHolder(@NonNull android.view.ViewGroup parent, int viewType) {
             View v = LayoutInflater.from(parent.getContext()).inflate(R.layout.clip_item, parent, false);
+            styleDPanel(v);KeyboardTheme.apply(SimonIMEService.this,v);
+            CheckBox check=v.findViewById(R.id.clipCheck);check.setButtonTintList(android.content.res.ColorStateList.valueOf(dColor("hint")));
             return new VH(v);
         }
 
         @Override public void onBindViewHolder(@NonNull VH holder, int position) {
             String text = items.get(position);
             holder.text.setText(text);
-            KeyboardTheme.apply(SimonIMEService.this, holder.itemView);
             boolean marked = markedClips.contains(text);
             holder.accent.setVisibility(marked ? View.VISIBLE : View.GONE);
             holder.checkBox.setVisibility(marked ? View.VISIBLE : View.GONE);
@@ -2466,6 +2553,10 @@ public class SimonIMEService extends InputMethodService {
         LinearLayout tabContainer = view.findViewById(R.id.cmdGroupTabs);
         RecyclerView recycler = view.findViewById(R.id.cmdRecycler);
         recycler.setLayoutManager(new LinearLayoutManager(this));
+        recycler.addOnChildAttachStateChangeListener(new RecyclerView.OnChildAttachStateChangeListener(){
+            public void onChildViewAttachedToWindow(View child){styleDPanel(child);}
+            public void onChildViewDetachedFromWindow(View child){}
+        });
 
         List<String> groupNames = commandsHelper.getGroupNames();
         if (!groupNames.isEmpty()) {
@@ -2477,11 +2568,11 @@ public class SimonIMEService extends InputMethodService {
         // Build tabs
         tabContainer.removeAllViews();
         Button clipboardTab = new Button(this);clipboardTab.setText("剪貼簿");
-        clipboardTab.setOnClickListener(v -> showPanel(Panel.CLIPBOARD));tabContainer.addView(clipboardTab);
+        clipboardTab.setOnClickListener(v -> showPanel(Panel.CLIPBOARD));styleDButton(clipboardTab,true);tabContainer.addView(clipboardTab);
         for (String name : groupNames) {
             Button tab = new Button(this);
             tab.setText(name);
-            tab.setTextSize(12);
+            tab.setTextSize(KeyboardLabels.FUNCTION_TEXT_SP);
             tab.setAllCaps(false);
             LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
                     LinearLayout.LayoutParams.WRAP_CONTENT,
@@ -2491,11 +2582,11 @@ public class SimonIMEService extends InputMethodService {
             tab.setPadding(16, 4, 16, 4);
 
             if (name.equals(currentCmdGroup)) {
-                tab.setTextColor(0xFF4ECCA3);
-                tab.setBackgroundColor(0xFF1a1a2e);
+                KeyboardRoles.mark(tab,"tools","accent");tab.setTextColor(dColor("accent"));
+                tab.setTag(R.id.keyboard_role,"highlight");tab.setTag(R.id.keyboard_text_role,"text");tab.setTag(R.id.keyboard_style_theme,null);
             } else {
-                tab.setTextColor(0xFF888888);
-                tab.setBackgroundColor(0xFF16213e);
+                KeyboardRoles.mark(tab,"tools","secondary");tab.setTextColor(dColor("secondary"));
+                tab.setTag(R.id.keyboard_role,"tools");tab.setTag(R.id.keyboard_style_theme,null);
             }
 
             tab.setOnClickListener(v -> {
@@ -2513,8 +2604,10 @@ public class SimonIMEService extends InputMethodService {
                 updateStatus("已刪除「" + name + "」");
                 return true;
             });
-            tabContainer.addView(tab);
+            styleDButton(tab,false);tabContainer.addView(tab);
         }
+
+        styleDPanel(view);
 
         // Show commands for current group
         if (currentCmdGroup != null) {
@@ -4456,8 +4549,8 @@ public class SimonIMEService extends InputMethodService {
             closePanel();panelContainer.setVisibility(View.VISIBLE);
             if(dualHandPage!=null){panelContainer.getLayoutParams().height=Math.max(dp(220),dualHandPage.view().getHeight());dualHandPage.reconfigure();dualHandPage.view().setVisibility(View.GONE);}
             LinearLayout panel=new LinearLayout(this);panel.setOrientation(LinearLayout.VERTICAL);
-            TextView back=new TextView(this);back.setText("返回鍵盤");back.setTextColor(keyboardColor(R.color.keyboard_key_text));back.setPadding(dp(8),dp(8),dp(8),dp(8));back.setOnClickListener(v->closePanel());panel.addView(back);
-            panel.addView(buildSymbolPopupContent(SymbolPopupSpec.FULL_WIDTH,5,"，"));panelContainer.addView(panel);KeyboardTheme.apply(this,panel);
+            TextView back=new TextView(this);back.setText("返回鍵盤");KeyboardRoles.mark(back,"tools","text");styleDButton(back,true);back.setPadding(dp(8),dp(8),dp(8),dp(8));back.setOnClickListener(v->closePanel());panel.addView(back);
+            panel.addView(buildSymbolPopupContent(SymbolPopupSpec.FULL_WIDTH,5,"，"));styleDPanel(panel);panelContainer.addView(panel);
         }else showPanel("clipboard".equals(kind)?Panel.CLIPBOARD:Panel.COMMANDS);
     }
     @Override public void onConfigurationChanged(android.content.res.Configuration next){
@@ -4705,13 +4798,13 @@ public class SimonIMEService extends InputMethodService {
         if (shiftKey instanceof TextView) {
             if (capsLock) {
                 ((TextView) shiftKey).setText("⬆");
-                ((TextView) shiftKey).setTextColor(0xFF4ECCA3); // green = caps lock
+                KeyboardRoles.mark(shiftKey,"tools","accent");((TextView) shiftKey).setTextColor(dColor("accent")); // green = caps lock
             } else if (shiftActive) {
                 ((TextView) shiftKey).setText("⬆");
-                ((TextView) shiftKey).setTextColor(0xFFFFFFFF); // white = shift active
+                KeyboardRoles.mark(shiftKey,"tools","hint");((TextView) shiftKey).setTextColor(dColor("hint")); // white = shift active
             } else {
                 ((TextView) shiftKey).setText("⬆");
-                ((TextView) shiftKey).setTextColor(keyboardColor(R.color.key_text));
+                KeyboardRoles.mark(shiftKey,"tools","text");((TextView) shiftKey).setTextColor(dColor("text"));
             }
         }
     }
@@ -4990,6 +5083,7 @@ public class SimonIMEService extends InputMethodService {
 
     private void updateSuggestionBar() {
         if (enSuggest0 == null) return;
+        for(TextView item:new TextView[]{enSuggest0,enSuggest1,enSuggest2})if(item!=null&&item.getTag(R.id.keyboard_style_theme)==null)KeyboardCandidates.apply(item,KeyboardRoles.dark(this),false);
         enSuggest0.setText(enSuggestions[0] != null ? enSuggestions[0] : "");
         if (enSuggest1 != null) enSuggest1.setText(enSuggestions[1] != null ? enSuggestions[1] : "");
         if (enSuggest2 != null) enSuggest2.setText(enSuggestions[2] != null ? enSuggestions[2] : "");
@@ -6279,19 +6373,19 @@ public class SimonIMEService extends InputMethodService {
 
         LinearLayout panel = new LinearLayout(this);
         panel.setOrientation(LinearLayout.VERTICAL);
-        panel.setBackgroundColor(0xFF111122);
+        panel.setBackgroundColor(dColor("background"));
         panel.setPadding(24, 16, 24, 16);
 
         TextView title = new TextView(this);
         title.setText("批次加入常用詞彙（" + clips.size() + " 則）");
-        title.setTextColor(0xFF4ECCA3);
-        title.setTextSize(16);
+        KeyboardRoles.mark(title,"background","accent");title.setTextColor(dColor("accent"));
+        title.setTextSize(KeyboardLabels.FUNCTION_TEXT_SP);
         panel.addView(title);
 
         TextView groupLabel = new TextView(this);
-        groupLabel.setText("選擇資料夾：");
-        groupLabel.setTextColor(0xFF888888);
-        groupLabel.setTextSize(12);
+        groupLabel.setTag(R.id.keyboard_content_kind,"fixed");groupLabel.setText("選擇資料夾：");
+        KeyboardRoles.mark(groupLabel,"background","secondary");groupLabel.setTextColor(dColor("secondary"));
+        groupLabel.setTextSize(KeyboardLabels.FUNCTION_TEXT_SP);
         groupLabel.setPadding(0, 8, 0, 8);
         panel.addView(groupLabel);
 
@@ -6305,8 +6399,8 @@ public class SimonIMEService extends InputMethodService {
         for (int i = 0; i < groupNames.size(); i++) {
             String gName = groupNames.get(i);
             Button btn = new Button(this);
-            btn.setText(gName);
-            btn.setTextSize(12);
+            btn.setTag(R.id.keyboard_content_kind,"content");btn.setText(gName);
+            btn.setTextSize(KeyboardLabels.FUNCTION_TEXT_SP);
             btn.setAllCaps(false);
             LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
                     LinearLayout.LayoutParams.WRAP_CONTENT, 72);
@@ -6315,17 +6409,17 @@ public class SimonIMEService extends InputMethodService {
             btn.setPadding(16, 0, 16, 0);
             groupButtons[i] = btn;
             if (gName.equals(selectedGroup[0])) {
-                btn.setTextColor(0xFF4ECCA3); btn.setBackgroundColor(0xFF1a1a2e);
+                KeyboardRoles.mark(btn,"tools","accent");btn.setTextColor(dColor("accent")); btn.setTag(R.id.keyboard_role,"highlight");btn.setTag(R.id.keyboard_text_role,"text");btn.setTag(R.id.keyboard_style_theme,null);styleDPanel(btn);
             } else {
-                btn.setTextColor(0xFF888888); btn.setBackgroundColor(0xFF16213e);
+                KeyboardRoles.mark(btn,"tools","secondary");btn.setTextColor(dColor("secondary")); btn.setTag(R.id.keyboard_role,"tools");btn.setTag(R.id.keyboard_style_theme,null);styleDPanel(btn);
             }
             btn.setOnClickListener(v -> {
                 selectedGroup[0] = gName;
                 for (int j = 0; j < groupButtons.length; j++) {
                     if (groupNames.get(j).equals(gName)) {
-                        groupButtons[j].setTextColor(0xFF4ECCA3); groupButtons[j].setBackgroundColor(0xFF1a1a2e);
+                        KeyboardRoles.mark(groupButtons[j],"tools","accent");groupButtons[j].setTextColor(dColor("accent")); groupButtons[j].setTag(R.id.keyboard_role,"highlight");groupButtons[j].setTag(R.id.keyboard_text_role,"text");groupButtons[j].setTag(R.id.keyboard_style_theme,null);styleDPanel(groupButtons[j]);
                     } else {
-                        groupButtons[j].setTextColor(0xFF888888); groupButtons[j].setBackgroundColor(0xFF16213e);
+                        KeyboardRoles.mark(groupButtons[j],"tools","secondary");groupButtons[j].setTextColor(dColor("secondary")); groupButtons[j].setTag(R.id.keyboard_role,"tools");groupButtons[j].setTag(R.id.keyboard_style_theme,null);styleDPanel(groupButtons[j]);
                     }
                 }
             });
@@ -6337,8 +6431,8 @@ public class SimonIMEService extends InputMethodService {
         actionRow.setOrientation(LinearLayout.HORIZONTAL);
         Button btnConfirm = new Button(this);
         btnConfirm.setText("確認加入");
-        btnConfirm.setTextColor(0xFF4ECCA3);
-        btnConfirm.setTextSize(14);
+        KeyboardRoles.mark(btnConfirm,"tools","accent");btnConfirm.setTextColor(dColor("accent"));
+        btnConfirm.setTextSize(KeyboardLabels.FUNCTION_TEXT_SP);
         btnConfirm.setOnClickListener(v -> {
             if (selectedGroup[0] != null) {
                 for (String clip : clips) {
@@ -6352,14 +6446,14 @@ public class SimonIMEService extends InputMethodService {
         });
         Button btnCancel = new Button(this);
         btnCancel.setText("取消");
-        btnCancel.setTextColor(0xFF888888);
-        btnCancel.setTextSize(14);
+        KeyboardRoles.mark(btnCancel,"tools","secondary");btnCancel.setTextColor(dColor("secondary"));
+        btnCancel.setTextSize(KeyboardLabels.FUNCTION_TEXT_SP);
         btnCancel.setOnClickListener(v -> showPanel(Panel.CLIPBOARD));
         actionRow.addView(btnConfirm);
         actionRow.addView(btnCancel);
         panel.addView(actionRow);
 
-        panelContainer.addView(panel);
+        styleDPanel(panel);panelContainer.addView(panel);
     }
 
     /** 顯示/隱藏剪貼簿標記底欄並更新計數 */
@@ -6476,7 +6570,7 @@ public class SimonIMEService extends InputMethodService {
 
         LinearLayout panel = new LinearLayout(this);
         panel.setOrientation(LinearLayout.VERTICAL);
-        panel.setBackgroundColor(0xFF111122);
+        panel.setBackgroundColor(dColor("background"));
         panel.setPadding(16, 8, 16, 8);
 
         // 標題列
@@ -6485,9 +6579,9 @@ public class SimonIMEService extends InputMethodService {
         titleRow.setGravity(Gravity.CENTER_VERTICAL);
 
         TextView title = new TextView(this);
-        title.setText("📚 詞彙庫");
-        title.setTextColor(0xFF4ECCA3);
-        title.setTextSize(14);
+        title.setTag(R.id.keyboard_content_kind,"fixed");title.setText("📚 詞彙庫");
+        KeyboardRoles.mark(title,"background","accent");title.setTextColor(dColor("accent"));
+        title.setTextSize(KeyboardLabels.FUNCTION_TEXT_SP);
         LinearLayout.LayoutParams titleLp = new LinearLayout.LayoutParams(
                 0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f);
         title.setLayoutParams(titleLp);
@@ -6495,8 +6589,8 @@ public class SimonIMEService extends InputMethodService {
 
         Button btnBack = new Button(this);
         btnBack.setText("← 返回");
-        btnBack.setTextColor(0xFF888888);
-        btnBack.setTextSize(12);
+        KeyboardRoles.mark(btnBack,"tools","secondary");btnBack.setTextColor(dColor("secondary"));
+        btnBack.setTextSize(KeyboardLabels.FUNCTION_TEXT_SP);
         btnBack.setBackground(null);
         btnBack.setAllCaps(false);
         btnBack.setOnClickListener(v -> showPanel(Panel.CLIPBOARD));
@@ -6505,9 +6599,9 @@ public class SimonIMEService extends InputMethodService {
 
         if (enrolledVocab.isEmpty()) {
             TextView empty = new TextView(this);
-            empty.setText("尚無詞彙（左滑剪貼簿項目 → 加詞彙）");
-            empty.setTextColor(0xFF666666);
-            empty.setTextSize(12);
+            empty.setTag(R.id.keyboard_content_kind,"fixed");empty.setText("尚無詞彙（左滑剪貼簿項目 → 加詞彙）");
+            KeyboardRoles.mark(empty,"background","secondary");empty.setTextColor(dColor("secondary"));
+            empty.setTextSize(KeyboardLabels.FUNCTION_TEXT_SP);
             empty.setPadding(0, 16, 0, 0);
             panel.addView(empty);
         } else {
@@ -6519,8 +6613,8 @@ public class SimonIMEService extends InputMethodService {
 
                 TextView wordView = new TextView(this);
                 wordView.setText(word);
-                wordView.setTextColor(0xFFcccccc);
-                wordView.setTextSize(13);
+                KeyboardRoles.mark(wordView,"background","text");wordView.setTextColor(dColor("text"));
+                wordView.setTextSize(KeyboardLabels.FUNCTION_TEXT_SP);
                 LinearLayout.LayoutParams wlp = new LinearLayout.LayoutParams(
                         0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f);
                 wordView.setLayoutParams(wlp);
@@ -6528,8 +6622,8 @@ public class SimonIMEService extends InputMethodService {
 
                 Button btnDel = new Button(this);
                 btnDel.setText("✕");
-                btnDel.setTextColor(0xFF666666);
-                btnDel.setTextSize(12);
+                KeyboardRoles.mark(btnDel,"tools","secondary");btnDel.setTextColor(dColor("secondary"));
+                btnDel.setTextSize(KeyboardLabels.FUNCTION_TEXT_SP);
                 btnDel.setBackground(null);
                 btnDel.setAllCaps(false);
                 btnDel.setOnClickListener(v -> {
@@ -6551,7 +6645,7 @@ public class SimonIMEService extends InputMethodService {
             }
         }
 
-        panelContainer.addView(panel);
+        styleDPanel(panel);panelContainer.addView(panel);
     }
 
     /** 在 panelContainer 顯示批次加入常用指令介面 */
@@ -6561,19 +6655,19 @@ public class SimonIMEService extends InputMethodService {
 
         LinearLayout panel = new LinearLayout(this);
         panel.setOrientation(LinearLayout.VERTICAL);
-        panel.setBackgroundColor(0xFF111122);
+        panel.setBackgroundColor(dColor("background"));
         panel.setPadding(24, 16, 24, 16);
 
         TextView title = new TextView(this);
         title.setText("批次加入常用指令（" + markedClips.size() + " 條）");
-        title.setTextColor(0xFF4ECCA3);
-        title.setTextSize(16);
+        KeyboardRoles.mark(title,"background","accent");title.setTextColor(dColor("accent"));
+        title.setTextSize(KeyboardLabels.FUNCTION_TEXT_SP);
         panel.addView(title);
 
         TextView groupLabel = new TextView(this);
-        groupLabel.setText("選擇群組：");
-        groupLabel.setTextColor(0xFF888888);
-        groupLabel.setTextSize(12);
+        groupLabel.setTag(R.id.keyboard_content_kind,"fixed");groupLabel.setText("選擇群組：");
+        KeyboardRoles.mark(groupLabel,"background","secondary");groupLabel.setTextColor(dColor("secondary"));
+        groupLabel.setTextSize(KeyboardLabels.FUNCTION_TEXT_SP);
         groupLabel.setPadding(0, 8, 0, 4);
         panel.addView(groupLabel);
 
@@ -6588,8 +6682,8 @@ public class SimonIMEService extends InputMethodService {
         for (int i = 0; i < groupNames.size(); i++) {
             String gName = groupNames.get(i);
             Button btn = new Button(this);
-            btn.setText(gName);
-            btn.setTextSize(12);
+            btn.setTag(R.id.keyboard_content_kind,"content");btn.setText(gName);
+            btn.setTextSize(KeyboardLabels.FUNCTION_TEXT_SP);
             btn.setAllCaps(false);
             LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
                     LinearLayout.LayoutParams.WRAP_CONTENT, 72);
@@ -6597,22 +6691,22 @@ public class SimonIMEService extends InputMethodService {
             btn.setLayoutParams(lp);
             groupButtons[i] = btn;
             if (gName.equals(selectedGroup[0])) {
-                btn.setTextColor(0xFF4ECCA3);
-                btn.setBackgroundColor(0xFF1a1a2e);
+                KeyboardRoles.mark(btn,"tools","accent");btn.setTextColor(dColor("accent"));
+                btn.setTag(R.id.keyboard_role,"highlight");btn.setTag(R.id.keyboard_text_role,"text");btn.setTag(R.id.keyboard_style_theme,null);styleDPanel(btn);
             } else {
-                btn.setTextColor(0xFF888888);
-                btn.setBackgroundColor(0xFF16213e);
+                KeyboardRoles.mark(btn,"tools","secondary");btn.setTextColor(dColor("secondary"));
+                btn.setTag(R.id.keyboard_role,"tools");btn.setTag(R.id.keyboard_style_theme,null);styleDPanel(btn);
             }
             final int idx = i;
             btn.setOnClickListener(v -> {
                 selectedGroup[0] = gName;
                 for (int j = 0; j < groupButtons.length; j++) {
                     if (j == idx) {
-                        groupButtons[j].setTextColor(0xFF4ECCA3);
-                        groupButtons[j].setBackgroundColor(0xFF1a1a2e);
+                        KeyboardRoles.mark(groupButtons[j],"tools","accent");groupButtons[j].setTextColor(dColor("accent"));
+                        groupButtons[j].setTag(R.id.keyboard_role,"highlight");groupButtons[j].setTag(R.id.keyboard_text_role,"text");groupButtons[j].setTag(R.id.keyboard_style_theme,null);styleDPanel(groupButtons[j]);
                     } else {
-                        groupButtons[j].setTextColor(0xFF888888);
-                        groupButtons[j].setBackgroundColor(0xFF16213e);
+                        KeyboardRoles.mark(groupButtons[j],"tools","secondary");groupButtons[j].setTextColor(dColor("secondary"));
+                        groupButtons[j].setTag(R.id.keyboard_role,"tools");groupButtons[j].setTag(R.id.keyboard_style_theme,null);styleDPanel(groupButtons[j]);
                     }
                 }
             });
@@ -6625,8 +6719,8 @@ public class SimonIMEService extends InputMethodService {
 
         Button btnConfirm = new Button(this);
         btnConfirm.setText("確認加入");
-        btnConfirm.setTextColor(0xFF4ECCA3);
-        btnConfirm.setTextSize(14);
+        KeyboardRoles.mark(btnConfirm,"tools","accent");btnConfirm.setTextColor(dColor("accent"));
+        btnConfirm.setTextSize(KeyboardLabels.FUNCTION_TEXT_SP);
         btnConfirm.setAllCaps(false);
         btnConfirm.setOnClickListener(v -> {
             if (selectedGroup[0] != null) {
@@ -6643,8 +6737,8 @@ public class SimonIMEService extends InputMethodService {
 
         Button btnCancel = new Button(this);
         btnCancel.setText("取消");
-        btnCancel.setTextColor(0xFF888888);
-        btnCancel.setTextSize(14);
+        KeyboardRoles.mark(btnCancel,"tools","secondary");btnCancel.setTextColor(dColor("secondary"));
+        btnCancel.setTextSize(KeyboardLabels.FUNCTION_TEXT_SP);
         btnCancel.setAllCaps(false);
         btnCancel.setOnClickListener(v -> showPanel(Panel.CLIPBOARD));
 
@@ -6652,7 +6746,7 @@ public class SimonIMEService extends InputMethodService {
         actionRow.addView(btnCancel);
         panel.addView(actionRow);
 
-        panelContainer.addView(panel);
+        styleDPanel(panel);panelContainer.addView(panel);
     }
 
     private String getServerUrl() {

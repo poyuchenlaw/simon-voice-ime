@@ -1,0 +1,55 @@
+import java.util.*;
+import java.io.*;
+import java.awt.font.FontRenderContext;
+public class App690DGeometry {
+ static class Rect {int left,top,right,bottom;int width(){return right-left;}int height(){return bottom-top;}}
+ static class Typeface {static Typeface DEFAULT=new Typeface();}
+ static class Paint {
+  static final int ANTI_ALIAS_FLAG=1;float size;java.awt.Font font;FontRenderContext frc=new FontRenderContext(null,true,true);
+  Paint(){this(0);}Paint(int flags){try{font=java.awt.Font.createFont(java.awt.Font.TRUETYPE_FONT,new File("app/src/phone/assets/fonts/NotoSansTC-Medium-subset.ttf"));}catch(Exception e){throw new RuntimeException(e);}}
+  Paint(Paint p){this();size=p.size;}void setTypeface(Typeface t){}void setTextSize(float s){size=s;}
+  float measureText(String s){return (float)font.deriveFont(size).getStringBounds(s,frc).getWidth();}
+  void getTextBounds(String s,int start,int end,Rect r){java.awt.Rectangle b=font.deriveFont(size).createGlyphVector(frc,s.substring(start,end)).getPixelBounds(frc,0,0);r.left=b.x;r.top=b.y;r.right=b.x+b.width;r.bottom=b.y+b.height;}
+ }
+ static class R {static class id {static final int keyboard_role=1;}}
+ static class Metrics {float density,scaledDensity;}
+ static class Resources {Metrics m=new Metrics();Metrics getDisplayMetrics(){return m;}}
+ static class View {int width,height;Resources resources;int getWidth(){return width;}int getHeight(){return height;}Resources getResources(){return resources;}}
+ static class TextView extends View {String text,route,role;float sp;TextView(String t,String r,float s){text=t;route=r;sp=s;role=r.length()==5&&!t.equals(".")?"right":"tools";}Object getTag(int id){return role;}Object getTag(){return route;}String getText(){return text;}Paint getPaint(){return new Paint();}void setTextSize(float s){sp=s;}}
+ static class KeyboardTypeface {static Typeface get(Object context){return Typeface.DEFAULT;}}
+ /* LABELS */
+ /* FIT */
+ static class KeySpec {String text,route;float fixed,weight,margin,sp;KeySpec(String t,String r,float f,float w,float m,float s){text=t;route=r;fixed=f;weight=w;margin=m;sp=s;}}
+ static class Row {String page;List<KeySpec> keys;Row(String p,List<KeySpec> k){page=p;keys=k;}}
+ public static void main(String[] args){new App690DGeometry().check();}
+ void check(){List<Row> rows=new ArrayList<>();/* ROWS */
+  int failures=0;float min=Float.MAX_VALUE;
+  System.out.println("PAGE,width_dp,density,font_scale,character_sp,minimum_ink_margin_dp,cache_count");
+  for(String name:List.of("keyboard_english","keyboard_numbers"))for(int width:new int[]{320,360,400,600,800})for(float density:new float[]{1.3f,1.5f,2.625f,2.75f,3f})for(float scale:new float[]{1,1.3f}){
+   Resources resources=new Resources();resources.m.density=density;resources.m.scaledDensity=density*scale;
+   View page=new View();page.width=Math.round(width*density);page.resources=resources;List<TextView> keys=new ArrayList<>();
+   for(Row row:rows)if(row.page.equals(name)){
+    int available=page.width-2*Math.round(3*density);float total=0;
+    for(KeySpec k:row.keys){available-=Math.round(k.fixed*density)+Math.round(k.margin*density);total+=k.weight;}
+    int left=available;float remaining=total;
+    for(KeySpec k:row.keys){TextView v=new TextView(k.text,k.route,k.sp);v.resources=resources;v.height=Math.round(42*density);
+     int share=remaining>0?(int)(left*k.weight/remaining):0;v.width=k.fixed>0?Math.round(k.fixed*density):share;left-=share;remaining-=k.weight;keys.add(v);}
+   }
+   KeyboardLabels.Cache cache=new KeyboardLabels.Cache();fitDTypingPage(page,keys,cache);
+   float letter=keys.stream().filter(k->k.role.equals("right")).findFirst().get().sp,margin=Float.MAX_VALUE;
+   for(int reopen=0;reopen<30;reopen++)fitDTypingPage(page,keys,cache);
+   if(cache.count()!=1)failures++;
+   for(TextView k:keys){boolean character=k.role.equals("right");String type=KeyboardLabels.labelClass(k.text,character);
+    if(type.equals("function")&&k.sp!=12){System.out.println("FAIL_FUNCTION "+name+" "+k.text+" "+k.sp);failures++;}
+    if(character&&k.sp!=letter)failures++;
+    Paint paint=new Paint();paint.setTextSize(k.sp*density*scale);Rect ink=new Rect();paint.getTextBounds(k.text,0,k.text.length(),ink);
+    float mx=(k.width-ink.width())/2f-Math.round(density),my=(k.height-ink.height())/2f-Math.round(density);margin=Math.min(margin,Math.min(mx,my)/density);
+    if(mx<0||my<0){System.out.println("FAIL_INK "+name+" "+k.text+" "+width+" "+density+" "+scale);failures++;}
+    if(k.text.contains("\n"))failures++;
+   }
+   min=Math.min(min,margin);System.out.println(name+","+width+","+density+","+scale+","+letter+","+margin+","+cache.count());
+  }
+  assert KeyboardLabels.labelClass("★",true).equals("character");
+  System.out.println("MINIMUM_INK_MARGIN_DP="+min+" FAILURES="+failures);assert failures==0:"D page geometry violations="+failures;
+ }
+}
