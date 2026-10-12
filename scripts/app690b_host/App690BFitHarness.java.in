@@ -1,0 +1,39 @@
+package com.simon.voiceime;
+import java.util.*;import java.io.*;
+public class App690BFitHarness {
+ static class Rect {int left,top,right,bottom;int width(){return right-left;}int height(){return bottom-top;}}
+ static class Typeface {java.awt.Font font;Typeface()throws Exception{font=java.awt.Font.createFont(java.awt.Font.TRUETYPE_FONT,new File("app/src/phone/assets/fonts/NotoSansTC-Medium-subset.ttf"));}}
+ static class Paint {float size;Typeface face;java.awt.font.FontRenderContext frc=new java.awt.font.FontRenderContext(null,true,true);Paint(){}Paint(int flags){}static int ANTI_ALIAS_FLAG=1;void setTypeface(Typeface f){face=f;}void setTextSize(float s){size=s;}float measureText(String s){return (float)face.font.deriveFont(size).getStringBounds(s,frc).getWidth();}void getTextBounds(String s,int a,int b,Rect r){java.awt.Rectangle box=face.font.deriveFont(size).createGlyphVector(frc,s.substring(a,b)).getPixelBounds(frc,0,0);r.left=box.x;r.top=box.y;r.right=box.x+box.width;r.bottom=box.y+box.height;}}
+ static class KeyboardLabels {/* SHARED_LABELS */}
+ static class Metrics {float density,scaledDensity;}
+ static class Resources {Metrics getDisplayMetrics(){return metrics;}}
+ static Metrics metrics=new Metrics();static Resources getResources(){return new Resources();}static int dp(int n){return Math.round(n*metrics.density);}
+ static class View {Object tag;Object getTag(){return tag;}int width,height;int getWidth(){return width;}int getHeight(){return height;}}
+ static class ViewGroup extends View {List<View> children=new ArrayList<>();int getChildCount(){return children.size();}View getChildAt(int i){return children.get(i);}}
+ static class LinearLayout extends ViewGroup {}
+ static class R {static class id {static int keyboard_content_kind=1;}}
+ static boolean isBopomofoSymbol(String s){return s.length()==1&&"ㄅㄆㄇㄈㄉㄊㄋㄌㄍㄎㄏㄐㄑㄒㄓㄔㄕㄖㄗㄘㄙㄧㄨㄩㄚㄛㄜㄝㄞㄟㄠㄡㄢㄣㄤㄥㄦˊˇˋ˙".contains(s);}
+ static class KeyboardTypeface {static Typeface forLabel(Object c,String text,boolean fixed,boolean ch){return null;}}
+ static class TextView extends View {String text,route;float sp;boolean character,icon;TextView(Key key){text=key.text;route=key.route;tag="key:"+route;sp=key.oldSp;character=route.codePointCount(0,route.length())==1&&!route.equals("，");icon=KeyboardLabels.labelClass(text,character).equals("icon");}void setText(String s){text=s;}void setTypeface(Typeface f){}void setTag(int id,Object tag){}void setSingleLine(boolean b){}void setEllipsize(Object v){}CharSequence getText(){return text;}void setTextSize(float s){sp=s;}float getTextSize(){return sp*metrics.scaledDensity;}}
+ static class Key {String text,route;float width,weight,margin,oldSp;Key(String t,String r,float wi,float we,float m,float sp){text=t;route=r;width=wi;weight=we;margin=m;oldSp=sp;}}
+ static Key[][] rows={/* ROWS */};
+ final List<TextView> characterKeys=new ArrayList<>();final KeyboardLabels.Cache cache=new KeyboardLabels.Cache();final Typeface face;final Paint paint=new Paint();final List<TextView> all=new ArrayList<>();
+ App690BFitHarness()throws Exception{face=new Typeface();paint.setTypeface(face);}
+ /* FIT_LISTENER */
+ void run(int width,float density,float scale)throws Exception{
+  metrics.density=density;metrics.scaledDensity=density*scale;ViewGroup page=new ViewGroup();page.width=dp(width);all.clear();characterKeys.clear();
+  for(Key[] row:rows){LinearLayout group=new LinearLayout();page.children.add(group);int free=page.width-2*dp(3);float weight=0;for(Key k:row){free-=dp((int)k.width)+dp((int)k.margin);weight+=k.weight;}
+   for(Key k:row){TextView v=new TextView(k);int share=k.weight==0?0:(int)(free*k.weight/weight);if(k.weight!=0){free-=share;weight-=k.weight;}v.width=dp((int)k.width)+share;v.height=dp(row.length==8?42:39);if(!v.character&&!v.icon)v.sp=KeyboardLabels.FUNCTION_TEXT_SP;all.add(v);group.children.add(v);}}
+  float BOPOMOFO_ICON_FRAME_SP=16;
+  /* INIT */
+  onLayoutChange(page,0,0,page.width,0,0,0,0,0);int count=cache.count();for(int i=0;i<30;i++)onLayoutChange(page,0,0,page.width,0,0,0,0,0);assert count==cache.count():"same geometry refit";
+  /* MUTATE */
+  float size=characterKeys.get(0).sp,min=Float.MAX_VALUE,number=0,originalNumber=0;
+  for(TextView v:all){assert v.sp>=12: "size "+v.text;if(v.character)assert v.sp==size:"multiple letter sizes";else if(!v.icon)assert v.sp==12:"function size mutation "+v.text;
+   if(v.icon){float frame=16*metrics.scaledDensity;assert frame<=v.width-2*dp(1)&&frame<=v.height-2*dp(1):"icon frame clipped "+v.text;continue;}paint.setTextSize(v.sp*metrics.scaledDensity);Rect ink=new Rect();paint.getTextBounds(v.text,0,v.text.length(),ink);
+   float advance=paint.measureText(v.text),left=(v.width-advance)/2+ink.left,right=left+ink.width();float spare=Math.min(left-dp(1),v.width-dp(1)-right);assert spare>=0:"clipped "+v.text+" "+width+":"+density+":"+scale+" margin="+spare;assert ink.height()<=v.height-2*dp(1):"height "+v.text;min=Math.min(min,spare/density);if(v.route.equals("toNumbers")){number=spare/density;paint.getTextBounds("123",0,3,ink);float oldLeft=(v.width-paint.measureText("123"))/2+ink.left;originalNumber=Math.min(oldLeft-dp(1),v.width-dp(1)-oldLeft-ink.width())/density;}
+  }
+  System.out.println("GRID,"+width+","+density+","+scale+","+size+",function=12,min_margin_dp="+min+",number_label="+all.get(all.size()-5).text+",number_margin_dp="+number+",original_123_margin_dp="+originalNumber);
+ }
+ public static void main(String[] args)throws Exception{App690BFitHarness h=new App690BFitHarness();for(int width:new int[]{320,360,400,600,800})for(float density:new float[]{1.3f,1.5f,2.625f,2.75f,3f})for(float scale:new float[]{1,1.3f})h.run(width,density,scale);System.out.println("50 geometry configurations, 49 labels each; same-size function mutation must fail");}
+}

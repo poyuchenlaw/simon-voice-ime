@@ -1,0 +1,16 @@
+package com.simon.voiceime;
+import java.util.*;
+public class App690BRoutingHarness {
+ static class Context {SharedPreferences p=new SharedPreferences();SharedPreferences getSharedPreferences(String n,int m){return p;}}
+ static class SharedPreferences {Map<String,Boolean> flags=new HashMap<>();boolean getBoolean(String n,boolean d){return flags.getOrDefault(n,d);}}
+ static class View {Context c=new Context();int count;boolean performHapticFeedback(int kind){assert kind==3;count++;return true;}Context getContext(){return c;}Object getTag(int i){return null;}void setTag(int i,Object v){}void setHapticFeedbackEnabled(boolean b){}}
+ static class ViewGroup extends View {int getChildCount(){return 0;}View getChildAt(int i){return null;}}
+ static class R {static class id {static int keyboard_haptic_gate=1;}}
+ static class Build {static class VERSION {static int SDK_INT=34;}}
+ static class HapticFeedbackConstants {static int KEYBOARD_TAP=3,CLOCK_TICK=4,REJECT=17,LONG_PRESS=0;}
+ static class MotionEvent {static int ACTION_DOWN=0,ACTION_UP=1,ACTION_MOVE=2,ACTION_CANCEL=3;}
+ static class KeyboardKeycaps {static void press(View v){}static void release(View v){}}
+ static class KeyboardHaptics {/* HAPTICS */}
+ static void routed(int action,View target){/* PREFIX */}
+ public static void main(String[] args){for(int key=0;key<49;key++){View v=new View();routed(0,v);for(int repeat=0;repeat<100;repeat++)routed(2,v);routed(1,v);assert v.count==1:"R5-b DOWN count="+v.count+" key="+key;for(String gate:List.of("haptic_enabled","dual_hand_haptics")){v.count=0;v.c.p.flags.put(gate,false);routed(0,v);routed(1,v);assert v.count==0;v.c.p.flags.put(gate,true);}}System.out.println("R5: 49 routes DOWN=1, hold MOVE x100=0 extra, both gates OFF=0");}
+}

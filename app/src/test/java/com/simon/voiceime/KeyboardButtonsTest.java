@@ -52,8 +52,17 @@ public class KeyboardButtonsTest {
             for(int i=0;i<views.getLength();i++) {
                 org.w3c.dom.Element key=(org.w3c.dom.Element)views.item(i);
                 if(!key.getAttribute("android:tag").startsWith("key:"))continue;
-                assertEquals(name+" "+key.getAttribute("android:text"), "@drawable/keyboard_key",key.getAttribute("android:background"));
-                assertEquals("@color/keyboard_key_text",key.getAttribute("android:textColor"));
+                if("keyboard_bopomofo".equals(name)) {
+                    assertEquals("",key.getAttribute("android:background"));assertEquals("",key.getAttribute("android:textColor"));
+                    java.util.Map<String,String> roles=new java.util.HashMap<>();
+                    org.w3c.dom.NodeList tags=key.getElementsByTagName("tag");
+                    for(int t=0;t<tags.getLength();t++){org.w3c.dom.Element tag=(org.w3c.dom.Element)tags.item(t);roles.put(tag.getAttribute("android:id"),tag.getAttribute("android:value"));}
+                    assertTrue(java.util.Set.of("left","right","zero","core","tools").contains(roles.get("@id/keyboard_role")));
+                    assertEquals("text",roles.get("@id/keyboard_text_role"));assertEquals("1",roles.get("@id/keyboard_visible_inset"));
+                } else {
+                    assertEquals(name+" "+key.getAttribute("android:text"), "@drawable/keyboard_key",key.getAttribute("android:background"));
+                    assertEquals("@color/keyboard_key_text",key.getAttribute("android:textColor"));
+                }
             }
         }
     }
