@@ -1247,6 +1247,8 @@ public class SimonIMEService extends InputMethodService {
         button.setTypeface(KeyboardTypeface.forLabel(this,button.getText().toString(),fixed));
         if(!"icon".equals(KeyboardLabels.labelClass(button.getText().toString(),false)))button.setTextSize(KeyboardLabels.FUNCTION_TEXT_SP);
         button.setSingleLine(true);button.setEllipsize(null);
+        // Panel Buttons retain the shared scale animation, without the framework Z animator.
+        button.setStateListAnimator(null);button.setTranslationZ(0);
         KeyboardKeycaps.apply(button,KeyboardRoles.dark(this),button.getTag(R.id.keyboard_role).toString(),1);
         button.setTextColor(dColor(button.getTag(R.id.keyboard_text_role).toString()));
         button.setTag(R.id.keyboard_style_theme,KeyboardRoles.dark(this));
@@ -1372,7 +1374,19 @@ public class SimonIMEService extends InputMethodService {
         grid.setRowCount((int) Math.ceil(symbols.length / (double) columns));
         for (int index=0;index<symbols.length;index++) {
             String symbol=symbols[index];final int selected=index;
-            TextView button = new TextView(this);
+            TextView button = fixed?new TextView(this){
+                @Override protected void onLayout(boolean changed,int left,int top,int right,int bottom){
+                    super.onLayout(changed,left,top,right,bottom);
+                    // Center actual glyph ink; keep Layout, font, cell and touch bounds intact.
+                    String text=getText().toString();android.graphics.Rect ink=new android.graphics.Rect();
+                    getPaint().getTextBounds(text,0,text.length(),ink);
+                    if(getLayout()!=null){
+                        setGravity(Gravity.TOP|Gravity.CENTER_HORIZONTAL);
+                        int textTop=Math.round((getHeight()-ink.top-ink.bottom)/2f-getLayout().getLineBaseline(0));
+                        setPadding(0,textTop,0,0);
+                    }
+                }
+            }:new TextView(this);
             button.setText(symbol);
             KeyboardCandidates.applyGrid(button,KeyboardRoles.dark(this),fixed);
             button.setTag(R.id.keyboard_style_theme,KeyboardRoles.dark(this));

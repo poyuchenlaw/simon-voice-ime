@@ -17,7 +17,7 @@ public final class KeyboardCandidates {
     }
     public static void applyGrid(TextView v,boolean dark,boolean fixed){
         KeyboardKeycaps.apply(v,dark,"tools",1);v.setTypeface(fixed?KeyboardTypeface.forLabel(v.getContext(),v.getText().toString(),true,true):Typeface.DEFAULT);
-        v.setTag(R.id.keyboard_text_role,"text");v.setTag(R.id.keyboard_content_kind,fixed?"symbol":"candidate");v.setTextColor(textColor(dark));v.setTextSize(GRID_TEXT_SP);v.setGravity(Gravity.CENTER);v.setSingleLine(true);v.setEllipsize(null);
+        v.setTag(R.id.keyboard_text_role,"text");v.setTag(R.id.keyboard_content_kind,fixed?"symbol":"candidate");v.setTextColor(textColor(dark));v.setTextSize(GRID_TEXT_SP);v.setGravity(Gravity.CENTER);v.setSingleLine(true);v.setEllipsize(null);if(fixed)v.setIncludeFontPadding(false);
     }
 }
 

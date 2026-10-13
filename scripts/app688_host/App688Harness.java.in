@@ -14,7 +14,7 @@ public class App688Harness {
  static class Touch{DualHandState.Stroke stroke;DualHandGesture.Result result;}
  static class Handler {List<Runnable> jobs=new ArrayList<>();void removeCallbacks(Runnable r){jobs.remove(r);}void postDelayed(Runnable r,long delay){jobs.add(r);}void run(){for(Runnable r:new ArrayList<>(jobs)){jobs.remove(r);r.run();}}}
  static class Snapshot {String text="甲乙丙";int offset=0,start=1,end=1;boolean sameText(Snapshot s){return s!=null&&text.equals(s.text);}boolean same(Snapshot s){return s!=null&&start==s.start&&end==s.end&&text.equals(s.text);}String range(int l,int r){return text.substring(l,r);} }
- float labelSizeSp=13.5f,rowDp=78;boolean split;Object typeface;int color(String r){return DualHandVisuals.color(false,r);}
+ float labelSizeSp=13.5f,rowDp=78;boolean split;Object typeface;boolean dark(){return false;}int color(String r){return DualHandVisuals.color(false,r);}
  final SimonIMEService service=new SimonIMEService();final Hooks hooks=new Hooks();DualHandTable table;DualHandState state;
  final Map<String,Map<String,TextView>> labels=new HashMap<>();final Map<String,FrameLayout> keys=new LinkedHashMap<>();final Map<Integer,Touch> touches=new HashMap<>();
  String renderState;boolean closed;Runnable selectionTask;final Handler ui=new Handler();int compositionStart=-1,compositionEnd=-1;Snapshot witness,now=new Snapshot();int opened,markers;

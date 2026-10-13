@@ -216,7 +216,7 @@ public final class DualHandKeyboard implements DualHandPage {
         functionLabels("core","送出","⌫",state.aiShown()?"還原":"刪字","AI","送出");
         keys.get("core").setActivated(state.syllables().size()>8);
         labels.get("core").get("tap").setTextColor(state.syllables().size()>8?color("accent"):color("text"));
-        labels.get("core").get("down").setTextColor(state.syllables().size()>8?color("mode_append"):color("text"));
+        labels.get("core").get("down").setTextColor(state.syllables().size()>8?color(dark()?"mode_append":"accent"):color("text"));
         labels.get("core").get("left").setTextColor(state.aiShown()?color("accent"):color("text"));
         for(String key:DualHandTable.RIGHT_KEYS){
             Map<String,TextView> parts=labels.get(key);
@@ -233,7 +233,7 @@ public final class DualHandKeyboard implements DualHandPage {
             for(String direction:DualHandTable.DIRECTIONS){TextView label=labels.get(key).get(direction);boolean active=direction.equals(highlighted);int tint=active||pending!=null&&DualHandTable.isRight(key)?color("hint"):color("tap".equals(direction)?"text":"secondary");
                 if("core".equals(key)&&((state.syllables().size()>8&&("tap".equals(direction)||"down".equals(direction)))||(state.aiShown()&&"left".equals(direction))))tint=color("accent");
                 label.setTag(R.id.keyboard_role,keys.get(key).getTag(R.id.keyboard_role));label.setTag(R.id.keyboard_text_role,"core".equals(key)&&((state.syllables().size()>8&&("tap".equals(direction)||"down".equals(direction)))||(state.aiShown()&&"left".equals(direction)))?"accent":active||pending!=null&&DualHandTable.isRight(key)?"hint":"tap".equals(direction)?"text":"secondary");
-                if("core".equals(key)&&"down".equals(direction)&&state.syllables().size()>8){tint=color("mode_append");label.setTag(R.id.keyboard_text_role,"mode_append");}
+                if("core".equals(key)&&"down".equals(direction)&&state.syllables().size()>8){tint=color(dark()?"mode_append":"accent");label.setTag(R.id.keyboard_text_role,dark()?"mode_append":"accent");}
                 if(label.getCurrentTextColor()!=tint){label.setTextColor(tint);if(pending!=null&&DualHandTable.isRight(key)){label.setAlpha(.6f);label.animate().alpha(1).setDuration(120).start();}}
                 if(label.isActivated()!=active){label.setActivated(active);label.animate().scaleX(active?1.15f:1).scaleY(active?1.15f:1).setDuration(80).start();}
             }
