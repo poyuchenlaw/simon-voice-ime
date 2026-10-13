@@ -13,6 +13,7 @@ class CorrectionEditor {
     protected DualHandTracks tracks;protected DualHandMemory memory;protected boolean closed;
     protected View guardView;protected ViewTreeObserver.OnPreDrawListener pageGuard;
     protected Runnable selectionTask,markerExpiry;protected PopupWindow popup,markerPopup;protected TextView marker;
+    protected long markerRequestGeneration;
     protected long lastTapTime=-1000;protected int lastTapPosition=-1;protected Snapshot lastTapOwner;
     protected CursorAnchorInfo anchor;protected int compositionStart=-1,compositionEnd=-1,beforeCompositionEnd=-1;
     protected Snapshot witness,beforeWrite;
@@ -113,12 +114,16 @@ public void keyPressed(){
         if(selectionTask!=null)ui.removeCallbacks(selectionTask);selectionTask=null;
     }
 protected void dismissMarker(){
+        markerRequestGeneration++;
         if(markerExpiry!=null)ui.removeCallbacks(markerExpiry);markerExpiry=null;
         if(markerPopup!=null){markerPopup.dismiss();markerPopup=null;}
         if(marker!=null&&marker.getParent() instanceof ViewGroup)((ViewGroup)marker.getParent()).removeView(marker);
         marker=null;releasePageGuard();
     }
 protected void showMarker(Snapshot owner,int base,int index,boolean composing){
+        showMarkerWithBounds(owner,base,index,composing,null,false);
+    }
+private void showMarkerWithBounds(Snapshot owner,int base,int index,boolean composing,RectF resolved,boolean requested){
         dismissMarker();if(service.dualHandProtected()||page.blocked()||!owner.same(snapshot()))return;
         String text=composing?page.buffer().draft():owner.text;
         if(index<0||index>=text.codePointCount(0,text.length()))return;
@@ -128,10 +133,26 @@ protected void showMarker(Snapshot owner,int base,int index,boolean composing){
         marker=new TextView(service){protected final Paint glow=new Paint(Paint.ANTI_ALIAS_FLAG);@Override protected void onDraw(Canvas canvas){glow.setColor(color("halo"));canvas.drawRoundRect(getWidth()/2f-8*density,getHeight()/2f-4*density,getWidth()/2f+8*density,getHeight()/2f+4*density,4*density,4*density,glow);}};
         marker.setContentDescription("開啟校正選字");marker.setTag("dh-correction-marker");
         marker.setOnClickListener(v->{dismissMarker();if(owner.same(snapshot()))openGrid(owner,base,index,composing);});
-        RectF bounds=null;
-        if(anchor!=null&&anchor.getSelectionStart()==owner.start&&anchor.getSelectionEnd()==owner.end){
+        RectF bounds=resolved;
+        if(bounds==null&&anchor!=null&&anchor.getSelectionStart()==owner.start&&anchor.getSelectionEnd()==owner.end){
             bounds=anchor.getCharacterBounds(base+text.offsetByCodePoints(0,index));
             if(bounds!=null)bounds=new RectF(bounds);
+            if(bounds==null&&!requested&&Build.VERSION.SDK_INT>=34){
+                final long generation=markerRequestGeneration;
+                final int position=base+text.offsetByCodePoints(0,index);
+                android.util.DisplayMetrics display=service.getResources().getDisplayMetrics();
+                owner.connection.requestTextBoundsInfo(new RectF(0,0,display.widthPixels,display.heightPixels),command->ui.post(command),result->{
+                    if(generation!=markerRequestGeneration||closed||service.dualHandProtected()||page.blocked()||!page.view().isShown()||!owner.same(snapshot()))return;
+                    RectF exact=null;
+                    TextBoundsInfo info=result.getTextBoundsInfo();
+                    if(info!=null&&position>=info.getStartIndex()&&position<info.getEndIndex()){
+                        exact=new RectF();info.getCharacterBounds(position,exact);Matrix matrix=new Matrix();info.getMatrix(matrix);matrix.mapRect(exact);
+                        if(!Float.isFinite(exact.left)||!Float.isFinite(exact.top)||!Float.isFinite(exact.right)||!Float.isFinite(exact.bottom))exact=null;
+                    }
+                    showMarkerWithBounds(owner,base,index,composing,exact,true);
+                });
+                return;
+            }
             if(bounds==null)bounds=new RectF(anchor.getInsertionMarkerHorizontal(),anchor.getInsertionMarkerTop(),anchor.getInsertionMarkerHorizontal(),anchor.getInsertionMarkerBottom());
             anchor.getMatrix().mapRect(bounds);
         }

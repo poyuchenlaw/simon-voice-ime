@@ -1262,9 +1262,10 @@ public class SimonIMEService extends InputMethodService {
         if(view.getTag(R.id.keyboard_role)==null)KeyboardRoles.mark(view,view instanceof Button?"tools":"background","text");
         if(view instanceof TextView){
             TextView text=(TextView)view;
-            boolean fixed="fixed".equals(view.getTag(R.id.keyboard_content_kind));
+            boolean character="symbol".equals(view.getTag(R.id.keyboard_content_kind));
+            boolean fixed=character||"fixed".equals(view.getTag(R.id.keyboard_content_kind));
             if(view instanceof Button&&!(view.getBackground() instanceof KeyboardKeycaps.Cap))styleDButton(text,!"content".equals(view.getTag(R.id.keyboard_content_kind)));
-            else text.setTypeface(KeyboardTypeface.forLabel(this,text.getText().toString(),fixed));
+            else text.setTypeface(KeyboardTypeface.forLabel(this,text.getText().toString(),fixed,character));
         }
         if(view instanceof ViewGroup){ViewGroup group=(ViewGroup)view;for(int i=0;i<group.getChildCount();i++)collectDPanelStyles(group.getChildAt(i));}
     }

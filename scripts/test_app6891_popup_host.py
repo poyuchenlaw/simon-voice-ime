@@ -18,7 +18,7 @@ def block(src,sig):
    if depth==0:return src[start:opening+m.end()]
  raise ValueError(sig)
 f=block(k,'private void feedback(');f=f[f.index('bubbleLabel.setText(value);'):];f='void bubblePosition(){'+f
-m=block(e,'private void showMarker(' if a.baseline else 'protected void showMarker(');m=m[m.index('if(bounds!=null&&Float.isFinite'):m.index('markerExpiry=this::dismissMarker')];m='void markerPosition(){'+m+'}'
+m=block(e,'private void showMarker(' if a.baseline else 'private void showMarkerWithBounds(');m=m[m.index('if(bounds!=null&&Float.isFinite'):m.index('markerExpiry=this::dismissMarker')];m='void markerPosition(){'+m+'}'
 m=m.replace('android.util.DisplayMetrics','DisplayMetrics').replace('page.view()','keyboard.view()').replace('fallbackMarker(width,height)','keyboard.candidateRow().addView(marker,new LinearLayout.LayoutParams(width,height))')
 start=block(s,'public void onStartInput(');start=start[:start.index('cursorTapGuard.reset();')]+'}';start=start.replace('try {','').replace('@Override','').replace('public void onStartInput','void onStartInput')
 request=block(s,'void dualHandCursorUpdates(')
@@ -38,6 +38,7 @@ owned=block(shared,'public static boolean ownedByParent(').replace('ViewParent p
 t=t.replace('/* SHARED_INSETS */','static class KeyboardInputLayout extends View {} static class KeyboardInsets {'+owned+'}')
 
 position=block((w/'app/src/main/java/com/simon/voiceime/CorrectionPosition.java').read_text(),'static int[] place(')
+t=t.replace('/* DISMISS */','long markerRequestGeneration;/* DISMISS */')
 t=t.replace('/* POSITION */','static class CorrectionPosition {'+position+'}')
 for n,body in [('BUBBLE',f),('MARKER',m),('START',start),('REQUEST',request),('PALETTE',palette),('INSET',listener),('LAYOUT',layout),('STOP',stop),('FINISH',finish),('ANCHOR',anchor),('DISMISS',dismiss)]:t=t.replace('/* '+n+' */',body)
 (out/'App6891PopupHarness.java').write_text(t)
