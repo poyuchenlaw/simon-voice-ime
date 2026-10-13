@@ -9,6 +9,27 @@ p=argparse.ArgumentParser();p.add_argument('--fit-only',action='store_true');p.a
 base='7df786ee26292ed829d72247395872ed6011579f'
 prod=w/'app/src/main/java/com/simon/voiceime';layout='app/src/main/res/layout/keyboard_bopomofo.xml'
 def old(path):return subprocess.check_output(['git','show',base+':'+path],cwd=w,text=True)
+def correction_controller_expected():
+ # DECISION_690S_INT_BTEST_20261013: only the gated E insertions are allowed.
+ path='app/src/main/java/com/simon/voiceime/ZhuyinInputController.java'
+ b_head='b4f681490fe5524a6c9258b22ab958327febaad6'
+ e_head='72c455dc62025e6f64d1911ac4d8bff83d296036'
+ baseline=old(path)
+ assert subprocess.check_output(['git','show',b_head+':'+path],cwd=w,text=True)==baseline
+ patch=subprocess.check_output(['git','diff','--unified=0',b_head,e_head,'--',path],cwd=w,text=True)
+ assert not [line for line in patch.splitlines() if line.startswith('-') and not line.startswith('---')], 'E controller deletes existing lines'
+ additions=[line[1:]+'\n' for line in patch.splitlines() if line.startswith('+') and not line.startswith('+++')]
+ assert len(additions)==2, 'E controller authorization must contain exactly two insertions'
+ anchors=['    private State commitTransition(java.util.function.Supplier<State> operation,boolean edit){\n',
+          '            return new State(after.composingText,after.candidates,after.commitText,after.accepted,after.cursorPosition,\n']
+ assert 'private void recordCorrectionCommit(' in additions[0]
+ assert additions[1]=='            recordCorrectionCommit(after.commitText,reading,span);\n'
+ expected=baseline
+ for anchor,addition in zip(anchors,additions):
+  assert expected.count(anchor)==1, 'authorized insertion anchor is not unique'
+  expected=expected.replace(anchor,addition+anchor,1)
+ assert expected==subprocess.check_output(['git','show',e_head+':'+path],cwd=w,text=True), 'E diff is outside authorized positions'
+ return expected
 source=old('app/src/main/java/com/simon/voiceime/SimonIMEService.java') if args.baseline else (prod/'SimonIMEService.java').read_text()
 xml=old(layout) if args.baseline else (w/layout).read_text();root=ET.fromstring(xml);ns='{http://schemas.android.com/apk/res/android}'
 def block(src,name):
@@ -102,12 +123,14 @@ class Contracts(unittest.TestCase):
     (out/(dep+'.java')).write_text(value)
    (out/'RimeZhuyinEngine.java').write_text('package com.simon.voiceime; class RimeZhuyinEngine extends App690BOutputReplay.Engine { RimeZhuyinEngine(){super(java.util.List.of());}}')
    cp='/home/simon/android-sdk/platforms/android-34/android.jar'
-   subprocess.run(['javac','-encoding','UTF-8','-cp',cp,'-d',str(out),*[str(out/(dep+'.java')) for dep in deps],str(out/'RimeZhuyinEngine.java'),str(w/'scripts/app690b_host/App690BOutputReplay.java')],cwd=w,check=True)
+   # Keep the replay's engine stub first; resolve E's main-only dependencies automatically.
+   sourcepath=str(out)+':'+str(w/'app/src/main/java')
+   subprocess.run(['javac','-encoding','UTF-8','-cp',cp,'-sourcepath',sourcepath,'-d',str(out),*[str(out/(dep+'.java')) for dep in deps],str(out/'RimeZhuyinEngine.java'),str(w/'scripts/app690b_host/App690BOutputReplay.java')],cwd=w,check=True)
    traces.append(subprocess.check_output(['java','-ea','-cp',str(out)+':'+cp,'com.simon.voiceime.App690BOutputReplay'],cwd=w,text=True))
   for revision,trace in zip(['6891','current'],traces):(w/('out/app690b-replay-'+revision)/'output.trace').write_text(trace)
   self.assertEqual(traces[0],traces[1]);print('REPLAY: 4 known-answer sequences, 24 steps, baseline/current trace byte-identical; native engine not executed')
  def test_r3c_controller_and_click_transactions_same_as_6891(self):
-  self.assertEqual(old('app/src/main/java/com/simon/voiceime/ZhuyinInputController.java'),(prod/'ZhuyinInputController.java').read_text())
+  self.assertEqual(correction_controller_expected(),(prod/'ZhuyinInputController.java').read_text())
   # Native engine source identity supplements the executed host-engine trace.
   self.assertEqual(old('app/src/phone/java/com/simon/voiceime/RimeZhuyinEngine.java'),(w/'app/src/phone/java/com/simon/voiceime/RimeZhuyinEngine.java').read_text())
 if __name__=='__main__':
