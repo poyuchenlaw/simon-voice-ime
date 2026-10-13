@@ -35,6 +35,22 @@ def authorized_initialization():
   assert expected.count(anchor)==1
   expected=expected.replace(anchor,anchor+addition,1)
  return expected
+def authorized_panels():
+ # 09:3x decision: accept only the panel role change authorized in 6c99261.
+ layout='app/src/main/res/layout/keyboard_view.xml'
+ head='6c992612773d41297116ed869b30e17c8ba55729'
+ def panels(tree):return [ET.tostring(n) for n in tree if n.tag in ['include','FrameLayout']]
+ before=ET.fromstring(subprocess.check_output(['git','-C',str(w),'show',head+'^:'+layout],text=True))
+ approved=ET.fromstring(subprocess.check_output(['git','-C',str(w),'show',head+':'+layout],text=True))
+ assert panels(before)==panels(old), 'pre-authorization panel differs from frozen baseline'
+ expected=ET.fromstring(ET.tostring(old))
+ panel=next(n for n in expected if n.get(A+'id')=='@+id/panelContainer')
+ assert panel.get(A+'background')=='#0d0d1a' and len(panel)==0
+ del panel.attrib[A+'background']
+ panel.text='\n        '
+ ET.SubElement(panel,'tag',{A+'id':'@id/keyboard_role',A+'value':'background'}).tail='\n    '
+ assert panels(approved)==panels(expected), 'authorized commit has other panel changes'
+ return panels(expected)
 class Contract(unittest.TestCase):
  def test_r1_r4_initialization(self):
   init=method(src,'onCreateInputView');self.assertIn('KeyboardTypeface.forLabel(this',init);self.assertIn('KeyboardLabels.functionLabel(',init);self.assertIn('KeyboardLabels.FUNCTION_TEXT_SP',init);self.assertIn('setSingleLine(true)',init);self.assertIn('setBackgroundTintList(null)',init)
@@ -70,7 +86,7 @@ class Contract(unittest.TestCase):
   ignored={A+'background',A+'textColor',A+'textSize',A+'singleLine',A+'ellipsize'}
   def shape(n):return (n.tag,{k:v for k,v in n.attrib.items() if k not in ignored},[shape(c) for c in n if c.tag!='tag'])
   self.assertEqual(shape(old),shape(root))
-  self.assertEqual([ET.tostring(n) for n in old if n.tag in ['include','FrameLayout']],[ET.tostring(n) for n in root if n.tag in ['include','FrameLayout']])
+  self.assertEqual(authorized_panels(),[ET.tostring(n) for n in root if n.tag in ['include','FrameLayout']])
  def test_r5_one_shared_down_request(self):
   route=(w/'app/src/main/java/com/simon/voiceime/KeyboardTouchLayout.java').read_text()
   self.assertEqual(1,route.count('KeyboardHaptics.press(target.key)'))
