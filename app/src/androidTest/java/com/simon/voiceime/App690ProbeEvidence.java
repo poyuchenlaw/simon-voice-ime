@@ -73,12 +73,17 @@ final class App690ProbeEvidence {
         float[] at={x,y};m.mapPoints(at);int sx=Math.round(at[0]),sy=Math.round(at[1]);
         return new JSONObject().put("local_xy",new JSONArray(new float[]{x,y})).put("screen_xy",new JSONArray(new int[]{sx,sy})).put("argb",sx>=0&&sy>=0&&sx<scene.getWidth()&&sy<scene.getHeight()?scene.getPixel(sx,sy):JSONObject.NULL);
     }
-    static JSONArray strokeSamples(View cap,Bitmap scene,JSONObject drawing)throws Exception {
+    static JSONArray strokeSamples(View cap,Bitmap scene,JSONObject drawing,List<JSONObject> labels)throws Exception {
         JSONArray samples=new JSONArray();if(drawing.isNull("stroke_path"))return samples;
         JSONArray p=drawing.getJSONArray("stroke_path");float x0=(float)p.getDouble(0),x1=(float)p.getDouble(2),y=(float)p.getDouble(1),d=cap.getResources().getDisplayMetrics().density;Matrix m=screenMatrix(cap);
-        for(float fraction:new float[]{.25f,.5f,.75f})for(float dy:new float[]{-.5f,0,.5f}){
-            float x=x0+(x1-x0)*fraction;JSONObject sample=new JSONObject().put("stroke",pixel(scene,m,x,y+dy)).put("below",pixel(scene,m,x,y+2*d)).put("coverage_offset_px",dy);samples.put(sample);
-        }return samples;
+        Bitmap underlay=Bitmap.createBitmap(cap.getWidth(),cap.getHeight(),Bitmap.Config.ARGB_8888);Drawable background=cap.getBackground();Object shape=null;try{shape=App690FSupport.field(background,"shape");}catch(Exception absent){}
+        if(shape instanceof Drawable)((Drawable)shape).draw(new Canvas(underlay));else if(background!=null)background.draw(new Canvas(underlay));
+        try{for(int step=1;step<20;step++)for(float dy:new float[]{-.5f,0,.5f}){
+            float x=x0+(x1-x0)*step/20f;JSONObject top=pixel(scene,m,x,y+dy),below=pixel(scene,m,x,y+2*d);JSONArray ta=top.getJSONArray("screen_xy"),ba=below.getJSONArray("screen_xy");boolean masked=false;
+            for(JSONObject label:labels){JSONArray ink=label.getJSONArray("transformed_ink_bounds");RectF box=new RectF((float)ink.getDouble(0)-2,(float)ink.getDouble(1)-2,(float)ink.getDouble(2)+2,(float)ink.getDouble(3)+2);if(box.contains(ta.getInt(0),ta.getInt(1))||box.contains(ba.getInt(0),ba.getInt(1)))masked=true;}
+            int sx=Math.round(x),ty=Math.round(y+dy),by=Math.round(y+2*d);
+            JSONObject sample=new JSONObject().put("stroke",top).put("below",below).put("coverage_offset_px",dy).put("excluded",masked?"transformed text ink":JSONObject.NULL).put("underlay",sx>=0&&ty>=0&&sx<underlay.getWidth()&&ty<underlay.getHeight()?underlay.getPixel(sx,ty):JSONObject.NULL).put("below_underlay",sx>=0&&by>=0&&sx<underlay.getWidth()&&by<underlay.getHeight()?underlay.getPixel(sx,by):JSONObject.NULL).put("underlay_source",shape instanceof Drawable?"actual factory shape before highlight":"actual background Drawable before KeyCap.onDraw");samples.put(sample);
+        }}finally{underlay.recycle();}return samples;
     }
     static JSONArray diamondSamples(View cap,Bitmap scene,List<RectF> screenInk,List<View> windows)throws Exception {
         float w=cap.getWidth(),h=cap.getHeight(),d=cap.getResources().getDisplayMetrics().density;float[][] points={{w/2,8*d},{w-8*d,h/2},{w/2,h-8*d},{8*d,h/2}};int offset=Math.max(1,Math.round(2*d));Matrix m=screenMatrix(cap);JSONArray out=new JSONArray();
