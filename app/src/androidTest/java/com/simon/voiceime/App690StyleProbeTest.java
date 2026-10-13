@@ -33,15 +33,13 @@ public class App690StyleProbeTest extends App690FSupport {
     }
     private String classify(TextView v,View cap,String kind){
         if("content".equals(tag(v,"keyboard_content_kind")))return "content";
-        String raw=v.getText().toString();
-        if(state.equals("fullwidth_symbols")&&plainSymbol(raw))return "character";
-        if("fixed".equals(tag(v,"keyboard_content_kind"))||raw.matches("[ㄅ-ㄩ˙ˊˇˋ]+"))return "function";
         if(kind.equals("candidate")||kind.equals("content")||kind.equals("status")||kind.equals("capsule")||kind.equals("grid_cell"))return "content";
         String value=v.getText().toString().replace("\uFE0F","");Object routing=cap.getTag();String key=routing==null?"":routing.toString();
         boolean character=key.startsWith("dh-key:")&&"123456ABCDEFØ".contains(key.substring(7))||key.startsWith("key:")&&key.substring(4).codePointCount(0,key.substring(4).length())==1;
-        if(state.equals("fullwidth_symbols")&&plainSymbol(value))return "character";
+        if("symbol".equals(tag(v,"keyboard_content_kind"))||kind.equals("grid_cell")&&plainSymbol(value))return "character";
         if(character&&!(pageName.equals("bopomofo")&&value.equals("，"))&&!(pageName.equals("english")||pageName.equals("numbers"))||character&&(pageName.equals("english")||pageName.equals("numbers"))&&!value.equals("."))return "character";
         if(value.codePointCount(0,value.length())==1&&Character.getType(value.codePointAt(0))==Character.OTHER_SYMBOL)return "icon";
+        if("fixed".equals(tag(v,"keyboard_content_kind"))||value.matches("[ㄅ-ㄩ˙ˊˇˋ]+"))return "function";
         return "function";
     }
     private boolean plainSymbol(String value){return !value.isEmpty()&&value.codePoints().allMatch(cp->!Character.isLetterOrDigit(cp)&&!Character.isWhitespace(cp));}
