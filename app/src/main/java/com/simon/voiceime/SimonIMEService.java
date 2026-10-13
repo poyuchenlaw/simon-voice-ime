@@ -1250,6 +1250,7 @@ public class SimonIMEService extends InputMethodService {
         KeyboardKeycaps.apply(button,KeyboardRoles.dark(this),button.getTag(R.id.keyboard_role).toString(),1);
         button.setTextColor(dColor(button.getTag(R.id.keyboard_text_role).toString()));
         button.setTag(R.id.keyboard_style_theme,KeyboardRoles.dark(this));
+        if(button.getId()==R.id.btnClipVocabList||button.getId()==R.id.btnClipClose||button.getId()==R.id.btnCmdAddGroup||button.getId()==R.id.btnCmdClose){top=bottom=0;button.setIncludeFontPadding(false);}
         button.setPadding(left,top,right,bottom);
         button.setOnTouchListener((v,event)->{
             if(event.getActionMasked()==MotionEvent.ACTION_DOWN){KeyboardKeycaps.press(v);KeyboardHaptics.press(v);}
