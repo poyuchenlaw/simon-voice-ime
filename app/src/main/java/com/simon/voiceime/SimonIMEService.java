@@ -5216,9 +5216,10 @@ public class SimonIMEService extends InputMethodService {
         }
     }
     private void configureTextRows(){
+        final float COMPOSITION_COUNT_TEXT_SP=11;
         boolean text=textLayoutSelected();if(zhuyinInput!=null)zhuyinInput.setTextLayout(text);
         if(text&&(boTextCount==null||boTextCount.getParent()!=bopomofoKeyboard)&&bopomofoKeyboard instanceof ViewGroup){
-            boTextCount=new TextView(this);boTextCount.setTag("composition-count");boTextCount.setTextSize(11);KeyboardRoles.mark(boTextCount,"background","secondary");boTextCount.setTag(R.id.keyboard_content_kind,"content");boTextCount.setTypeface(android.graphics.Typeface.DEFAULT);KeyboardRoles.apply(this,boTextCount);boTextCount.setPadding(dp(12),0,dp(12),0);
+            boTextCount=new TextView(this);boTextCount.setTag("composition-count");boTextCount.setTextSize(COMPOSITION_COUNT_TEXT_SP);KeyboardRoles.mark(boTextCount,"background","secondary");boTextCount.setTag(R.id.keyboard_content_kind,"content");boTextCount.setTypeface(android.graphics.Typeface.DEFAULT);KeyboardRoles.apply(this,boTextCount);boTextCount.setPadding(dp(12),0,dp(12),0);
             ((ViewGroup)bopomofoKeyboard).addView(boTextCount,1,new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,dp(18)));
         }
         if(boTextCount!=null)boTextCount.setVisibility(text?View.VISIBLE:View.GONE);updateTextCount();
@@ -6989,7 +6990,7 @@ public class SimonIMEService extends InputMethodService {
         if(clipboardHelper!=null){clipboardHelper.setPasswordField(protectedInputField);clipboardHelper.captureCurrent("onStartInputView");}
         String currentPalette=getSharedPreferences("simon_ime_prefs",0).getString("keyboard_theme","system")+":"+getResources().getConfiguration().uiMode;
         if(!currentPalette.equals(dualHandAppliedPalette)){if(rootView!=null)KeyboardTheme.apply(this,rootView);dualHandAppliedPalette=currentPalette;}KeyboardHaptics.sync(this,rootView);
-        if(dualHandPage!=null){dualHandPage.reconfigure();boolean split=dualHandSelected&&dualHandPage.landscapeSplit();if(rootView!=null)rootView.setBackgroundColor(split?android.graphics.Color.TRANSPARENT:keyboardColor(R.color.keyboard_bg));if(getWindow()!=null&&getWindow().getWindow()!=null)getWindow().getWindow().setBackgroundDrawable(new ColorDrawable(split?android.graphics.Color.TRANSPARENT:keyboardColor(R.color.keyboard_bg)));}
+        if(dualHandPage!=null){dualHandPage.reconfigure();boolean split=dualHandSelected&&dualHandPage.landscapeSplit();if(rootView!=null)rootView.setBackgroundColor(DualHandVisuals.color(KeyboardRoles.dark(this),split?"transparent":"background"));if(getWindow()!=null&&getWindow().getWindow()!=null)getWindow().getWindow().setBackgroundDrawable(new ColorDrawable(DualHandVisuals.color(KeyboardRoles.dark(this),split?"transparent":"background")));}
         if (isWatchService()) return;
         drainPendingVoiceQueue();
         configureTextRows();

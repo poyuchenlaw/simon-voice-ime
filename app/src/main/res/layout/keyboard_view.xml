@@ -2,16 +2,17 @@
 <com.simon.voiceime.KeyboardInputLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
-    android:orientation="vertical"
-    android:background="@color/keyboard_bg">
+    android:orientation="vertical">
+    <tag android:id="@id/keyboard_role" android:value="background" />
 
     <!-- 彈出面板容器（剪貼簿/常用指令），預設隱藏 -->
     <FrameLayout
         android:id="@+id/panelContainer"
         android:layout_width="match_parent"
         android:layout_height="220dp"
-        android:visibility="gone"
-        android:background="#0d0d1a" />
+        android:visibility="gone">
+        <tag android:id="@id/keyboard_role" android:value="background" />
+    </FrameLayout>
 
     <!-- 狀態列（錄音時才顯示） -->
     <TextView
