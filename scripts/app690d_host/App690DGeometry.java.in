@@ -4,7 +4,7 @@ import java.awt.font.FontRenderContext;
 public class App690DGeometry {
  static class Rect {int left,top,right,bottom;int width(){return right-left;}int height(){return bottom-top;}}
  static class Typeface {static Typeface DEFAULT=new Typeface();}
- static class Paint {
+ static class Paint {static class FontMetrics {float ascent,descent;}FontMetrics getFontMetrics(){FontMetrics m=new FontMetrics();java.awt.font.LineMetrics l=font.deriveFont(size).getLineMetrics("Hg",frc);m.ascent=-l.getAscent();m.descent=l.getDescent();return m;}
   static final int ANTI_ALIAS_FLAG=1;float size;java.awt.Font font;FontRenderContext frc=new FontRenderContext(null,true,true);
   Paint(){this(0);}Paint(int flags){try{font=java.awt.Font.createFont(java.awt.Font.TRUETYPE_FONT,new File("app/src/phone/assets/fonts/NotoSansTC-Medium-subset.ttf"));}catch(Exception e){throw new RuntimeException(e);}}
   Paint(Paint p){this();size=p.size;}void setTypeface(Typeface t){}void setTextSize(float s){size=s;}
@@ -16,7 +16,7 @@ public class App690DGeometry {
  static class Resources {Metrics m=new Metrics();Metrics getDisplayMetrics(){return m;}}
  static class View {int width,height;Resources resources;int getWidth(){return width;}int getHeight(){return height;}Resources getResources(){return resources;}Object getTag(){return null;}}
  static class ViewGroup extends View {int getChildCount(){return 0;}View getChildAt(int i){throw new AssertionError(i);}}
- static class TextView extends View {String text,route,role;float sp;TextView(String t,String r,float s){text=t;route=r;sp=s;role=r.length()==5&&!t.equals(".")?"right":"tools";}Object getTag(int id){return role;}Object getTag(){return route;}String getText(){return text;}Paint getPaint(){return new Paint();}void setTextSize(float s){sp=s;}void setText(String s){text=s;}void setTypeface(Typeface t){}void setSingleLine(boolean b){}void setEllipsize(Object o){}}
+ static class TextView extends View {String text,route,role;float sp;TextView(String t,String r,float s){text=t;route=r;sp=s;role=r.length()==5&&!t.equals(".")?"right":"tools";}Object getTag(int id){return role;}Object getTag(){return route;}String getText(){return text;}Paint getPaint(){return new Paint();}void setTextSize(float s){sp=s;}void setText(String s){text=s;}void setTypeface(Typeface t){}void setSingleLine(boolean b){}void setIncludeFontPadding(boolean b){}void setEllipsize(Object o){}}
  static class KeyboardTypeface {static Typeface get(Object context){return Typeface.DEFAULT;}static Typeface forLabel(Object c,String t,boolean fixed,boolean character){return Typeface.DEFAULT;}}
  /* LABELS */
  /* FIT */

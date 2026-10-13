@@ -980,7 +980,7 @@ public class SimonIMEService extends InputMethodService {
         renderPendingVoiceNotices();
         previewText = rootView.findViewById(R.id.previewText);
         btnMic = rootView.findViewById(R.id.btnMic);
-        final float VOICE_TOOL_ICON_SP = 14, VOICE_EDIT_ICON_SP = 16, VOICE_MIC_ICON_SP = 28;
+        final float VOICE_TOOL_ICON_SP = 14, VOICE_EDIT_ICON_SP = 16, VOICE_MIC_ICON_SP = 28.5f;
         int[] voiceKeyIds = {R.id.btnSettings, R.id.btnFullWidth, R.id.btnHalfWidth,
                 R.id.btnClipboard, R.id.btnCommands, R.id.btnMode, R.id.btnSwitchIME,
                 R.id.btnSpace, R.id.btnComma, R.id.btnPeriod, R.id.btnBackspace, R.id.btnEnter, R.id.btnMic};
@@ -994,6 +994,7 @@ public class SimonIMEService extends InputMethodService {
                     : id == R.id.btnSettings || id == R.id.btnClipboard || id == R.id.btnCommands
                     ? VOICE_TOOL_ICON_SP : VOICE_EDIT_ICON_SP) : KeyboardLabels.FUNCTION_TEXT_SP);
             key.setSingleLine(true);
+            key.setIncludeFontPadding(false);
             key.setTag(R.id.keyboard_visible_inset, 0);
             key.setBackgroundTintList(null);
         }
@@ -1214,7 +1215,7 @@ public class SimonIMEService extends InputMethodService {
                 key.setTextSize(KeyboardLabels.FUNCTION_TEXT_SP);
             }
             key.setTypeface(KeyboardTypeface.forLabel(this,text,true,character));
-            key.setSingleLine(true);key.setEllipsize(null);
+            key.setSingleLine(true);key.setIncludeFontPadding(false);key.setEllipsize(null);
         }
         if(view instanceof ViewGroup){ViewGroup group=(ViewGroup)view;for(int i=0;i<group.getChildCount();i++)collectDTypingLabels(group.getChildAt(i),keys);}
     }
@@ -1223,17 +1224,18 @@ public class SimonIMEService extends InputMethodService {
         if(page.getWidth()<=0)return;
         float density=page.getResources().getDisplayMetrics().density;
         float scaledDensity=page.getResources().getDisplayMetrics().scaledDensity;
+        Paint paint=new Paint(Paint.ANTI_ALIAS_FLAG);paint.setTypeface(KeyboardTypeface.get(this));paint.setTextSize(1);
+        Paint.FontMetrics line=paint.getFontMetrics();
         List<KeyboardLabels.Label> labels=new ArrayList<>();
         for(TextView key:keys)if("right".equals(key.getTag(R.id.keyboard_role))){
             if(key.getWidth()<=0||key.getHeight()<=0)return;
             float width=KeyboardLabels.contentWidth(key.getWidth(),KeyboardLabels.KEY_MARGIN_DP*density,density);
-            float height=key.getHeight()-2*density;
+            float height=key.getHeight();
             String text=key.getTag().toString().substring(4);
-            labels.add(new KeyboardLabels.Label(width,height,KeyboardLabels.FIT_VERTICAL_MARGIN_DP*density,text,"","","",""));
-            labels.add(new KeyboardLabels.Label(width,height,KeyboardLabels.FIT_VERTICAL_MARGIN_DP*density,text.toUpperCase(java.util.Locale.ROOT),"","","",""));
+            labels.add(new KeyboardLabels.Label(width,height,density,line.ascent,line.descent,text,"","","",""));
+            labels.add(new KeyboardLabels.Label(width,height,density,line.ascent,line.descent,text.toUpperCase(java.util.Locale.ROOT),"","","",""));
         }
         if(labels.isEmpty())return;
-        Paint paint=new Paint(Paint.ANTI_ALIAS_FLAG);paint.setTypeface(KeyboardTypeface.get(this));
         float sp=cache.fit(page.getWidth(),density,scaledDensity,KeyboardTypeface.get(this),paint,labels);
         for(TextView key:keys)if("right".equals(key.getTag(R.id.keyboard_role)))key.setTextSize(sp);
     }
@@ -4536,7 +4538,7 @@ public class SimonIMEService extends InputMethodService {
     }
     @Override public void onUpdateCursorAnchorInfo(android.view.inputmethod.CursorAnchorInfo info){
         super.onUpdateCursorAnchorInfo(info);
-        if(dualHandSelected&&dualHandPage!=null)dualHandPage.cursorAnchor(info);
+        if(dualHandSelected&&dualHandPage!=null&&currentKeyboardMode==KeyboardMode.BOPOMOFO)dualHandPage.cursorAnchor(info);
         else if(correctionEnabled())correctionEditor().cursorAnchor(info);
     }
     private void toggleDualHand(){
@@ -5182,7 +5184,7 @@ public class SimonIMEService extends InputMethodService {
                 String kind=KeyboardLabels.labelClass(text,character);
                 if("function".equals(kind))key.setText("123".equals(text)?KeyboardLabels.fallbackFunctionLabel(text):KeyboardLabels.functionLabel(text,"tap",false));
                 key.setTypeface(KeyboardTypeface.forLabel(this,key.getText().toString(),true,character));
-                key.setTag(R.id.keyboard_content_kind,kind);key.setSingleLine(true);key.setEllipsize(null);
+                key.setTag(R.id.keyboard_content_kind,kind);key.setSingleLine(true);key.setIncludeFontPadding(false);key.setEllipsize(null);
                 if(character)characterKeys.add(key);else key.setTextSize("icon".equals(kind)?BOPOMOFO_ICON_FRAME_SP:KeyboardLabels.FUNCTION_TEXT_SP);
             }
         }
@@ -5190,10 +5192,11 @@ public class SimonIMEService extends InputMethodService {
             @Override public void onLayoutChange(View v,int l,int t,int r,int b,int ol,int ot,int oldRight,int oldBottom){
                 if(v.getWidth()<=0||characterKeys.isEmpty())return;
                 android.util.DisplayMetrics metrics=getResources().getDisplayMetrics();
+                paint.setTextSize(1);android.graphics.Paint.FontMetrics line=paint.getFontMetrics();
                 List<KeyboardLabels.Label> labels=new ArrayList<>();
                 for(TextView key:characterKeys){
                     if(key.getWidth()<=0||key.getHeight()<=0)return;
-                    labels.add(new KeyboardLabels.Label(KeyboardLabels.contentWidth(key.getWidth(),Math.round(KeyboardLabels.KEY_MARGIN_DP*metrics.density),dp(1)),key.getHeight()-2*dp(1),Math.round(KeyboardLabels.FIT_VERTICAL_MARGIN_DP*metrics.density),key.getText().toString(),"","","",""));
+                    labels.add(new KeyboardLabels.Label(KeyboardLabels.contentWidth(key.getWidth(),Math.round(KeyboardLabels.KEY_MARGIN_DP*metrics.density),dp(1)),key.getHeight(),dp(1),line.ascent,line.descent,key.getText().toString(),"","","",""));
                 }
                 float sp=cache.fit(v.getWidth(),metrics.density,metrics.scaledDensity,face,paint,labels);
                 for(TextView key:characterKeys)if(Math.abs(key.getTextSize()-sp*metrics.scaledDensity)>.01f)key.setTextSize(sp);
@@ -6950,7 +6953,7 @@ public class SimonIMEService extends InputMethodService {
                 candidatesStart>=0||zhuyinInput!=null&&!zhuyinInput.previewText().isEmpty(),
                 protectedInputField||currentKeyboardMode!=KeyboardMode.BOPOMOFO||!textLayoutSelected());
         cursorTapGuard.observe(newSelStart,newSelEnd,candidatesStart,candidatesEnd);
-        if(dualHandSelected&&dualHandPage!=null)dualHandPage.selection(newSelStart,newSelEnd,candidatesStart,candidatesEnd);
+        if(dualHandSelected&&dualHandPage!=null&&currentKeyboardMode==KeyboardMode.BOPOMOFO)dualHandPage.selection(newSelStart,newSelEnd,candidatesStart,candidatesEnd);
         correctionSelection(newSelStart,newSelEnd,candidatesStart,candidatesEnd);
         updateExternalSelection(newSelStart,newSelEnd,tap);
         if(textLayoutSelected()&&zhuyinInput!=null&&zhuyinInput.previewText().isEmpty())renderTextCandidateRows();

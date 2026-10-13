@@ -3,7 +3,7 @@ import java.util.*;import java.awt.Font;import java.awt.font.FontRenderContext;i
 public class App690CHarness {
  enum Mode{APPEND,REPLACE,SPELL,TRANSLATE}Mode currentMode=Mode.APPEND;boolean dark;int saved;
  static class R {static class id {/* IDS */}}
- static class TextView {String text,face;float size;boolean single,tintCleared;Map<Integer,Object> tags=new HashMap<>();int color;TextView(String t,float s){text=t;size=s;}CharSequence getText(){return text;}void setText(String t){text=t;}void setTextColor(int c){color=c;}void setTag(int k,Object v){tags.put(k,v);}void setTextSize(float s){size=s;}void setSingleLine(boolean s){single=s;}void setTypeface(String s){face=s;}void setBackgroundTintList(Object o){tintCleared=o==null;}}
+ static class TextView {String text,face;float size;boolean single,tintCleared;Map<Integer,Object> tags=new HashMap<>();int color;TextView(String t,float s){text=t;size=s;}CharSequence getText(){return text;}void setText(String t){text=t;}void setTextColor(int c){color=c;}void setTag(int k,Object v){tags.put(k,v);}void setTextSize(float s){size=s;}void setSingleLine(boolean s){single=s;}void setIncludeFontPadding(boolean b){}void setTypeface(String s){face=s;}void setBackgroundTintList(Object o){tintCleared=o==null;}}
  static class Root {Map<Integer,TextView> views=new HashMap<>();TextView findViewById(int id){return views.get(id);}}
  static class KeyboardRoles {static boolean dark(App690CHarness c){return c.dark;}}
  static class KeyboardTypeface {static String forLabel(App690CHarness c,String s,boolean fixed){return "␣全半追換拼譯注，。".contains(s)?"bundled":"system";}}

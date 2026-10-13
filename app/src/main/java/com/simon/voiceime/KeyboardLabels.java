@@ -30,9 +30,15 @@ public final class KeyboardLabels {
     public static float contentWidth(float viewWidth,float margin,float visibleInset){return viewWidth-2*(margin+visibleInset);}
     public static final class Label {
         public final float width,height,margin;public final String[] positions;
+        public final float ascent,descent;
         public Label(float width,float height,float margin,String... positions){
+            this(width,height,margin,0,0,positions);
+        }
+        /** Nonzero font metrics select a normal TextView single-line baseline check. */
+        public Label(float width,float height,float margin,float ascent,float descent,String... positions){
             if(positions.length!=5)throw new IllegalArgumentException("tap/up/left/down/right required");
             this.width=width;this.height=height;this.margin=margin;this.positions=positions.clone();
+            this.ascent=ascent;this.descent=descent;
         }
     }
     public static float[] extent(String value,Paint paint){
@@ -65,7 +71,15 @@ public final class KeyboardLabels {
         for(float sp=MAX_TEXT_SP;sp>=MIN_TEXT_SP;sp-=FIT_STEP_SP){
             paint.setTextSize(sp*scaledDensity);boolean fits=true;
             for(Label label:labels){float[][] sizes=new float[5][];for(int i=0;i<5;i++)sizes[i]=extent(label.positions[i],paint);
-                if(!fits(label.width,label.height,sizes,label.margin)){fits=false;break;}}
+                if(!fits(label.width,label.height,sizes,label.margin)){fits=false;break;}
+                if(label.ascent<0){
+                    float px=sp*scaledDensity;
+                    int above=(int)Math.ceil(-label.ascent*px),below=(int)Math.ceil(label.descent*px);
+                    float baseline=above+Math.max(0,(int)(label.height-above-below)/2);
+                    Rect ink=new Rect();String text=label.positions[0];paint.getTextBounds(text,0,text.length(),ink);
+                    if(baseline+ink.top<label.margin||baseline+ink.bottom>label.height-label.margin){fits=false;break;}
+                }
+            }
             if(fits)return sp;
         }
         throw new IllegalStateException("No non-overlapping label size");
@@ -76,7 +90,7 @@ public final class KeyboardLabels {
         private String last="";private Object font;private float result;private int count;
         public float fit(int width,float density,float scaledDensity,Typeface face,Paint paint,List<Label> labels){
             StringBuilder key=new StringBuilder(width+":"+density+":"+scaledDensity);
-            for(Label label:labels){key.append('|').append(label.width).append(':').append(label.height).append(':').append(label.margin);for(String text:label.positions)key.append(':').append(text.length()).append(':').append(text);}
+            for(Label label:labels){key.append('|').append(label.width).append(':').append(label.height).append(':').append(label.margin).append(':').append(label.ascent).append(':').append(label.descent);for(String text:label.positions)key.append(':').append(text.length()).append(':').append(text);}
             String current=key.toString();if(!current.equals(last)||font!=face){result=KeyboardLabels.fit(paint,scaledDensity,labels);last=current;font=face;count++;}return result;
         }
         public int count(){return count;}
