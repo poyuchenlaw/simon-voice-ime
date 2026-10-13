@@ -136,6 +136,11 @@ public class App690StyleProbeTest extends App690FSupport {
         }return null;});
         screenshot(pageName+"-"+state+"-"+theme);
     }
+    private void saveProbe(JSONObject header)throws Exception {
+        // The target app has a 192 MiB heap. Serialize one measured row at a time,
+        // preserving every field without constructing a second whole-probe String.
+        try(java.io.Writer writer=new java.io.BufferedWriter(new java.io.OutputStreamWriter(new java.io.FileOutputStream(new java.io.File(output,"style-probe.json")),"UTF-8"))){String head=header.toString();writer.write(head.substring(0,head.length()-1));writer.write(",\"rows\":[");for(int i=0;i<rows.length();i++){if(i>0)writer.write(',');writer.write(rows.getJSONObject(i).toString());}writer.write("]}\n");}
+    }
     private JSONArray missingStates()throws Exception {
         Set<String> seen=new HashSet<>();for(int i=0;i<coverage.length();i++){JSONObject c=coverage.getJSONObject(i);seen.add(c.getString("page")+"/"+c.getString("state")+"/"+c.getString("theme"));}
         JSONArray missing=new JSONArray();for(String t:new String[]{"dark","light"}){for(String p:new String[]{"dual_hand","bopomofo","voice","english","numbers"})if(!seen.contains(p+"/idle/"+t))missing.put(p+"/idle/"+t);for(String mode:new String[]{"append","replace","spell","translate"})for(String state:new String[]{"standby_","recording_"})if(!seen.contains("voice/"+state+mode+"/"+t))missing.put("voice/"+state+mode+"/"+t);for(String p:new String[]{"dual_hand","bopomofo","voice"})for(String state:new String[]{"capsule","grid"})if(!seen.contains(p+"/"+state+"/"+t))missing.put(p+"/"+state+"/"+t);}return missing;
@@ -168,7 +173,7 @@ public class App690StyleProbeTest extends App690FSupport {
             main(()->{call(service,"closePanel");return null;});
         }
         }finally{JSONObject glyphs=new JSONObject();Paint system=new Paint();system.setTypeface(Typeface.DEFAULT);String missing=manifest.optString("source_missing_characters","⌫⚙");Set<String> fallback=new LinkedHashSet<>();for(int i=0;i<rows.length();i++){JSONObject row=rows.getJSONObject(i);if(row.getString("label_class").equals("icon")&&(row.optString("glyph_source").equals("fallback")||row.optString("glyph_source").equals("vector")))fallback.add(row.getString("text"));}for(int cp:missing.codePoints().toArray()){String ch=new String(Character.toChars(cp));if(cp!=0xfe0f&&fallback.stream().noneMatch(g->g.contains(ch)))fallback.add(ch);}for(String glyph:fallback)glyphs.put(glyph,system.hasGlyph(glyph));
-        save("style-probe.json",new JSONObject().put("schema",690).put("rows",rows).put("coverage",coverage).put("palette",palette).put("counters",counters()).put("counters_before",before).put("presses",presses).put("fallback_glyphs",glyphs).put("missing_states",missingStates()));
+        saveProbe(new JSONObject().put("schema",690).put("coverage",coverage).put("palette",palette).put("counters",counters()).put("counters_before",before).put("presses",presses).put("fallback_glyphs",glyphs).put("missing_states",missingStates()));
         save("PROBE_KEYCAP_CHARS.txt",String.join("",chars));}
     }
     public void testCollectIdleFontSizes()throws Exception {
