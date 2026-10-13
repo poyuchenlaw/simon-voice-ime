@@ -8,7 +8,10 @@ import org.json.*;
 
 /** Independent controls: a known uniform bitmap, an explicitly drawn diamond,
  * and deletion of the drawing command. Expected values come from those inputs. */
-public class App690ProbeEvidenceTest extends TestCase {
+public class App690ProbeEvidenceTest extends App690FSupport {
+    public void testScreenMatrixMatchesAttachedView()throws Exception {
+        View keyboard=page("dual_hand");main(()->{float[] at={0,0};App690ProbeEvidence.screenMatrix(keyboard).mapPoints(at);int[] expected=new int[2];keyboard.getLocationOnScreen(expected);assertEquals("independent screen x",expected[0],at[0],.5f);assertEquals("independent screen y",expected[1],at[1],.5f);return null;});
+    }
     public void testDrawingControls()throws Exception {
         View view=new View(InstrumentationRegistry.getInstrumentation().getTargetContext());view.layout(0,0,120,100);
         Drawable line=new Drawable(){final Paint p=new Paint();public void draw(Canvas c){p.setColor(0xB0FFFFFF);p.setStrokeWidth(1);c.drawLine(5,1,115,1,p);}public void setAlpha(int a){}public void setColorFilter(ColorFilter f){}public int getOpacity(){return -3;}};

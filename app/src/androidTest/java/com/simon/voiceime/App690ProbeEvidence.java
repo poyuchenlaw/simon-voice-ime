@@ -13,9 +13,9 @@ final class App690ProbeEvidence {
     static JSONArray box(RectF r)throws JSONException { return new JSONArray(new float[]{r.left,r.top,r.right,r.bottom}); }
     static Matrix screenMatrix(View v) {
         Matrix m=new Matrix();v.transformMatrixToGlobal(m);
-        int[] screen=new int[2],window=new int[2];View root=v.getRootView();
-        root.getLocationOnScreen(screen);root.getLocationInWindow(window);
-        m.postTranslate(screen[0]-window[0],screen[1]-window[1]);return m;
+        // transformMatrixToGlobal already includes the attached window's screen
+        // offset. App690ProbeEvidenceTest compares it to getLocationOnScreen.
+        return m;
     }
     static JSONArray matrix(Matrix m)throws JSONException {float[] values=new float[9];m.getValues(values);return new JSONArray(values);}
     static RectF mapped(View v,RectF local) {RectF out=new RectF(local);screenMatrix(v).mapRect(out);return out;}
