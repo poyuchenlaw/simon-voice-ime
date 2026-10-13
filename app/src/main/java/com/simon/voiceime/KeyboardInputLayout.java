@@ -10,6 +10,9 @@ public final class KeyboardInputLayout extends LinearLayout {
  public KeyboardInputLayout(Context context,AttributeSet attrs){super(context,attrs);addOnLayoutChangeListener((v,l,t,r,b,ol,ot,or,ob)->applyInsets(v.getRootWindowInsets()));setOnApplyWindowInsetsListener((v,in)->{applyInsets(in);return in;});}
  private void applyInsets(android.view.WindowInsets in){
   if(in==null)return;if(baselineBottom<0)baselineBottom=getPaddingBottom();int inset=KeyboardInsets.bottom(in);
+  // A full-height input already ends above navigation; padding would clip its page.
+  int available=getRootView().getHeight()-in.getSystemWindowInsetBottom();
+  if(getHeight()>0&&available>0&&getHeight()>=available)inset=0;
   if(lastInset!=inset){lastInset=inset;setPadding(getPaddingLeft(),getPaddingTop(),getPaddingRight(),baselineBottom+inset);}
  }
  @Override public boolean dispatchTouchEvent(MotionEvent event){

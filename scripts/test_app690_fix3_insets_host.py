@@ -1,0 +1,17 @@
+"""Execute the actual root padding method; expected geometry comes from FIX2/X1."""
+from pathlib import Path
+import re,subprocess
+w=Path(__file__).resolve().parents[1];out=w/'out/app690-fix3-insets';out.mkdir(parents=True,exist_ok=True)
+s=(w/'app/src/main/java/com/simon/voiceime/KeyboardInputLayout.java').read_text()
+a=s.index('private void applyInsets(');b=s.index('{',a);depth=1;i=b+1
+while depth:
+ if s[i]=='{':depth+=1
+ if s[i]=='}':depth-=1
+ i+=1
+method=s[a:i]
+java='package com.simon.voiceime;\nimport org.junit.Test;import static org.junit.Assert.*;\npublic class App690Fix3InsetsHost {\n static class android {static class view {static class WindowInsets {int gesture=84,navigation=126;int getSystemWindowInsetBottom(){return navigation;}}}}\n static class KeyboardInsets {static int bottom(android.view.WindowInsets in){return in.gesture;}}\n int baselineBottom=-1,lastInset=-1,height=1028,windowHeight=2313,paddingBottom;int getPaddingBottom(){return paddingBottom;}int getPaddingLeft(){return 0;}int getPaddingRight(){return 0;}int getPaddingTop(){return 0;}int getHeight(){return height;}App690Fix3InsetsHost getRootView(){return this;} // getHeight on decor is provided by a distinct stub below\n void setPadding(int l,int t,int r,int b){paddingBottom=b;}\n /* METHOD */\n @Test public void portraitKeepsGestureSafetyAndDoesNotAccumulate(){android.view.WindowInsets in=new android.view.WindowInsets();for(int n=0;n<3;n++)applyInsets(in);assertEquals(84,paddingBottom);}\n @Test public void constrainedLandscapeRestoresBaselineVisibleBottom(){height=861;windowHeight=987;applyInsets(new android.view.WindowInsets());assertEquals("fullscreen input budget 987-126=861: do not clip an additional 84px",0,paddingBottom);assertEquals(924,63+height-paddingBottom);}\n @Test public void shorterLandscapeKeepsGestureSafety(){height=307;windowHeight=987;applyInsets(new android.view.WindowInsets());assertEquals(84,paddingBottom);}\n @Test public void rotationReevaluatesTheSameInsetAndPreservesBaselinePadding(){paddingBottom=8;applyInsets(new android.view.WindowInsets());assertEquals(92,paddingBottom);height=861;windowHeight=987;applyInsets(new android.view.WindowInsets());assertEquals(8,paddingBottom);height=1028;windowHeight=2313;applyInsets(new android.view.WindowInsets());assertEquals(92,paddingBottom);}\n @Test public void unlaidOutRootAndThreeButtonNavigation(){height=0;windowHeight=0;applyInsets(new android.view.WindowInsets());assertEquals(84,paddingBottom);height=861;windowHeight=987;android.view.WindowInsets in=new android.view.WindowInsets();in.gesture=0;applyInsets(in);assertEquals(0,paddingBottom);}\n}\n'
+java=java.replace('App690Fix3InsetsHost getRootView(){return this;}', 'static class Decor {int height;int getHeight(){return height;}} Decor getRootView(){Decor d=new Decor();d.height=windowHeight;return d;}').replace('/* METHOD */',method)
+(out/'App690Fix3InsetsHost.java').write_text(java)
+cp=':'.join(str(w/'out/test-libs'/n) for n in ['junit-4.13.2.jar','hamcrest-core-1.3.jar'])
+subprocess.run(['javac','-encoding','UTF-8','-cp',cp,'-d',str(out),str(out/'App690Fix3InsetsHost.java')],cwd=w,check=True)
+raise SystemExit(subprocess.run(['java','-cp',str(out)+':'+cp,'org.junit.runner.JUnitCore','com.simon.voiceime.App690Fix3InsetsHost'],cwd=w).returncode)
