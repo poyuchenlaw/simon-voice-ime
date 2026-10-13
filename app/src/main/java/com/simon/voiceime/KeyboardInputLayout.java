@@ -1,5 +1,6 @@
 package com.simon.voiceime;
 import android.content.Context;
+import android.content.res.Configuration;
 import android.util.AttributeSet;
 import android.view.MotionEvent;
 import android.widget.LinearLayout;
@@ -12,7 +13,7 @@ public final class KeyboardInputLayout extends LinearLayout {
   if(in==null)return;if(baselineBottom<0)baselineBottom=getPaddingBottom();int inset=KeyboardInsets.bottom(in);
   // A full-height input already ends above navigation; padding would clip its page.
   int available=getRootView().getHeight()-in.getSystemWindowInsetBottom();
-  if(getHeight()>0&&available>0&&getHeight()>=available)inset=0;
+  if(getResources().getConfiguration().orientation==Configuration.ORIENTATION_LANDSCAPE&&getHeight()>0&&available>0&&getHeight()>=available)inset=0;
   if(lastInset!=inset){lastInset=inset;setPadding(getPaddingLeft(),getPaddingTop(),getPaddingRight(),baselineBottom+inset);}
  }
  @Override public boolean dispatchTouchEvent(MotionEvent event){
