@@ -17,6 +17,24 @@ def method(text,name):
 voice=next(n for n in root.iter() if n.get(A+'id')=='@+id/voiceKeyboard')
 keys={n.get(A+'id')[5:]:n for n in voice.iter() if n.get(A+'text') is not None}
 def tags(n):return {c.get(A+'id').split('/')[-1]:c.get(A+'value') for c in n if c.tag=='tag'}
+def authorized_initialization():
+ # DECISION_690S_INT_CROSSLINE_EQ_20261013: accept only the exact B/D
+ # passed-gate insertions at their claimed anchors; keep every baseline line.
+ expected=method(base,'onCreateInputView')
+ for head,anchor,addition in [
+  ('b4f681490fe5524a6c9258b22ab958327febaad6',
+   '        setupTypingKeyboard(bopomofoKeyboard);\n',
+   '        configureBopomofoStyle();\n'),
+  ('68e765acb64e304d3695a19420d9850906657636',
+   '        if (enSuggest2 != null) enSuggest2.setOnClickListener(v -> applyEnglishSuggestion(2));\n',
+   '        styleDTypingPage(englishKeyboard);styleDTypingPage(numbersKeyboard);updateSuggestionBar();\n')]:
+  baseline=method(base,'onCreateInputView')
+  assert baseline.count(anchor)==1, 'authorized insertion anchor is not unique'
+  approved=method(subprocess.check_output(['git','-C',str(w),'show',head+':'+path],text=True),'onCreateInputView')
+  assert approved==baseline.replace(anchor,anchor+addition,1), 'passed-gate method differs outside claimed insertion'
+  assert expected.count(anchor)==1
+  expected=expected.replace(anchor,anchor+addition,1)
+ return expected
 class Contract(unittest.TestCase):
  def test_r1_r4_initialization(self):
   init=method(src,'onCreateInputView');self.assertIn('KeyboardTypeface.forLabel(this',init);self.assertIn('KeyboardLabels.functionLabel(',init);self.assertIn('KeyboardLabels.FUNCTION_TEXT_SP',init);self.assertIn('setSingleLine(true)',init);self.assertIn('setBackgroundTintList(null)',init)
@@ -64,7 +82,7 @@ class Contract(unittest.TestCase):
    self.assertNotRegex(method(src,name),r'KeyboardLabels.*fit|LayoutInflater|new (?:Button|TextView)')
   init=method(src,'onCreateInputView');anchor='        btnMic = rootView.findViewById(R.id.btnMic);';end='        btnMode = rootView.findViewById(R.id.btnMode);'
   at=init.index(anchor)+len(anchor);to=init.index(end)
-  self.assertEqual(method(base,'onCreateInputView'),init[:at]+'\n'+init[to:])
+  self.assertEqual(authorized_initialization(),init[:at]+'\n'+init[to:])
  def test_a2_5_icon_class_and_sizes(self):
   for text,size in [('⚙','14sp'),('📋','14sp'),('⚡','14sp'),('␣','16sp'),('⌫','16sp'),('↵','16sp'),('🎤','28sp')]:
    self.assertEqual(size,next(n for n in keys.values() if n.get(A+'text')==text).get(A+'textSize'))
