@@ -92,26 +92,24 @@ jobs:
             for line in "${bad[@]}"; do
               echo "  $line"
             done
-            cat <<'EOF'
-
-[ADR_DEBATE_REFS_VIOLATION - 憲法 LV0 / GitHub Actions 攔截]
-
-修法：
-  git commit -m "subject
-
-  Debate-Refs: ADR-YYMMDD-NN"
-
-或標記：
-  [skip-adr] / [no-debate]      # emergency
-  [docs] / [chore] / [style]    # 行首小修
-
-ADR 索引：
-  ~/.claude/architecture-decisions/
-  Obsidian-v.2/08-思想系統 System/Cymon-Memory/ADR/
-
-注意：本檢查無法 --no-verify 繞過。如需緊急 push，請先補 commit message
-（可用 git commit --amend 或 git rebase -i 加 Debate-Refs）。
-EOF
+            echo ""
+            echo "[ADR_DEBATE_REFS_VIOLATION - 憲法 LV0 / GitHub Actions 攔截]"
+            echo ""
+            echo "修法："
+            echo '  git commit -m "subject'
+            echo ""
+            echo '  Debate-Refs: ADR-YYMMDD-NN"'
+            echo ""
+            echo "或標記："
+            echo "  [skip-adr] / [no-debate]      # emergency"
+            echo "  [docs] / [chore] / [style]    # 行首小修"
+            echo ""
+            echo "ADR 索引："
+            echo "  ~/.claude/architecture-decisions/"
+            echo "  Obsidian-v.2/08-思想系統 System/Cymon-Memory/ADR/"
+            echo ""
+            echo "注意：本檢查無法 --no-verify 繞過。如需緊急 push，請先補 commit message"
+            echo "（可用 git commit --amend 或 git rebase -i 加 Debate-Refs）。"
             exit 1
           fi
 
