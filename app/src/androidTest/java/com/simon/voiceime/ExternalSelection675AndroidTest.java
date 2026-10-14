@@ -69,7 +69,7 @@ public class ExternalSelection675AndroidTest extends TextRows670AndroidTest {
   final Rect r=new Rect(),window=new Rect();inst.runOnMainSync(()->{
    int[] location=new int[2];candidate.getLocationOnScreen(location);
    assertTrue(candidate.getGlobalVisibleRect(window));
-   assertTrue(candidate.getLocalVisibleRect(r));r.offset(location[0],location[1]);
+   assertTrue(candidate.getLocalVisibleRect(r));r.offset(location[0]-candidate.getScrollX(),location[1]-candidate.getScrollY());
   });
   save(prefix+"-tap-coordinates.json",new org.json.JSONObject().put("label",candidate.getText()).put("window_rect",window.toShortString()).put("screen_rect",r.toShortString()).toString());
   screenshot(prefix+"-before-screen-tap");readback(prefix+"-before-text.json");tap(r);inst.waitForIdleSync();screenshot(prefix+"-after-screen-tap");readback(prefix+"-after-text.json");

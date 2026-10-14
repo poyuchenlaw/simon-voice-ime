@@ -85,7 +85,7 @@ protected void rebase(Snapshot before,Snapshot after,int left,int right,String v
     }
 public void selection(Page page,int start,int end,int composingLeft,int composingEnd){
         if(closed||service.dualHandProtected()){cancel(true);return;}
-        if(!page.dual()&&(page.blocked()||composingLeft>=0)){cancel(false);return;}
+        if(!page.dual()&&(composingLeft>=0||page.blocked())){cancel(false);return;}
         if(selectionTask!=null)ui.removeCallbacks(selectionTask);
         boolean own=page.dual()?service.dualHandSelfUpdate():service.correctionSelfUpdate();Snapshot now=snapshot();validate(now);
         if(own){
